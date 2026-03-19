@@ -22,10 +22,10 @@ pub extern "C" fn cap_init() {
     // called in kernel_main, so the serial port is fully initialized.
     // serial_write_string is a simple polling write with no shared mutable
     // state and no re-entrancy concerns at this point in boot.
-    // The pointer is to a valid null-terminated byte literal in read-only data.
+    // The pointer is to a valid C string literal (null-terminated) in read-only data.
     // `char` and `u8` have identical 8-bit ABI representation on x86-64/GCC.
     unsafe {
-        serial_write_string(b"[CAP] OK: capability subsystem reserved\n\0".as_ptr());
+        serial_write_string(c"[CAP] OK: capability subsystem reserved\n".as_ptr() as *const u8);
     }
 }
 
