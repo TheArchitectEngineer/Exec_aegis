@@ -3,3 +3,4 @@ kernel/cap/target/
 /tmp/aegis_serial.txt
 *.o
 *.elf
+.worktrees/
