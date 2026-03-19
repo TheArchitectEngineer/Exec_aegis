@@ -273,20 +273,27 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Boot entry (multiboot2) | ⬜ Not started | |
-| Serial driver (COM1) | ⬜ Not started | |
-| VGA text mode driver | ⬜ Not started | ROM font, mode 3 |
-| printk | ⬜ Not started | Needs serial + VGA |
-| Test harness (make test) | ⬜ Not started | Blocking everything |
+| Boot entry (multiboot2) | ✅ Done | GRUB loads via multiboot2; identity-mapped at 0x100000 |
+| Serial driver (COM1) | ✅ Done | 115200 baud, polling 8N1 |
+| VGA text mode driver | ✅ Done | 80×25, ROM font, attr 0x07 |
+| printk | ✅ Done | serial-first, VGA-conditional |
+| Test harness (make test) | ✅ Done | GRUB ISO + ANSI-strip + diff; exits 0 |
 | Physical memory manager | ⬜ Not started | |
 | Virtual memory / paging | ⬜ Not started | |
 | Scheduler (single-core) | ⬜ Not started | |
 | Syscall dispatch (Rust) | ⬜ Not started | |
-| Capability system (Rust) | ⬜ Not started | Stub only in v1 |
+| Capability system (Rust) | ✅ Done | Stub only: cap_init() prints OK line |
 | VFS | ⬜ Not started | |
 | ELF loader | ⬜ Not started | |
 | musl port + shell | ⬜ Not started | |
 
+### Phase 1 deviations from original spec
+
+| Item | Spec | Actual | Reason |
+|------|------|--------|--------|
+| `x86_64-elf-gcc` | native cross-compiler | symlink → `x86_64-linux-gnu-gcc` 14.2 | Not in Debian repos; functionally equivalent with `-ffreestanding -nostdlib` |
+| Boot method | QEMU `-kernel aegis.elf` | GRUB + `-cdrom aegis.iso` | QEMU 10 dropped ELF64 multiboot2 detection via `-kernel`; GRUB detects correctly |
+| Serial output isolation | direct `diff` | strip ANSI + `grep ^[` + `diff` | SeaBIOS/GRUB write ANSI sequences to COM1 before kernel; our lines all start with `[` |
 ---
 
 ## Session Startup Checklist
@@ -303,4 +310,4 @@ Run through this at the start of every session before touching code:
 
 ---
 
-*Last updated: project inception. Update the Build Status table each session.*
+*Last updated: 2026-03-19 — Phase 1 complete, make test GREEN.*
