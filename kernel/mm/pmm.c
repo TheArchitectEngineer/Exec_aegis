@@ -118,7 +118,7 @@ void pmm_init(void)
      * our own reservations) so this line stays stable as the kernel grows. */
     uint64_t mb = total_bytes / (1024 * 1024);
     {
-        char    buf[64];
+        char    buf[96];
         char   *p = buf;
         p = append_str(p, "[PMM] OK: ");
         p = u64_to_dec(p, mb);
@@ -157,9 +157,17 @@ void pmm_free_page(uint64_t addr)
         p = append_str(p, "\n");
         *p = '\0';
         printk(buf);
-        for (;;) {}
+        for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
     }
     uint64_t idx = addr / PAGE_SIZE;
+    if (idx >= PMM_MAX_PAGES) {
+        char  buf[64];
+        char *p = buf;
+        p = append_str(p, "[PMM] FAIL: pmm_free_page addr out of managed range\n");
+        *p = '\0';
+        printk(buf);
+        for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
+    }
     uint8_t  bit = (uint8_t)(1U << (idx % 8));
     if (!(pmm_bitmap[idx / 8] & bit)) {
         char  buf[64];
@@ -169,7 +177,7 @@ void pmm_free_page(uint64_t addr)
         p = append_str(p, "\n");
         *p = '\0';
         printk(buf);
-        for (;;) {}
+        for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
     }
     pmm_bitmap[idx / 8] &= (uint8_t)~bit;
 }
