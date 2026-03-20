@@ -46,8 +46,8 @@ isr_dispatch(cpu_state_t *s)
 {
     if (s->vector < 32) {
         /* CPU exception: print and halt */
-        printk("[PANIC] exception %lu at RIP=0x%lx error=0x%lx\n",
-               s->vector, s->rip, s->error_code);
+        printk("[PANIC] exception %lu at RIP=0x%lx error=0x%lx CS=0x%lx\n",
+               s->vector, s->rip, s->error_code, s->cs);
         for (;;) {}
     } else if (s->vector < 0x30) {
         /* Hardware IRQ: send EOI BEFORE the handler.

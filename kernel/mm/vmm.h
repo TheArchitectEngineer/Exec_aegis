@@ -43,4 +43,8 @@ void vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
 /* Load pml4_phys into CR3. Flushes TLB. */
 void vmm_switch_to(uint64_t pml4_phys);
 
+/* Return the physical address of the master (kernel) PML4.
+ * Used by the scheduler to restore the master PML4 after a user task runs. */
+uint64_t vmm_get_master_pml4(void);
+
 #endif /* AEGIS_VMM_H */

@@ -171,6 +171,13 @@ void arch_tss_init(void);
  * Both values must always be identical. */
 void arch_set_kernel_stack(uint64_t rsp0);
 
+/* Store the master (kernel) PML4 physical address in g_master_pml4.
+ * Must be called once after vmm_init(). isr.asm and syscall_entry.asm
+ * load g_master_pml4 into CR3 at the start of every interrupt/syscall
+ * so that kernel code always runs with the master PML4 (where TCBs and
+ * kernel stacks are identity-mapped). */
+void arch_set_master_pml4(uint64_t pml4_phys);
+
 /* Program IA32_EFER (SCE), IA32_STAR, IA32_LSTAR, IA32_SFMASK.
  * Prints [SYSCALL] OK. */
 void arch_syscall_init(void);

@@ -259,3 +259,9 @@ vmm_switch_to(uint64_t pml4_phys)
 {
     arch_vmm_load_pml4(pml4_phys);
 }
+
+uint64_t
+vmm_get_master_pml4(void)
+{
+    return s_pml4_phys;
+}

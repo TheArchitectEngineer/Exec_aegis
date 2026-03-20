@@ -120,6 +120,19 @@ sched_add(aegis_task_t *task)
 void
 sched_exit(void)
 {
+    /* Switch to master PML4 immediately.
+     *
+     * sched_exit is called from sys_exit → syscall_dispatch, which runs with
+     * the user PML4 loaded in CR3.  The user PML4 has no identity map for
+     * [0..4MB); all TCBs and their ->next pointers are physical addresses in
+     * that range.  Any dereference of s_current or prev->next before switching
+     * to the master PML4 causes a #PF.
+     *
+     * We switch unconditionally here (even if dying is a kernel task, the
+     * master PML4 is always valid) and then re-switch at the bottom when we
+     * know which PML4 the next task needs. */
+    vmm_switch_to(vmm_get_master_pml4());
+
     /* IF=0 throughout (IA32_SFMASK cleared IF on SYSCALL entry) —
      * no preemption can occur during list manipulation. */
     aegis_task_t *prev = s_current;
@@ -137,7 +150,14 @@ sched_exit(void)
     }
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
-    if (s_current->is_user)
+
+    /* sched_exit is called from syscall context (ring-3 → ring-0 via SYSCALL).
+     * At this point the user PML4 is loaded.  If the next task is a kernel
+     * task, switch back to master PML4 so its identity-mapped stack is
+     * accessible.  If the next task is another user task, switch to its PML4. */
+    if (dying->is_user && !s_current->is_user)
+        vmm_switch_to(vmm_get_master_pml4());
+    else if (s_current->is_user)
         vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
     /*
@@ -178,8 +198,10 @@ sched_start(void)
      * sched_start() never returns.
      */
     arch_set_kernel_stack(s_current->kernel_stack_top);
-    if (s_current->is_user)
-        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+    /* sched_start always enters the first task (kbd, a kernel task).
+     * No CR3 switch here: if the first task is a user task, proc_enter_user
+     * handles the PML4 switch before iretq (same as the timer-preemption
+     * first-entry path). */
 
     aegis_task_t dummy;
     ctx_switch(&dummy, s_current);
@@ -198,8 +220,29 @@ sched_tick(void)
     s_current = s_current->next;
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
-    if (s_current->is_user)
-        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+
+    /*
+     * CR3 switch policy in sched_tick (Phase 5):
+     *
+     * sched_tick always runs inside isr_common_stub which switches to the
+     * master PML4 at interrupt entry.  sched_tick therefore always executes
+     * with the master PML4 loaded, regardless of whether the interrupted task
+     * was a kernel or user task.
+     *
+     * (a) Switching TO a user task: do NOT switch CR3 here.  The switch to
+     *     the user PML4 is performed by proc_enter_user (first entry) or by
+     *     isr_common_stub's saved-CR3 restore (subsequent preemptions).
+     *
+     *     CRITICAL: sched_tick runs on the OUTGOING kernel task's physical
+     *     stack (identity-mapped only in master PML4).  Calling
+     *     vmm_switch_to(user_pml4) from that stack would remove the identity
+     *     map, making the stack inaccessible, and causing a triple fault on
+     *     the very next stack access inside arch_vmm_load_pml4.
+     *
+     * (b) Switching FROM a user task to a kernel task: isr_common_stub
+     *     already switched to master PML4 at interrupt entry.  No further
+     *     CR3 switch is needed here.
+     */
 
     /* ctx_switch is declared in arch.h with a forward struct declaration.
      * It saves old->rsp, loads s_current->rsp, and returns into new task. */

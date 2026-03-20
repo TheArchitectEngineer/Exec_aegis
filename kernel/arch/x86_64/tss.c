@@ -15,9 +15,17 @@ static aegis_tss_t s_tss;
  * g_user_rsp — scratch global for SYSCALL stack switch.
  * Stores user RSP transiently between "mov [g_user_rsp], rsp"
  * and the push to the kernel stack. Single-core only.
+ *
+ * g_master_pml4 — physical address of the master (kernel) PML4.
+ * Set by arch_set_master_pml4() after vmm_init() and referenced from
+ * isr.asm and syscall_entry.asm to restore the master PML4 at the start
+ * of every interrupt/syscall.  This ensures all kernel code (ISR handlers,
+ * syscall dispatch, scheduler) runs with the master PML4 where TCBs and
+ * kernel stacks are accessible via the identity map.
  */
-uint64_t g_kernel_rsp = 0;
-uint64_t g_user_rsp   = 0;
+uint64_t g_kernel_rsp  = 0;
+uint64_t g_user_rsp    = 0;
+uint64_t g_master_pml4 = 0;
 
 aegis_tss_t *
 arch_tss_get(void)
@@ -37,4 +45,10 @@ arch_set_kernel_stack(uint64_t rsp0)
 {
 	s_tss.rsp0   = rsp0;
 	g_kernel_rsp = rsp0;
+}
+
+void
+arch_set_master_pml4(uint64_t pml4_phys)
+{
+	g_master_pml4 = pml4_phys;
 }

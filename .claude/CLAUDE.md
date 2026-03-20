@@ -300,10 +300,14 @@ A subsystem is ✅ only when `make test` passes with it included.
 | PIT | ✅ Done | Channel 0 at 100 Hz; arch_get_ticks() accessor; arch_request_shutdown() defers exit to ISR |
 | PS/2 keyboard | ✅ Done | Scancode→ASCII; ring buffer; blocking kbd_read() + non-blocking kbd_poll() |
 | Scheduler (single-core) | ✅ Done | Preemptive round-robin; circular TCB list; ctx_switch in NASM; sched_start dummy-TCB pattern |
-| Syscall dispatch (Rust) | ⬜ Not started | |
+| GDT (ring-3 descriptors) | ✅ Done | User CS 0x23, User DS 0x1B installed; arch_gdt_init() |
+| TSS | ✅ Done | RSP0 wired to kernel stack top; arch_tss_init() + arch_set_kernel_stack() |
+| SYSCALL/SYSRET | ✅ Done | IA32_STAR/LSTAR/SFMASK; syscall_entry.asm landing pad; o64 sysret |
+| ELF loader | ✅ Done | PT_LOAD segments mapped into user PML4 via vmm_map_user_page |
+| User process (proc_spawn) | ✅ Done | Per-process PML4; KSTACK_VA; proc_enter_user CR3 switch + iretq |
+| Syscall dispatch (C) | ✅ Done | sys_write (fd=1 → printk), sys_exit (→ sched_exit); Phase 5 |
 | Capability system (Rust) | ✅ Done | Stub only: cap_init() prints OK line |
 | VFS | ⬜ Not started | |
-| ELF loader | ⬜ Not started | |
 | musl port + shell | ⬜ Not started | |
 
 ### Phase 1 deviations from original spec
@@ -342,6 +346,8 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 
 *Last updated: 2026-03-20 — Phase 4 complete, make test GREEN. Preemptive round-robin scheduler live; IDT/PIC/PIT/KBD active; interactive VGA terminal.*
 
+*Last updated: 2026-03-20 — Phase 5 complete, make test GREEN. User-space process runs init binary via SYSCALL/SYSRET; sys_write + sys_exit wired; CR3 save/restore in isr_common_stub; proc_enter_user switches PML4 on KSTACK_VA.*
+
 ### Phase 4 forward-looking constraints
 
 **Identity map still active.** TCB and stack allocations in `sched.c` cast PMM
@@ -356,3 +362,25 @@ implement a clean kernel shutdown: drain run queue, flush I/O, then halt.
 **Single-core only.** The scheduler has no SMP awareness. `s_current` is a
 global with no locking. Multi-core brings here requires per-CPU run queues and
 IPI-based preemption — Phase 5+ concern.
+
+### Phase 5 forward-looking constraints
+
+**Identity map still active.** All TCB and kernel-stack allocations use physical
+addresses cast directly to pointers — valid only while `[0..4MB)` is identity-
+mapped in the master PML4. Phase 6 must introduce a mapped-window allocator
+before tearing down the identity map.
+
+**SMAP not enabled.** sys_write dereferences user virtual addresses directly
+with no pointer validation.  Phase 6 must add bounds checking
+(arg2 + arg3 <= 0x00007FFFFFFFFFFF) and enable SMAP so unintentional
+kernel→user dereferences fault.
+
+**Single user process only.** KSTACK_VA (0xFFFFFFFF80400000) is a single fixed
+address shared by all user processes. Phase 6 must introduce a VA allocator to
+assign a distinct kernel-stack VA per process.
+
+**sched_exit master-PML4 switch.** sched_exit switches to master PML4 at entry
+because TCBs live in the identity-mapped [0..4MB) range, which is absent from
+user PML4s. This is correct and intentional. Phase 6 cleanup: after introducing
+a proper kernel allocator, TCBs should be allocated from the higher-half so
+this unconditional switch is no longer necessary.
