@@ -3,8 +3,9 @@
 
 #include <stdint.h>
 
-/* Page mapping flags. These map to x86-64 PTE bits but the interface is
- * intentionally arch-agnostic — arch/x86_64/arch_vmm.c handles hardware. */
+/* Page mapping flags. These are x86-64 PTE bit positions and are passed
+ * directly into page table entries by vmm.c. An ARM64 port would need
+ * arch_vmm.c to translate these before inserting into hardware PTEs. */
 #define VMM_FLAG_PRESENT  (1UL << 0)
 #define VMM_FLAG_WRITABLE (1UL << 1)
 #define VMM_FLAG_USER     (1UL << 2)
@@ -19,7 +20,9 @@ void vmm_init(void);
 void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
 
 /* vmm_unmap_page — unmap a single 4KB page and invalidate its TLB entry.
- * virt must be 4KB-aligned and must currently be mapped. */
+ * virt must be 4KB-aligned and must currently be mapped.
+ * Valid for 4KB mappings only. Must not be called on addresses backed by
+ * 2MB huge pages; doing so will panic the kernel. */
 void vmm_unmap_page(uint64_t virt);
 
 #endif /* AEGIS_VMM_H */
