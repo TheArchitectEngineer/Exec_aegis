@@ -114,7 +114,12 @@ before any re-entry is possible).
 #define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x600000UL)
 
 static uint64_t           s_window_pt[512];   /* BSS — PT for window range      */
-static volatile uint64_t *s_window_pte;       /* → s_window_pt[0], set at init  */
+static volatile uint64_t *s_window_pte;       /* → s_window_pt[0], set at init  *
+                                               * volatile: prevents the compiler  *
+                                               * from caching the PTE value; each *
+                                               * vmm_window_map write must reach  *
+                                               * memory before the invlpg asm     *
+                                               * barrier that follows it.         */
 ```
 
 ### New Private Functions (replace phys_to_table + zero_page)
@@ -123,6 +128,9 @@ static volatile uint64_t *s_window_pte;       /* → s_window_pt[0], set at init
 static void *
 vmm_window_map(uint64_t phys)
 {
+    /* Write before invlpg: arch_vmm_invlpg is __asm__ volatile, which is a
+     * compiler barrier. volatile on s_window_pte ensures the write is not
+     * hoisted past other memory operations. Order is: write PTE → invlpg → use. */
     *s_window_pte = phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
     arch_vmm_invlpg(VMM_WINDOW_VA);
     return (void *)VMM_WINDOW_VA;
@@ -138,6 +146,8 @@ vmm_window_unmap(void)
 
 ### alloc_table() Replacement
 
+`alloc_table()` maps the new page, zeros it, then unmaps — one `invlpg` pair:
+
 ```c
 static uint64_t
 alloc_table(void)
@@ -152,17 +162,32 @@ alloc_table(void)
 
 ### Walk-Function Pattern
 
-Every call of the form `phys_to_table(entry & ~0xFFF)` becomes:
+A 4-level page-table walk reads one entry per level. Rather than map/unmap at
+each level (8 `invlpg` calls), the window is remapped by overwriting the PTE
+directly — `vmm_window_map` at each level, a single `vmm_window_unmap` at the
+end. This halves the TLB flush count and avoids a window between unmap and
+remap where a stale TLB entry could cause a silent bad read:
 
 ```c
-uint64_t *tbl = vmm_window_map(entry & ~0xFFFULL);
-/* read or write one entry */
-vmm_window_unmap();
+/* Example: walk to PT level, then set leaf PTE */
+uint64_t *pml4 = vmm_window_map(s_pml4_phys);
+uint64_t  pdpt_phys = pml4[pml4_idx] & VMM_PAGE_MASK;
+
+uint64_t *pdpt = vmm_window_map(pdpt_phys);   /* overwrites PTE, new invlpg */
+uint64_t  pd_phys = pdpt[pdpt_idx] & VMM_PAGE_MASK;
+
+uint64_t *pd = vmm_window_map(pd_phys);
+uint64_t  pt_phys = pd[pd_idx] & VMM_PAGE_MASK;
+
+uint64_t *pt = vmm_window_map(pt_phys);
+pt[pt_idx] = phys | flags;
+
+vmm_window_unmap();  /* single unmap at the end */
 ```
 
-Because each step of the walk (PML4 → PDPT → PD → PT) maps one table, reads
-or writes one entry, then unmaps, a single slot is sufficient for the
-sequential walk.
+The single-slot non-reentrancy guarantee holds: each `vmm_window_map` call
+overwrites the previous mapping before the next pointer is derived, so no two
+levels are simultaneously live.
 
 ### Deletion
 
@@ -212,13 +237,18 @@ The test remains: `make test` exits 0 on exact match.
 
 **Identity map still active.** The window mechanism is a prerequisite for
 teardown but does not itself tear the identity map down. Phase 7 must:
-1. Confirm all `phys_to_table` / identity-cast patterns are gone from all
-   kernel subsystems (not just VMM).
-2. Remove the `[0..4MB) → [0..4MB)` entries from `s_pd_identity` and flush
-   the TLB.
-3. Fix any remaining code that casts physical addresses to pointers (TCB
-   allocations in `sched.c`, kernel-stack allocations in `sched.c` and
-   `proc.c`).
+1. Audit every identity-cast in the kernel before touching the page tables.
+   Run the following from the repo root to get a complete list:
+   ```bash
+   grep -rn '(uint64_t \*)(uintptr_t)\|(uint8_t \*)(uintptr_t)\|(void \*)(uintptr_t)' kernel/
+   ```
+   Known sites at Phase 6 completion: TCB allocation in `sched.c`
+   (`sched_spawn`), kernel-stack allocation in `sched.c` and `proc.c`. All
+   must be migrated to a higher-half kernel allocator before the identity
+   map is removed.
+2. Remove the `[0..4MB) → [0..4MB)` entries from `pd_lo` and flush the TLB.
+3. Verify with `make test` and a deliberate access of a low physical address
+   to confirm a fault is triggered.
 
 **Single window slot.** Phase 7+ that introduces concurrent kernel threads or
 DMA mappings may need additional slots. The `s_window_pt[512]` array has 511
