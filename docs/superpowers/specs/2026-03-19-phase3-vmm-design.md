@@ -166,7 +166,14 @@ pd_lo[0]     → 0x0        (present | writable | PS)   2MB identity huge page
 pd_hi[0]     → 0x0        (present | writable | PS)   2MB kernel window huge page
 ```
 
-PDPT index 510: bits 38:30 of `0xFFFFFFFF80000000` = `0b111111110` = 510.
+PDPT index 510: bits 38:30 of `0xFFFFFFFF80000000` = `0b111111110` = 510. Do not
+hard-code `510` as a magic number in boot.asm. Derive it from `KERN_VMA`:
+
+```nasm
+PDPT_HI_IDX equ ((KERN_VMA >> 30) & 0x1FF)   ; = 510, follows KERN_VMA automatically
+```
+
+If `KERN_VMA` ever changes, the index follows without a silent mispaging fault.
 
 ### 2c. Jump sequence
 
@@ -421,11 +428,14 @@ to:
 ```c
 /* NEW (Phase 3) */
 pmm_reserve_region(ARCH_KERNEL_PHYS_BASE,
-    (uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE - ARCH_KERNEL_PHYS_BASE);
+    ((uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE)
+    - ARCH_KERNEL_PHYS_BASE);
 ```
 
-`(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE` = physical end of kernel image.
-Subtract `ARCH_KERNEL_PHYS_BASE` to get the length from the kernel load address.
+`((uint64_t)(uintptr_t)_kernel_end - ARCH_KERNEL_VIRT_BASE)` = physical end of the
+kernel image. Subtract `ARCH_KERNEL_PHYS_BASE` to get the **length** from the load
+address to the end. The outer parentheses are required — without them the subtraction
+order is ambiguous and the reservation would be wrong.
 
 ---
 
