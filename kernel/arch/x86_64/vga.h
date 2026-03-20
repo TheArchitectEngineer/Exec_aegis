@@ -17,4 +17,9 @@ void vga_write_char(char c);
 /* Write a null-terminated string to the VGA text buffer. */
 void vga_write_string(const char *s);
 
+/* Write a single character with full cursor tracking, scrolling, and
+ * interrupt-flag preservation (pushfq/popfq). Use this for interactive
+ * output. vga_write_string routes through vga_putchar. */
+void vga_putchar(char c);
+
 #endif
