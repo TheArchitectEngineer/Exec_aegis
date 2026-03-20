@@ -22,7 +22,8 @@ CFLAGS = \
     -Ikernel/core \
     -Ikernel/cap \
     -Ikernel/mm \
-    -Ikernel/sched
+    -Ikernel/sched \
+    -Ikernel/proc
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
