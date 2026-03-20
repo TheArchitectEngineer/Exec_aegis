@@ -294,7 +294,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | printk | ✅ Done | serial-first, VGA-conditional |
 | Test harness (make test) | ✅ Done | GRUB ISO + ANSI-strip + diff; exits 0 |
 | Physical memory manager | ✅ Done | Bitmap allocator; single-page (4KB) only; multi-page deferred to buddy allocator |
-| Virtual memory / paging | 🔄 In progress | Higher-half relocation to 0xFFFFFFFF80000000; identity map kept in Phase 3 |
+| Virtual memory / paging | ✅ Done | Higher-half kernel at 0xFFFFFFFF80000000; 5-table setup (identity + kernel); identity map kept; teardown deferred to Phase 4 |
 | Scheduler (single-core) | ⬜ Not started | |
 | Syscall dispatch (Rust) | ⬜ Not started | |
 | Capability system (Rust) | ✅ Done | Stub only: cap_init() prints OK line |
@@ -336,4 +336,4 @@ always maps the page being initialized) *before* tearing down the identity map.
 Tearing down identity first and fixing zero_page second causes a fault you cannot
 debug. The order is non-negotiable: mapped-window allocator → tear down identity.
 
-*Last updated: 2026-03-19 — Phase 3 VMM spec approved; plan not yet written.*
+*Last updated: 2026-03-19 — Phase 3 complete, make test GREEN. VMM active; kernel runs at 0xFFFFFFFF80000000.*
