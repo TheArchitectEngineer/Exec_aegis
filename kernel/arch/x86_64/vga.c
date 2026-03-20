@@ -1,46 +1,116 @@
 #include "vga.h"
 #include "serial.h"
+#include "arch.h"   /* outb, uint8_t, uint16_t, uint64_t */
 
-#define VGA_BASE    ((unsigned short *)0xB8000)
+/*
+ * VGA text-mode driver — x86_64 higher-half kernel.
+ *
+ * The physical VGA framebuffer is at 0xB8000.  After Phase 3 the kernel
+ * runs at 0xFFFFFFFF80000000, so the correct virtual address is:
+ *   0xFFFFFFFF80000000 + 0xB8000 = 0xFFFFFFFF800B8000
+ * The identity map [0..4MB) is still active, so 0xB8000 also works for
+ * now, but we use the higher-half address exclusively so this driver
+ * survives identity-map teardown in Phase 4.
+ */
+
+#define VGA_PHYS    0xFFFFFFFF800B8000UL
 #define VGA_COLS    80
 #define VGA_ROWS    25
 #define VGA_ATTR    0x07    /* light grey on black */
 
 int vga_available = 0;
 
-static int vga_col = 0;
-static int vga_row = 0;
+static int s_row = 0;
+static int s_col = 0;
 
 /* vga_cell — encode a character + attribute as a 16-bit VGA cell. */
-static inline unsigned short vga_cell(char c, unsigned char attr)
+static inline uint16_t
+vga_cell(char c, uint8_t attr)
 {
-    return (unsigned short)((unsigned char)c) | ((unsigned short)attr << 8);
+    return (uint16_t)((uint8_t)c) | ((uint16_t)attr << 8);
 }
 
-/* vga_scroll — shift all rows up by one, clear the bottom row. */
-static void vga_scroll(void)
+/* vga_set_cursor — program the CRTC hardware text cursor position.
+ * Uses port I/O to CGA/VGA CRTC registers 0x3D4/0x3D5.
+ * Only called when vga_available is set, ensuring CRTC is initialised. */
+static void
+vga_set_cursor(int row, int col)
 {
-    int i;
-    /* Move rows 1..24 up to rows 0..23 */
-    for (i = 0; i < (VGA_ROWS - 1) * VGA_COLS; i++) {
-        VGA_BASE[i] = VGA_BASE[i + VGA_COLS];
-    }
+    uint16_t pos = (uint16_t)(row * VGA_COLS + col);
+    outb(0x3D4, 0x0F); outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E); outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+/* vga_scroll — shift rows 1-24 up to rows 0-23, clear the bottom row. */
+static void
+vga_scroll(void)
+{
+    volatile uint16_t *vga = (volatile uint16_t *)VGA_PHYS;
+    int r, c;
+    for (r = 0; r < VGA_ROWS - 1; r++)
+        for (c = 0; c < VGA_COLS; c++)
+            vga[r * VGA_COLS + c] = vga[(r + 1) * VGA_COLS + c];
     /* Clear bottom row */
-    for (i = (VGA_ROWS - 1) * VGA_COLS; i < VGA_ROWS * VGA_COLS; i++) {
-        VGA_BASE[i] = vga_cell(' ', VGA_ATTR);
-    }
-    vga_row = VGA_ROWS - 1;
+    for (c = 0; c < VGA_COLS; c++)
+        vga[(VGA_ROWS - 1) * VGA_COLS + c] = vga_cell(' ', VGA_ATTR);
+    s_row = VGA_ROWS - 1;
 }
 
-void vga_init(void)
+void
+vga_putchar(char c)
 {
+    /*
+     * Save and restore RFLAGS.IF around VGA buffer writes.
+     * - Before IDT is installed: IF=0; popfq restores 0, no spurious
+     *   interrupt fires.
+     * - In ISR context: IF=0; same as above.
+     * - In task context: IF=1; restored to 1 after the write, so
+     *   interrupts are re-enabled exactly where they were.
+     */
+    uint64_t flags;
+    __asm__ volatile ("pushfq; cli; popq %0" : "=r"(flags) : : "memory");
+
+    volatile uint16_t *vga = (volatile uint16_t *)VGA_PHYS;
+
+    if (c == '\n') {
+        s_col = 0;
+        s_row++;
+    } else if (c == '\r') {
+        s_col = 0;
+    } else if (c == '\b') {
+        if (s_col > 0) {
+            s_col--;
+            vga[s_row * VGA_COLS + s_col] = vga_cell(' ', VGA_ATTR);
+        }
+    } else {
+        vga[s_row * VGA_COLS + s_col] = vga_cell(c, VGA_ATTR);
+        s_col++;
+        if (s_col >= VGA_COLS) {
+            s_col = 0;
+            s_row++;
+        }
+    }
+
+    if (s_row >= VGA_ROWS)
+        vga_scroll();
+
+    /* Only program the CRTC cursor after vga_init() has succeeded. */
+    if (vga_available)
+        vga_set_cursor(s_row, s_col);
+
+    __asm__ volatile ("pushq %0; popfq" : : "r"(flags) : "memory");
+}
+
+void
+vga_init(void)
+{
+    volatile uint16_t *vga = (volatile uint16_t *)VGA_PHYS;
     int i;
     /* Clear entire screen */
-    for (i = 0; i < VGA_ROWS * VGA_COLS; i++) {
-        VGA_BASE[i] = vga_cell(' ', VGA_ATTR);
-    }
-    vga_col = 0;
-    vga_row = 0;
+    for (i = 0; i < VGA_ROWS * VGA_COLS; i++)
+        vga[i] = vga_cell(' ', VGA_ATTR);
+    s_col = 0;
+    s_row = 0;
     vga_available = 1;
 
     /* Print directly — printk is not yet up at this point */
@@ -48,32 +118,15 @@ void vga_init(void)
     serial_write_string("[VGA] OK: text mode 80x25\n");
 }
 
-void vga_write_char(char c)
+void
+vga_write_char(char c)
 {
-    if (c == '\n') {
-        vga_col = 0;
-        vga_row++;
-        if (vga_row >= VGA_ROWS) {
-            vga_scroll();
-        }
-        return;
-    }
-
-    VGA_BASE[vga_row * VGA_COLS + vga_col] = vga_cell(c, VGA_ATTR);
-    vga_col++;
-    if (vga_col >= VGA_COLS) {
-        vga_col = 0;
-        vga_row++;
-        if (vga_row >= VGA_ROWS) {
-            vga_scroll();
-        }
-    }
+    vga_putchar(c);
 }
 
-void vga_write_string(const char *s)
+void
+vga_write_string(const char *s)
 {
-    while (*s != '\0') {
-        vga_write_char(*s);
-        s++;
-    }
+    while (*s)
+        vga_putchar(*s++);
 }
