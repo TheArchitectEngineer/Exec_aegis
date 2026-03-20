@@ -341,8 +341,8 @@ static int s_col = 0;
 ```
 
 Replace `vga_write_char` with `vga_putchar`:
-- Disables interrupts (`cli`) at entry, re-enables (`sti`) at exit — prevents
-  preemption mid-write from corrupting `s_row`/`s_col` shared state
+- Saves and restores the interrupt flag using `pushfq`/`popfq` + `cli` to
+  prevent cursor state corruption from preemption mid-write (see note below)
 - Writes char at `(s_row, s_col)` with attribute 0x07
 - `\n` → col=0, row++
 - `\r` → col=0
@@ -351,9 +351,22 @@ Replace `vga_write_char` with `vga_putchar`:
 - If row==25: scroll (copy rows 1–24 to rows 0–23 by word loop, clear row 24, row=24)
 - Update hardware cursor via ports 0x3D4/0x3D5
 
-**Note:** `cli`/`sti` in `vga_putchar` is safe in Phase 4 because all callers are
-kernel tasks with interrupts enabled. It serializes VGA writes without a full lock.
-Phase 5 (user space) will need a proper spinlock here.
+```c
+void vga_putchar(char c) {
+    /* Save and restore RFLAGS.IF rather than blindly issuing cli/sti.
+     * This is safe during early boot (no IDT — IF is already 0, popfq
+     * restores 0, no sti ever fires), during ISR context (IF already 0),
+     * and during normal task execution (IF=1, restored after write). */
+    uint64_t flags;
+    __asm__ volatile ("pushfq; cli; popq %0" : "=r"(flags) : : "memory");
+    /* ... cursor update and write ... */
+    __asm__ volatile ("pushq %0; popfq" : : "r"(flags) : "memory");
+}
+```
+
+`vga_write_string` routes through `vga_putchar` so all output paths share
+cursor state. The `pushfq`/`popfq` pattern makes this safe for all callers
+including `vga_init()` (called before IDT is installed).
 
 ### 6.2 Hardware Cursor
 
@@ -441,7 +454,7 @@ SCHED_SRCS = kernel/sched/sched.c
 | Shift-only kbd, no extended keys | YAGNI — US QWERTY letters/digits/punctuation sufficient for Phase 4 demo |
 | `vga_putchar` replaces `vga_write_char` | Unified output path with cursor state; `printk` and `vga_write_string` route through it |
 | EOI sent before handler in `isr_dispatch` | `pit_handler` calls `ctx_switch` which replaces RSP — EOI after handler return is stranded on the outgoing task's return path, silencing future PIT ticks until that task is rescheduled |
-| `cli`/`sti` in `vga_putchar` | Prevents cursor state corruption from preemption mid-write; simple and correct for Phase 4 kernel-only tasks |
+| `pushfq`/`popfq` (not `cli`/`sti`) in `vga_putchar` | Saves and restores the actual IF flag: safe during early boot (no IDT, IF=0 — `popfq` restores 0, never fires `sti`), safe in ISR context (IF=0), correct in task context (IF=1 restored). Plain `sti` would triple-fault if called before IDT is installed. |
 | `arch_get_ticks()` instead of `g_ticks` extern | PIT tick counter is x86-specific; `kernel/core/` must not reference arch internals directly |
 | `sched_start()` owns `[SCHED]` OK print | `sched_init()` initializes an empty queue; only `sched_start()` knows the final task count after all `sched_spawn()` calls |
 | Error-code exception list per Intel SDM Vol 3A Table 6-1 | Misclassifying an exception (ISR_ERR vs ISR_NOERR) misaligns the interrupt frame and crashes the handler |
