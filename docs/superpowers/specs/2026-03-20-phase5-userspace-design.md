@@ -182,8 +182,11 @@ syscall handlers to execute without a CR3 switch on SYSCALL entry.
 
 User virtual memory layout (per process):
 - `0x400000` — ELF PT_LOAD segments mapped here (standard static ELF base)
-- `0x7FFFFFFF000` — user stack top (one 4KB page for Phase 5; 16-byte aligned
-  per AMD64 ABI requirement at `_start` entry)
+- `0x7FFFFFFF000` — user stack top (one 4KB page for Phase 5). `_start` is
+  entered via `iretq` with RSP = this value, so RSP must be 16-byte aligned
+  per AMD64 ABI. `0x7FFFFFFF000` ends in `0x000` — 4096-byte aligned, hence
+  16-byte aligned. ✓ If user code pushes 0 words before its first `call`,
+  alignment is maintained.
 
 ### `aegis_task_t` Changes
 
@@ -369,6 +372,15 @@ Memory for the exited process (TCB page, kernel stack pages, user PML4 and
 descendant tables, ELF segment pages) is leaked intentionally. Phase 6 adds
 cleanup via `vmm_destroy_user_pml4` and PMM free.
 
+**Phase 6 cleanup note**: `ctx_switch(dying, s_current)` saves RSP into
+`dying->rsp` — which now points into the middle of the kernel stack (the
+call frame depth at the time of `sched_exit`). Phase 6's cleanup must use
+`dying->task.rsp` to locate the current stack position and
+`dying->task.stack_base + STACK_SIZE` to find the allocation top, rather than
+freeing `stack_base` directly without accounting for where the stack pointer
+currently sits. `stack_base` is the PMM allocation start; RSP is somewhere
+above it.
+
 ---
 
 ## Section 5: User Binary (`user/init/`)
@@ -464,10 +476,16 @@ prerequisite of `build/proc/proc.o`.
 circular list. After three spawns from a null queue, the list is
 `task_kbd → task_heartbeat → init → (back to task_kbd)`. `sched_start`
 switches to `task_kbd` first. The round-robin scheduler reaches `init` on the
-third slot of the first scheduling round. `init`'s `_start` is a tight loop
-(~5 syscalls, no blocking) that completes and calls `sched_exit` within the
-first few ticks — well before `task_heartbeat`'s 500-tick (5-second) deadline.
-The `[USER]` lines are therefore always emitted before `[AEGIS]`.
+third slot of the first scheduling round.
+
+Each `sys_write` call runs with IF=0 (cleared by `IA32_SFMASK` on SYSCALL
+entry) — the scheduler cannot preempt during syscall dispatch. This means
+each individual `write` completes atomically from the scheduler's perspective:
+no timer tick can fire mid-`printk` and advance to another task. `init`'s five
+syscalls (3× write + 1× write + 1× exit) each complete fully before the next
+scheduling opportunity. The `[USER]` lines are therefore always contiguous and
+always appear before `[AEGIS]` — not because the loop "completes fast," but
+because syscall dispatch is non-preemptible by construction.
 
 ### `make test` exit condition
 
