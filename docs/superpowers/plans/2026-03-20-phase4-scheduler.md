@@ -441,11 +441,7 @@ compiler will emit a fatal `file not found` error, not merely linker warnings.
 This is expected at this stage. Do not attempt `make` until Tasks 6 and 7 are complete.
 The individual file `idt.c` can be written and reviewed now; compilation is verified in Task 13.
 
-```bash
-make 2>&1 | grep -E "idt|error:" | head -20
-```
-
-Expected: `idt.c` compiles. Link still fails (isr.asm not yet written).
+Do not run `make` here. Proceed directly to Step 4 (commit). Compilation is verified in Task 13.
 
 - [ ] **Step 4: Commit**
 
@@ -1121,8 +1117,9 @@ void sched_init(void);
 /* Allocate a TCB and 16KB stack from PMM; wire fn as entry point; add to queue. */
 void sched_spawn(void (*fn)(void));
 
-/* Print [SCHED] OK line, then execute `sti` to hand control to the PIT.
- * Does not return in a meaningful way — the scheduler takes over. */
+/* Print [SCHED] OK line, then switch directly into the first task via a
+ * dummy TCB (one-way ctx_switch). Does not return. Each task enables
+ * interrupts on entry via `sti`. */
 void sched_start(void);
 
 /* Called by pit_handler on each timer tick.
