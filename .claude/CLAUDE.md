@@ -330,7 +330,7 @@ Run through this at the start of every session before touching code:
 
 **Identity map teardown and `zero_page()` must be resolved together in Phase 4.**
 `vmm.c`'s `zero_page()` works by casting a physical address to a pointer and
-writing through it — valid only while the identity window `[0..2MB)` is active.
+writing through it — valid only while the identity window `[0..4MB)` is active.
 Phase 4 must provide a **mapped-window allocator** (a fixed virtual window that
 always maps the page being initialized) *before* tearing down the identity map.
 Tearing down identity first and fixing zero_page second causes a fault you cannot

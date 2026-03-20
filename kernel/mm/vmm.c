@@ -15,8 +15,8 @@ static uint64_t s_pml4_phys;
 /*
  * zero_page — zero all 512 entries of a physical page.
  *
- * CONSTRAINT: phys must be < 2MB (within the identity-mapped window).
- * This cast is valid only while the [0..2MB) identity mapping is active.
+ * CONSTRAINT: phys must be < 4MB (within the identity-mapped window).
+ * This cast is valid only while the [0..4MB) identity mapping is active.
  * Phase 4 must provide a mapped-window allocator before tearing down
  * the identity map. Tearing down identity first causes a fault that
  * cannot be debugged.
@@ -48,7 +48,7 @@ alloc_table(void)
 
 /*
  * phys_to_table — cast a physical page-table address to a uint64_t pointer.
- * Valid while the identity mapping [0..2MB) is active.
+ * Valid while the identity mapping [0..4MB) is active.
  */
 static uint64_t *
 phys_to_table(uint64_t phys)
@@ -75,7 +75,7 @@ vmm_init(void)
 {
     /* Allocate the five initial page tables. All allocations happen before
      * arch_vmm_load_pml4() is called, so zero_page() is safe: the identity
-     * window [0..2MB) is still the active mapping at this point. */
+     * window [0..4MB) is still the active mapping at this point. */
     uint64_t pml4_phys    = alloc_table();
     uint64_t pdpt_lo_phys = alloc_table();
     uint64_t pd_lo_phys   = alloc_table();
@@ -168,6 +168,10 @@ vmm_unmap_page(uint64_t virt)
     uint64_t *pd = phys_to_table(PTE_ADDR(pdpt[pdpt_idx]));
     if (!(pd[pd_idx] & VMM_FLAG_PRESENT)) {
         printk("[VMM] FAIL: vmm_unmap_page not mapped (pd)\n");
+        for (;;) {}
+    }
+    if (pd[pd_idx] & (1UL << 7)) {
+        printk("[VMM] FAIL: vmm_unmap_page called on huge-page-backed address\n");
         for (;;) {}
     }
     uint64_t *pt = phys_to_table(PTE_ADDR(pd[pd_idx]));
