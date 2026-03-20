@@ -42,7 +42,8 @@ CORE_SRCS = \
     kernel/core/printk.c
 
 MM_SRCS = \
-    kernel/mm/pmm.c
+    kernel/mm/pmm.c \
+    kernel/mm/vmm.c
 
 BOOT_SRC = kernel/arch/x86_64/boot.asm
 CAP_LIB  = kernel/cap/target/x86_64-unknown-none/release/libcap.a
