@@ -14,6 +14,12 @@
  * kernel/core/ uses arch_get_ticks() declared in arch.h. */
 static volatile uint64_t s_ticks = 0;
 
+/* Set by arch_request_shutdown(); checked in pit_handler each tick.
+ * When set, pit_handler calls arch_debug_exit from within the ISR
+ * (IF=0, no task context) to avoid the race where the task context
+ * continues running after the port write and outputs a second line. */
+static volatile int s_shutdown = 0;
+
 /* Forward declaration: sched_tick is implemented in kernel/sched/sched.c.
  * We use a forward decl here to avoid a circular include dependency.
  * -Ikernel/sched is in CFLAGS so we could include sched.h, but the
@@ -39,6 +45,19 @@ pit_handler(void)
 {
     s_ticks++;
     sched_tick();
+    /* Check shutdown AFTER sched_tick so the task that set s_shutdown
+     * gets preempted cleanly before we call arch_debug_exit. */
+    if (s_shutdown)
+        arch_debug_exit(0x01);
+}
+
+/* arch_request_shutdown — called from task context to request a clean exit.
+ * The actual arch_debug_exit is deferred to the next pit_handler invocation
+ * (ISR context, IF=0) so no task code runs after the debug_exit port write. */
+void
+arch_request_shutdown(void)
+{
+    s_shutdown = 1;
 }
 
 /* arch_get_ticks — arch-boundary accessor for the tick counter.
