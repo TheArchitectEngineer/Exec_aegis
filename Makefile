@@ -13,6 +13,7 @@ GCC_INCLUDE := $(shell $(CC) -print-file-name=include)
 CFLAGS = \
     -ffreestanding -nostdlib -nostdinc \
     -isystem $(GCC_INCLUDE) \
+    -mcmodel=kernel \
     -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
     -fno-stack-protector \
     -Wall -Wextra -Werror \
