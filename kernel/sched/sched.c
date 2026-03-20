@@ -103,12 +103,17 @@ sched_spawn(void (*fn)(void))
 void
 sched_start(void)
 {
+    if (!s_current) {
+        printk("[SCHED] FAIL: sched_start called with no tasks\n");
+        for (;;) {}
+    }
+
     printk("[SCHED] OK: scheduler started, %u tasks\n", s_task_count);
 
     /* One-way switch into the first task.
      *
-     * IMPORTANT: Do NOT call sti and return here. If we returned to the idle
-     * hlt loop and the first PIT tick fired from there, sched_tick would call
+     * IMPORTANT: Do NOT enable interrupts and return here. If we returned to
+     * the idle loop and the first timer tick fired from there, sched_tick would call
      * ctx_switch(task_kbd, task_heartbeat) while RSP is deep in the ISR frame.
      * ctx_switch would save the ISR stack pointer into task_kbd->rsp, corrupting
      * the TCB. Resuming task_kbd later would load a garbage RSP and crash.
@@ -120,10 +125,6 @@ sched_start(void)
      *
      * sched_start() never returns.
      */
-    if (!s_current) {
-        printk("[SCHED] FAIL: sched_start called with no tasks\n");
-        for (;;) {}
-    }
     aegis_task_t dummy;
     ctx_switch(&dummy, s_current);
     __builtin_unreachable();
