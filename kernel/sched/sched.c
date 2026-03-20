@@ -2,6 +2,8 @@
 #include "arch.h"
 #include "pmm.h"
 #include "printk.h"
+#include "vmm.h"
+#include "proc.h"
 #include <stddef.h>
 
 /* Compile-time guard: ctx_switch.asm assumes rsp is at offset 0 of TCB.
@@ -83,9 +85,11 @@ sched_spawn(void (*fn)(void))
     *--sp = 0;                         /* r14 */
     *--sp = 0;                         /* r15  ← new task's RSP */
 
-    task->rsp        = (uint64_t)(uintptr_t)sp;
-    task->stack_base = stack;
-    task->tid        = s_next_tid++;
+    task->rsp              = (uint64_t)(uintptr_t)sp;
+    task->stack_base       = stack;
+    task->kernel_stack_top = (uint64_t)(uintptr_t)(stack + STACK_SIZE);
+    task->is_user          = 0;
+    task->tid              = s_next_tid++;
 
     /* Add to circular list */
     if (!s_current) {
@@ -98,6 +102,54 @@ sched_spawn(void (*fn)(void))
     }
 
     s_task_count++;
+}
+
+void
+sched_add(aegis_task_t *task)
+{
+    if (!s_current) {
+        task->next = task;
+        s_current  = task;
+    } else {
+        task->next      = s_current->next;
+        s_current->next = task;
+    }
+    s_task_count++;
+}
+
+void
+sched_exit(void)
+{
+    /* IF=0 throughout (IA32_SFMASK cleared IF on SYSCALL entry) —
+     * no preemption can occur during list manipulation. */
+    aegis_task_t *prev = s_current;
+    while (prev->next != s_current)
+        prev = prev->next;
+
+    aegis_task_t *dying = s_current;
+    s_current           = dying->next;
+    prev->next          = s_current;
+    s_task_count--;
+
+    if (s_current == dying) {  /* last task — everything has exited */
+        arch_request_shutdown();
+        for (;;) __asm__ volatile ("hlt");
+    }
+
+    arch_set_kernel_stack(s_current->kernel_stack_top);
+    if (s_current->is_user)
+        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+
+    /*
+     * PHASE 6 CLEANUP NOTE: ctx_switch saves dying->rsp here — that RSP
+     * is somewhere in the middle of the kernel stack (the call depth at
+     * sched_exit time). Phase 6 must free dying->stack_base (the PMM
+     * allocation) and the process TCB using the physical addresses, not
+     * by dereferencing dying->rsp. dying->stack_base + STACK_SIZE gives
+     * the allocation top; dying->rsp is the current stack pointer.
+     */
+    ctx_switch(dying, s_current);
+    __builtin_unreachable();
 }
 
 void
@@ -125,6 +177,10 @@ sched_start(void)
      *
      * sched_start() never returns.
      */
+    arch_set_kernel_stack(s_current->kernel_stack_top);
+    if (s_current->is_user)
+        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+
     aegis_task_t dummy;
     ctx_switch(&dummy, s_current);
     __builtin_unreachable();
@@ -140,6 +196,10 @@ sched_tick(void)
 
     aegis_task_t *old = s_current;
     s_current = s_current->next;
+
+    arch_set_kernel_stack(s_current->kernel_stack_top);
+    if (s_current->is_user)
+        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
     /* ctx_switch is declared in arch.h with a forward struct declaration.
      * It saves old->rsp, loads s_current->rsp, and returns into new task. */
