@@ -1,20 +1,26 @@
-; boot.asm — Multiboot2 header, 32-to-64 long mode setup, kernel entry
+; boot.asm — Aegis multiboot2 entry point and higher-half trampoline
 ;
-; Entry state per multiboot2 spec:
-;   CPU: 32-bit protected mode, interrupts disabled, paging off
-;   EAX: multiboot2 magic value (0x36D76289)
-;   EBX: physical address of multiboot2 info structure
-;   Stack: undefined — we set it up before any C call
+; Boot sequence:
+;   1. GRUB loads us in 32-bit protected mode at physical ~0x100000.
+;   2. We build 5 page tables in .bss (physical addresses via (label-KERN_VMA)).
+;   3. Enable PAE + long mode (EFER), load CR3, enable paging.
+;   4. Far-jump to long_mode_phys (still physical VMA, in .text.boot).
+;   5. long_mode_phys sets segments, then jmp rax → long_mode_high.
+;   6. long_mode_high (higher-half VMA, in .text) sets stack, calls kernel_main.
 ;
-; This file is x86-specific and intentionally lives in kernel/arch/x86_64/.
+; Register clobbers: all (this is the entry point, not a callable function).
+; Calling convention: none — we eventually call kernel_main via C ABI.
 
 MULTIBOOT2_MAGIC  equ 0xE85250D6   ; identifies this as a multiboot2 header
 MULTIBOOT2_ARCH   equ 0             ; 0 = i386 (32-bit protected mode entry)
-KERNEL_STACK_SIZE equ 0x4000        ; 16KB boot stack
 
-; ─── Multiboot2 header ────────────────────────────────────────────────────────
-; Must land within the first 8KB of the ELF image so QEMU -kernel finds it.
-; Linker script forces .multiboot to be the very first section.
+KERN_VMA     equ 0xFFFFFFFF80000000
+PDPT_HI_IDX  equ ((KERN_VMA >> 30) & 0x1FF)   ; = 510
+
+; ────────────────────────────────────────────────
+; .multiboot — must be within first 8KB for GRUB
+; VMA = LMA = physical (linker places it first)
+; ────────────────────────────────────────────────
 section .multiboot
 align 8
 multiboot_header_start:
@@ -31,11 +37,19 @@ multiboot_header_start:
 multiboot_header_end:
 
 
-; ─── GDT for 64-bit mode ──────────────────────────────────────────────────────
-; Loaded in 32-bit mode before the long mode transition.
+; ────────────────────────────────────────────────
+; .text.boot — runs at physical VMA (VMA = LMA)
+; Contains: GDT, _start (32-bit), long_mode_phys (64-bit trampoline)
+;
+; IMPORTANT: The GDT lives here so that lgdt uses a physical address.
+; After the linker split, anything in .data/.rodata has a higher-half VMA —
+; wrong for lgdt in 32-bit mode. In .text.boot, VMA = LMA = physical.
+; ────────────────────────────────────────────────
+section .text.boot
+bits 32
+
+; GDT for 64-bit mode — must be at physical address for lgdt in 32-bit mode.
 ; Descriptor format: see Intel SDM Vol 3A, Section 3.4.5
-section .data
-align 8
 gdt64:
     ; Entry 0: null descriptor (required)
     dq 0x0000000000000000
@@ -50,130 +64,216 @@ gdt64:
     dq 0x00AF92000000FFFF
 gdt64_end:
 
-; LGDT descriptor: 2-byte limit + 4-byte base (loaded in 32-bit mode)
+; LGDT descriptor: 2-byte limit + 4-byte base.
+; gdt64 is in .text.boot so its address here IS the physical address.
 gdt64_ptr:
     dw (gdt64_end - gdt64 - 1)
-    dd gdt64
+    dd gdt64                         ; 32-bit physical address (VMA=LMA in .text.boot)
 
-
-; ─── Entry point ──────────────────────────────────────────────────────────────
-section .text
-bits 32
 
 ; _start — first instruction executed after the bootloader hands off control.
 ;
-; Purpose: transition from 32-bit protected mode to 64-bit long mode,
-;          set up a stack, then call kernel_main.
+; Purpose: build page tables, enable PAE + long mode, jump to 64-bit code.
+; Entry state per multiboot2 spec:
+;   EAX = multiboot2 magic (0x36D76289)
+;   EBX = physical address of multiboot2 info structure
+;   CPU: 32-bit protected mode, interrupts disabled, paging off
 ; Clobbers: all registers
 ; Calling convention: none (we are the entry point)
 global _start
 _start:
-    cli                         ; disable interrupts (undefined state from bootloader)
+    ; Disable interrupts; we have no IDT yet.
+    cli
 
     ; Preserve multiboot2 args before we clobber EAX/EBX.
-    ; mov edi,eax zero-extends to RDI (first System V AMD64 arg after far jump).
-    ; mov esi,ebx zero-extends to RSI (second arg). Both values are < 4GB.
-    mov edi, eax                ; mb_magic  → will be first  arg (RDI)
-    mov esi, ebx                ; mb_info   → will be second arg (RSI)
+    ; kernel_main(uint32_t mb_magic, void *mb_info) per SysV AMD64 ABI:
+    ;   RDI = first arg  = mb_magic (EAX from bootloader)
+    ;   RSI = second arg = mb_info  (EBX from bootloader, physical addr)
+    ; Both values are < 4GB so zero-extension into 64-bit registers is safe.
+    ; EDI/ESI survive the mode transition — we don't clobber them below.
+    mov edi, eax                ; mb_magic → RDI (first arg)
+    mov esi, ebx                ; mb_info  → RSI (second arg)
 
-    ; ── Load 64-bit GDT (still in 32-bit mode) ──────────────────────────
-    lgdt [gdt64_ptr]
+    ; ── Set up page tables ──────────────────────────────────────────────
+    ; All .bss labels have higher-half VMAs after the linker split.
+    ; Use (label - KERN_VMA) to compute their physical addresses at
+    ; assemble/link time. NASM evaluates these as 32-bit constants.
+    ;
+    ; We map 4MB total (two 2MB huge pages) for both identity and higher-half:
+    ;   Identity:     VA [0x000000..0x3FFFFF] → PA [0x000000..0x3FFFFF]
+    ;   Higher-half:  VA [KERN_VMA..KERN_VMA+0x3FFFFF] → PA [0x000000..0x3FFFFF]
+    ;
+    ; Table layout:
+    ;   PML4[0]   → pdpt_lo   (identity window)
+    ;   PML4[511] → pdpt_hi   (higher-half kernel)
+    ;   pdpt_lo[0]            → pd_lo
+    ;   pdpt_hi[PDPT_HI_IDX]  → pd_hi
+    ;   pd_lo[0,1]            → 2MB huge pages at PA 0x000000 and 0x200000
+    ;   pd_hi[0,1]            → 2MB huge pages at PA 0x000000 and 0x200000
+
+    ; PML4[0] → pdpt_lo  (identity: VA 0x000000 → PA 0x000000)
+    mov eax, dword (pdpt_lo - KERN_VMA)
+    or  eax, 0x03                    ; PRESENT | WRITABLE
+    mov ebx, dword (pml4_table - KERN_VMA)
+    mov [ebx], eax
+
+    ; PML4[511] → pdpt_hi  (kernel: VA KERN_VMA → PA 0x000000)
+    mov eax, dword (pdpt_hi - KERN_VMA)
+    or  eax, 0x03
+    mov [ebx + 511*8], eax
+
+    ; pdpt_lo[0] → pd_lo
+    mov eax, dword (pd_lo - KERN_VMA)
+    or  eax, 0x03
+    mov ebx, dword (pdpt_lo - KERN_VMA)
+    mov [ebx], eax
+
+    ; pdpt_hi[PDPT_HI_IDX] → pd_hi
+    mov eax, dword (pd_hi - KERN_VMA)
+    or  eax, 0x03
+    mov ebx, dword (pdpt_hi - KERN_VMA)
+    mov [ebx + PDPT_HI_IDX*8], eax
+
+    ; pd_lo[0]: 2MB huge page PA 0x000000 (identity, first 2MB)
+    ; pd_lo[1]: 2MB huge page PA 0x200000 (identity, second 2MB)
+    ; Flags: PRESENT(0x01) | WRITABLE(0x02) | HUGE(0x80) = 0x83
+    mov ebx, dword (pd_lo - KERN_VMA)
+    mov dword [ebx],       0x00000083  ; PA=0x000000, PRESENT|WRITABLE|HUGE
+    mov dword [ebx + 4],   0x00000000  ; high 32 bits of address
+    mov dword [ebx + 8],   0x00200083  ; PA=0x200000, PRESENT|WRITABLE|HUGE
+    mov dword [ebx + 12],  0x00000000
+
+    ; pd_hi[0]: 2MB huge page PA 0x000000 (kernel higher-half, first 2MB)
+    ; pd_hi[1]: 2MB huge page PA 0x200000 (kernel higher-half, second 2MB)
+    mov ebx, dword (pd_hi - KERN_VMA)
+    mov dword [ebx],       0x00000083
+    mov dword [ebx + 4],   0x00000000
+    mov dword [ebx + 8],   0x00200083
+    mov dword [ebx + 12],  0x00000000
 
     ; ── Enable Physical Address Extension (required for long mode) ───────
     ; CR4.PAE = bit 5
     mov eax, cr4
-    or  eax, (1 << 5)
+    or  eax, (1 << 5)                ; PAE bit
     mov cr4, eax
 
-    ; ── Build minimal identity-mapping page table ────────────────────────
-    ; Layout: PML4 → PDPT → PD → 2MB huge page at physical address 0.
-    ; This maps the first 2MB (which contains our kernel at 0x100000)
-    ; so we can keep executing after enabling paging.
-    ; All three tables are in .bss (zeroed by bootloader); we only write
-    ; the entries we need and leave the rest as 0 (= not present).
-
-    ; PML4[0] → PDPT  (present=1, writable=1 → flags 0x3)
-    mov eax, pdpt_table
-    or  eax, 0x3
-    mov [pml4_table], eax
-
-    ; PDPT[0] → PD  (present=1, writable=1)
-    mov eax, pd_table
-    or  eax, 0x3
-    mov [pdpt_table], eax
-
-    ; PD[0] → 2MB huge page at physical 0  (present=1, writable=1, PS=1 → 0x83)
-    mov dword [pd_table], 0x83
-
-    ; Load PML4 as the page-table root
-    mov eax, pml4_table
+    ; ── Load CR3 with physical address of PML4 ──────────────────────────
+    mov eax, dword (pml4_table - KERN_VMA)
     mov cr3, eax
 
-    ; ── Set EFER.LME (Long Mode Enable) via MSR 0xC0000080 ───────────────
+    ; ── Enable long mode via EFER MSR ───────────────────────────────────
+    ; MSR 0xC0000080 = EFER; bit 8 = LME (Long Mode Enable)
     mov ecx, 0xC0000080
     rdmsr
-    or  eax, (1 << 8)           ; EFER.LME
+    or  eax, (1 << 8)               ; EFER.LME
     wrmsr
 
-    ; ── Enable paging (activates compatibility mode) ─────────────────────
+    ; ── Load GDT ────────────────────────────────────────────────────────
+    ; gdt64_ptr is in .text.boot (VMA=LMA=physical) — address is correct.
+    lgdt [gdt64_ptr]
+
+    ; ── Enable paging (also activates long mode) ────────────────────────
     ; Also set CR0.WP (write protect) so ring-0 respects read-only pages.
+    ; Setting PG with LME set transitions CPU to IA-32e (long) mode.
     mov eax, cr0
-    or  eax, (1 << 31) | (1 << 16)   ; CR0.PG | CR0.WP
+    or  eax, (1 << 31) | (1 << 16)  ; CR0.PG | CR0.WP
     mov cr0, eax
 
-    ; CPU is now in IA-32e compatibility submode.
-    ; A far jump to a 64-bit code segment selector activates true 64-bit mode.
+    ; ── Far jump: reload CS with 64-bit code descriptor ─────────────────
+    ; Selector 0x08 = GDT entry 1 (64-bit code), RPL=0.
+    ; long_mode_phys is in .text.boot so its address IS physical — no subtraction needed.
+    ; CPU enters 64-bit long mode after this jump.
+    jmp 0x08:long_mode_phys
 
-    ; ── Far jump: reload CS with 64-bit code descriptor ──────────────────
-    ; Selector 0x08 = GDT entry 1 (64-bit code), RPL=0
-    jmp 0x08:.long_mode_entry
 
-
-bits 64
-; .long_mode_entry — executes in true 64-bit long mode
+; long_mode_phys — executes in 64-bit mode at a physical address (still .text.boot).
 ;
-; Purpose: set up segment registers and stack, then call kernel_main.
-; Clobbers: AX, RSP (and anything kernel_main touches)
-.long_mode_entry:
-    ; ── Load 64-bit data segment into DS, ES, SS ─────────────────────────
-    ; Selector 0x10 = GDT entry 2 (64-bit data). FS and GS unused in Phase 1.
+; Purpose: set segment registers, then jump to the higher-half entry point.
+; We cannot use RIP-relative addressing to reach .text symbols yet —
+; we are executing at a physical address, not a higher-half address.
+; Instead we load the full 64-bit VMA into RAX and jump through it.
+;
+; Clobbers: AX, RAX
+; Calling convention: none
+bits 64
+global long_mode_phys
+long_mode_phys:
+    ; Set data segments. CS was already loaded by the far jump.
+    ; Selector 0x10 = GDT entry 2 (64-bit data), RPL=0.
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    mov ss, ax
-    xor ax, ax
     mov fs, ax
     mov gs, ax
+    mov ss, ax
 
-    ; ── Set up the boot stack ─────────────────────────────────────────────
-    ; boot_stack_top is the high end of a 16KB zero-initialised buffer in .bss.
-    ; 16-byte aligned as required by the System V AMD64 ABI.
+    ; Load the full 64-bit higher-half virtual address of long_mode_high.
+    ; long_mode_high is in section .text (VMA = KERN_VMA + offset).
+    ; The higher-half mapping is already active (loaded via CR3 above),
+    ; so jumping to this VMA is valid.
+    mov rax, long_mode_high
+    jmp rax                          ; cross the VMA gap!
+
+
+; ────────────────────────────────────────────────
+; .text — runs at higher-half VMA (0xFFFFFFFF80xxxxxx)
+; Contains: long_mode_high (permanent kernel entry)
+; ────────────────────────────────────────────────
+section .text
+bits 64
+
+extern kernel_main
+
+; long_mode_high — first code executing at the higher-half virtual address.
+;
+; Purpose: set up the boot stack and call kernel_main.
+; Entry state: all segment registers set, paging active, higher-half mapped.
+; Clobbers: RSP, RBP, and anything kernel_main touches.
+; Calling convention: sets up SysV AMD64 ABI for kernel_main call.
+global long_mode_high
+long_mode_high:
+    ; Set up the higher-half stack.
+    ; boot_stack_top is in .bss (higher-half VMA after linker split) — use as-is.
+    ; Stack must be 16-byte aligned before the call instruction (ABI requirement).
     mov rsp, boot_stack_top
 
-    ; ── Call kernel_main(uint32_t mb_magic, void *mb_info) ───────────────
-    ; RDI = mb_magic (set at _start, zero-extended from EAX)
-    ; RSI = mb_info  (set at _start, zero-extended from EBX; physical addr < 4GB)
-    ; Both are already in the correct registers from the moves at _start.
-    extern kernel_main
+    ; Clear the frame pointer to terminate stack unwinding at kernel entry.
+    xor rbp, rbp
+
+    ; RDI = mb_magic and RSI = mb_info were set in _start and survive the mode
+    ; transition. kernel_main(uint32_t mb_magic, void *mb_info) per SysV AMD64 ABI.
     call kernel_main
 
-    ; ── Hang if kernel_main returns (it must not) ─────────────────────────
-.hang:
+.halt:
     hlt
-    jmp .hang
+    jmp .halt
 
 
-; ─── BSS: page tables and boot stack ─────────────────────────────────────────
-; The bootloader zeros .bss before calling _start.
-; Page tables must be 4KB-aligned and zeroed (unused entries = not present).
+; ────────────────────────────────────────────────
+; .bss — zeroed at load time by GRUB.
+; Labels here have higher-half VMAs after the linker split.
+; Physical addresses: use (label - KERN_VMA) in .text.boot code only.
+; ────────────────────────────────────────────────
 section .bss
 align 4096
-pml4_table: resb 4096
-align 4096
-pdpt_table: resb 4096
-align 4096
-pd_table:   resb 4096
 
-align 16
-boot_stack:     resb KERNEL_STACK_SIZE
+global pml4_table
+pml4_table:  resb 4096
+
+global pdpt_lo
+pdpt_lo:     resb 4096
+
+global pdpt_hi
+pdpt_hi:     resb 4096
+
+global pd_lo
+pd_lo:       resb 4096
+
+global pd_hi
+pd_hi:       resb 4096
+
+; 16KB boot stack — 16-byte aligned as required by the SysV AMD64 ABI.
+boot_stack:  resb 16384
+
+global boot_stack_top
 boot_stack_top:
