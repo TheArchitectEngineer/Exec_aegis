@@ -108,7 +108,20 @@ isr_%1:
 %endmacro
 ```
 
-Exceptions with CPU-pushed error codes: 8, 10, 11, 12, 13, 14, 17, 21, 29, 30.
+Exceptions with CPU-pushed error codes (per Intel SDM Vol 3A Table 6-1):
+8, 10, 11, 12, 13, 14, 17, 21, 29, 30.
+
+The top of `isr.asm` **must** include an explicit comment block listing every
+vector with its macro (ISR_ERR or ISR_NOERR) before the macro invocations.
+One misclassified vector misaligns the interrupt frame and produces a fault
+inside the fault handler — a crash that is genuinely hard to diagnose:
+
+```nasm
+; Vector → macro mapping (Intel SDM Vol 3A Table 6-1)
+; ISR_NOERR: 0,1,2,3,4,5,6,7,9,15,16,18,19,20,28,31
+; ISR_ERR:   8,10,11,12,13,14,17,21,29,30
+; Reserved (install ISR_NOERR as placeholder): 22,23,24,25,26,27
+```
 
 `isr_common_stub` (bits 64):
 1. Push rax, rbx, rcx, rdx, rsi, rdi, rbp, r8–r15 (15 regs)
@@ -277,6 +290,11 @@ typedef struct aegis_task_t {
     struct aegis_task_t *next;        /* circular list */
 } aegis_task_t;
 
+/* Compile-time guard: ctx_switch.asm assumes rsp is at offset 0 of the TCB.
+ * If anyone adds a field before rsp, this catches it immediately. */
+_Static_assert(offsetof(aegis_task_t, rsp) == 0,
+    "rsp must be first field in aegis_task_t — ctx_switch depends on this");
+
 void  sched_init(void);               /* init run queue, no tasks yet */
 void  sched_spawn(void (*fn)(void));  /* alloc TCB + 16KB stack, add to queue */
 void  sched_start(void);             /* print [SCHED] OK, then sti — PIT takes over */
@@ -317,6 +335,10 @@ static void task_heartbeat(void) {
         uint64_t t = arch_get_ticks();   /* arch-boundary accessor, not g_ticks */
         if (t >= 500) {
             printk("[AEGIS] System halted.\n");
+            /* FIXME: arch_debug_exit called from within a scheduled task context.
+             * Stack state is indeterminate at this point. Acceptable for Phase 4
+             * because isa-debug-exit writes to an I/O port and QEMU exits immediately.
+             * Phase 5+ must implement a clean kernel shutdown path. */
             arch_debug_exit(0x01);
         }
         if (t - last >= 100) {
