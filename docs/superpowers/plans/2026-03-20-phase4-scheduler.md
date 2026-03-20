@@ -255,10 +255,6 @@ io_wait(void)
 void
 pic_init(void)
 {
-    /* Save existing masks */
-    uint8_t mask1 = inb(PIC1_DATA);
-    uint8_t mask2 = inb(PIC2_DATA);
-
     /* Start init sequence (cascade mode) */
     outb(PIC1_CMD,  ICW1_INIT); io_wait();
     outb(PIC2_CMD,  ICW1_INIT); io_wait();
@@ -274,10 +270,6 @@ pic_init(void)
     /* ICW4: 8086 mode */
     outb(PIC1_DATA, ICW4_8086); io_wait();
     outb(PIC2_DATA, ICW4_8086); io_wait();
-
-    /* Restore masks (all IRQs masked; drivers unmask their own) */
-    outb(PIC1_DATA, mask1);
-    outb(PIC2_DATA, mask2);
 
     /* Mask all IRQs — drivers call pic_unmask() when ready */
     outb(PIC1_DATA, 0xFF);
@@ -475,9 +467,10 @@ git commit -m "arch: add IDT setup and isr_dispatch"
 ; isr_common_stub saves all GPRs, calls isr_dispatch(cpu_state_t*), restores.
 ;
 ; Vector → macro mapping (Intel SDM Vol 3A Table 6-1):
-;   ISR_NOERR: 0,1,2,3,4,5,6,7,9,15,16,18,19,20,22,23,24,25,26,27,28,31
-;   ISR_ERR:   8,10,11,12,13,14,17,21,29,30
-;   IRQ stubs (no error code): 0x20-0x2F
+; ISR_NOERR: 0,1,2,3,4,5,6,7,9,15,16,18,19,20,28,31
+; ISR_ERR:   8,10,11,12,13,14,17,21,29,30
+; Reserved (install ISR_NOERR as placeholder): 22,23,24,25,26,27
+; IRQ stubs (no error code): 0x20-0x2F
 
 bits 64
 section .text
@@ -1174,7 +1167,16 @@ sched_spawn(void (*fn)(void))
     }
     aegis_task_t *task = (aegis_task_t *)(uintptr_t)tcb_phys;
 
-    /* Allocate stack (STACK_PAGES contiguous pages) */
+    /* Allocate stack (STACK_PAGES individual pages).
+     *
+     * CONTIGUITY ASSUMPTION: The Phase 3 PMM is a bitmap allocator over the
+     * physical memory map. Early boot memory is a single contiguous range and
+     * the bitmap allocates sequentially, so successive pmm_alloc_page() calls
+     * return physically adjacent frames. This allows treating the pages as a
+     * single STACK_SIZE region. If the PMM ever becomes non-sequential (e.g.
+     * after buddy allocator introduction in Phase 5), this must be replaced
+     * with a multi-page contiguous allocation.
+     */
     uint8_t *stack = (void *)0;
     for (uint32_t i = 0; i < STACK_PAGES; i++) {
         uint64_t p = pmm_alloc_page();
