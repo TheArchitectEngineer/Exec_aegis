@@ -294,7 +294,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | printk | ✅ Done | serial-first, VGA-conditional |
 | Test harness (make test) | ✅ Done | GRUB ISO + ANSI-strip + diff; exits 0 |
 | Physical memory manager | ✅ Done | Bitmap allocator; single-page (4KB) only; multi-page deferred to buddy allocator |
-| Virtual memory / paging | ⬜ Not started | |
+| Virtual memory / paging | 🔄 In progress | Higher-half relocation to 0xFFFFFFFF80000000; identity map kept in Phase 3 |
 | Scheduler (single-core) | ⬜ Not started | |
 | Syscall dispatch (Rust) | ⬜ Not started | |
 | Capability system (Rust) | ✅ Done | Stub only: cap_init() prints OK line |
@@ -326,4 +326,14 @@ Run through this at the start of every session before touching code:
 
 ---
 
-*Last updated: 2026-03-19 — Phase 2 complete, make test GREEN. PMM single-page only; multi-page allocation deferred to buddy allocator.*
+### Phase 3 forward-looking constraints
+
+**Identity map teardown and `zero_page()` must be resolved together in Phase 4.**
+`vmm.c`'s `zero_page()` works by casting a physical address to a pointer and
+writing through it — valid only while the identity window `[0..2MB)` is active.
+Phase 4 must provide a **mapped-window allocator** (a fixed virtual window that
+always maps the page being initialized) *before* tearing down the identity map.
+Tearing down identity first and fixing zero_page second causes a fault you cannot
+debug. The order is non-negotiable: mapped-window allocator → tear down identity.
+
+*Last updated: 2026-03-19 — Phase 3 VMM spec approved; plan not yet written.*
