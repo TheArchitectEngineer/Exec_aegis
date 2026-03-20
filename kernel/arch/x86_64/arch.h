@@ -151,4 +151,28 @@ char kbd_read(void);
 /* Non-blocking read. Returns 1 if a char was available and written to *out. */
 int kbd_poll(char *out);
 
+/* -------------------------------------------------------------------------
+ * Phase 5: Ring-3 support
+ * ------------------------------------------------------------------------- */
+
+/* Build a 7-entry runtime GDT (null, kernel code/data, user data/code, TSS),
+ * install with lgdt, reload segment registers, load TSS with ltr.
+ * Prints [GDT] OK. */
+void arch_gdt_init(void);
+
+/* Set TSS.iomap_base = 104 (disables I/O permission bitmap).
+ * Prints [TSS] OK. */
+void arch_tss_init(void);
+
+/* Update both TSS.RSP0 and g_kernel_rsp to rsp0.
+ * Called by scheduler before every ctx_switch so:
+ *   — CPU loads correct kernel stack top on ring-3 interrupts (via TSS.RSP0)
+ *   — syscall_entry.asm loads correct kernel stack (via g_kernel_rsp)
+ * Both values must always be identical. */
+void arch_set_kernel_stack(uint64_t rsp0);
+
+/* Program IA32_EFER (SCE), IA32_STAR, IA32_LSTAR, IA32_SFMASK.
+ * Prints [SYSCALL] OK. */
+void arch_syscall_init(void);
+
 #endif
