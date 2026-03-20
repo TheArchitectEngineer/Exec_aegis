@@ -11,7 +11,7 @@ static aegis_idt_gate_t s_idt[48];
 extern void *isr_stubs[48];
 
 static void
-idt_set_gate(uint8_t vec, void *handler)
+idt_gate_set(uint8_t vec, void *handler)
 {
     uint64_t addr = (uint64_t)handler;
     s_idt[vec].offset_lo  = addr & 0xFFFF;
@@ -35,7 +35,7 @@ idt_init(void)
     };
 
     for (int i = 0; i < 48; i++)
-        idt_set_gate((uint8_t)i, isr_stubs[i]);
+        idt_gate_set((uint8_t)i, isr_stubs[i]);
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
     printk("[IDT] OK: 48 vectors installed\n");
