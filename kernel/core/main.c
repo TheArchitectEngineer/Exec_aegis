@@ -37,16 +37,25 @@ task_heartbeat(void)
 {
     /* Enable interrupts — see task_kbd comment. */
     __asm__ volatile ("sti");
-    for (;;) {
-        if (arch_get_ticks() >= 500) {
-            printk("[AEGIS] System halted.\n");
-            /* FIXME: arch_debug_exit called from within a scheduled task.
-             * Stack state is indeterminate. Acceptable for Phase 4 because
-             * isa-debug-exit writes to an I/O port and QEMU exits immediately.
-             * Phase 5+ must implement a clean kernel shutdown path. */
-            arch_debug_exit(0x01);
-        }
-    }
+
+    /* Spin until 500 ticks have elapsed. The scheduler preempts us on each
+     * timer tick; we simply loop until the condition is met. */
+    while (arch_get_ticks() < 500)
+        ;
+
+    printk("[AEGIS] System halted.\n");
+
+    /* Request shutdown via pit_handler (ISR context, IF=0).
+     * Calling arch_debug_exit directly from task context races with
+     * QEMU 10's async isa-debug-exit: the CPU keeps running for several
+     * ticks after the port write, allowing this task to re-enter printk
+     * and emit a partial second line. Deferring to the ISR eliminates
+     * the race — pit_handler runs with IF=0 and exits immediately. */
+    arch_request_shutdown();
+
+    /* Spin until the next timer tick fires and pit_handler exits QEMU. */
+    for (;;)
+        __asm__ volatile ("hlt");
 }
 
 void

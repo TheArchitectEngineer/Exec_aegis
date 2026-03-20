@@ -132,6 +132,12 @@ void pit_init(void);
  * Use this instead of accessing the pit.c-internal counter directly. */
 uint64_t arch_get_ticks(void);
 
+/* Request a clean shutdown. Sets a flag checked by pit_handler on the next
+ * timer tick; actual arch_debug_exit is deferred to ISR context (IF=0) to
+ * prevent the QEMU async isa-debug-exit race where task code re-runs after
+ * the port write. */
+void arch_request_shutdown(void);
+
 /* -------------------------------------------------------------------------
  * Phase 4: Keyboard
  * ------------------------------------------------------------------------- */
