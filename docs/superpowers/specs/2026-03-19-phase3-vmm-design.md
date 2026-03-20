@@ -59,8 +59,8 @@ a **virtual address** (higher-half). The gap is `KERN_VMA = 0xFFFFFFFF80000000`.
 |------|--------|----------------|
 | `tools/linker.ld` | Modify | VMA/LMA split; `.multiboot` + `.text.boot` at physical; rest at `KERN_VMA + phys_offset` |
 | `kernel/arch/x86_64/boot.asm` | Modify | Add `pdpt_hi` + `pd_hi`; build higher-half mapping; physical far-jump; absolute jump to higher-half before `call kernel_main` |
-| `kernel/arch/x86_64/arch.h` | Modify | Add `ARCH_KERNEL_VIRT_BASE`; declare `arch_vmm_load_pml4()` |
-| `kernel/arch/x86_64/arch_vmm.c` | Create | `arch_vmm_load_pml4(uint64_t phys)` — only place `cr3` is written |
+| `kernel/arch/x86_64/arch.h` | Modify | Add `ARCH_KERNEL_VIRT_BASE`; declare `arch_vmm_load_pml4()` and `arch_vmm_invlpg()` |
+| `kernel/arch/x86_64/arch_vmm.c` | Create | `arch_vmm_load_pml4()` and `arch_vmm_invlpg()` — only place `cr3`/`invlpg` are used |
 | `kernel/mm/vmm.h` | Create | Public VMM interface |
 | `kernel/mm/vmm.c` | Create | Page table allocator (arch-agnostic); calls `arch_vmm_load_pml4` |
 | `kernel/mm/pmm.c` | Modify | Fix `_kernel_end` physical computation (now a virtual address) |
@@ -114,11 +114,23 @@ physical kernel end as `_kernel_end - ARCH_KERNEL_VIRT_BASE`.
 
 ## Section 2: boot.asm Changes
 
-### 2a. Physical address macro
+### 2a. Section layout and physical address macro
 
-All `.bss` labels (page tables, stack) now have higher-half virtual addresses.
-In 32-bit mode we need their physical addresses. NASM evaluates constant
-expressions at assemble time:
+The existing boot code has two sections: `section .multiboot` and `section .data`
+(for the GDT) and `section .text` (for `_start`) and `section .bss`.
+
+After the VMA/LMA split, `section .data` and `section .text` get higher-half VMAs.
+This breaks the GDT: `lgdt [gdt64_ptr]` runs in 32-bit mode before paging, so
+`gdt64_ptr` must be at its physical address, and the `dd gdt64` pointer inside it
+must also be physical. Both are wrong if they live in `.data` post-split.
+
+**Fix:** move `gdt64:` and `gdt64_ptr:` from `section .data` into `section .text.boot`.
+The GDT is tiny (24 bytes) and boot-only; living in the trampoline code section is fine.
+All code and data that runs before the higher-half jump must be in `section .text.boot`.
+
+Similarly, all `.bss` labels (page tables, stack) get higher-half VMAs. In 32-bit
+mode their physical addresses are needed. NASM evaluates constant expressions at
+assemble time — the result fits in 32 bits:
 
 ```nasm
 KERN_VMA equ 0xFFFFFFFF80000000
@@ -158,24 +170,38 @@ PDPT index 510: bits 38:30 of `0xFFFFFFFF80000000` = `0b111111110` = 510.
 
 ### 2c. Jump sequence
 
-The 32-bit code up through `CR0.PG` enable is unchanged in logic; it uses
-`(label - KERN_VMA)` wherever a physical address is needed.
+The 32-bit code up through `CR0.PG` enable stays in `section .text.boot` and
+uses `(label - KERN_VMA)` wherever a physical address is needed.
 
-After paging is enabled:
+After paging is enabled, the far jump must use a **physical** 32-bit offset (the
+CPU is still in 32-bit protected mode at this point, so the far-jump offset field
+is 32-bit). `long_mode_phys` is in `.text.boot` so its VMA equals its LMA.
+
+Once in 64-bit mode we do an absolute jump to the higher-half entry point, which
+is in `section .text`. Because this label is referenced across sections it must be
+a **global** (no leading dot), not a local label:
 
 ```nasm
-    ; Far jump to 64-bit code selector — offset is 32-bit, must be physical.
-    ; .long_mode_phys is in .text.boot (VMA = LMA), so its address IS physical.
-    jmp 0x08:.long_mode_phys
+section .text.boot
+bits 32
+
+; ... (32-bit setup, page table wiring, CR4/EFER/CR0) ...
+
+    ; Far jump: activates 64-bit mode, lands at physical address (identity-mapped).
+    jmp 0x08:long_mode_phys
 
 bits 64
-.long_mode_phys:
-    ; Executing at physical address, identity-mapped. Safe.
-    ; Load higher-half virtual address and jump.
-    mov rax, .long_mode_high
+long_mode_phys:
+    ; Executing at physical address (~0x100000 range), identity-mapped. Safe.
+    ; Jump to higher-half virtual address (label is in section .text).
+    mov rax, long_mode_high
     jmp rax
 
-.long_mode_high:
+
+section .text
+bits 64
+global long_mode_high
+long_mode_high:
     ; Executing at 0xFFFFFFFF80xxxxxx — higher half is live.
     mov ax, 0x10
     mov ds, ax
@@ -185,15 +211,18 @@ bits 64
     mov fs, ax
     mov gs, ax
     mov rsp, boot_stack_top   ; higher-half virtual address (correct)
+    extern kernel_main
     call kernel_main           ; higher-half virtual address (correct)
 .hang:
     hlt
     jmp .hang
 ```
 
-`.long_mode_phys` must be in `.text.boot` so its VMA equals its LMA (physical).
-The segment register loads and stack setup move to `.long_mode_high` since they
-must execute at the correct virtual address.
+Key constraints:
+- `long_mode_phys` is in `section .text.boot` (VMA = LMA = physical) — far-jump offset is valid in 32-bit protected mode
+- `long_mode_high` is in `section .text` (VMA = higher-half) — global, not a local label (`.long_mode_high` would be scoped to the current section only and unreachable from `.text.boot`)
+- Segment register loads and stack setup happen in `long_mode_high` (higher-half), not `long_mode_phys`
+- The existing `extern kernel_main` declaration moves from `.text.boot` to `section .text` (near the call site)
 
 ---
 
@@ -208,6 +237,11 @@ must execute at the correct virtual address.
  * Implemented in arch_vmm.c — the only place in the codebase that writes CR3.
  * Flushes the TLB entirely (CR3 reload). */
 void arch_vmm_load_pml4(uint64_t phys);
+
+/* Invalidate the TLB entry for a single virtual address.
+ * Implemented in arch_vmm.c — the only place in the codebase that uses invlpg.
+ * Must be called after clearing a PTE in vmm_unmap_page(). */
+void arch_vmm_invlpg(uint64_t virt);
 ```
 
 ---
@@ -222,10 +256,15 @@ void arch_vmm_load_pml4(uint64_t phys)
 {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(phys) : "memory");
 }
+
+void arch_vmm_invlpg(uint64_t virt)
+{
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+}
 ```
 
-Single function. All `cr3` writes in the kernel go through this. No other file
-touches `cr3` directly.
+Two functions. All `cr3` writes and `invlpg` instructions in the kernel go through
+this file. No other file touches `cr3` or issues `invlpg` directly.
 
 ---
 
@@ -251,7 +290,7 @@ void vmm_init(void);
 
 /* Map one 4KB page: virt → phys with given flags.
  * Allocates intermediate page tables from PMM as needed.
- * Panics if virt is already mapped or phys is not page-aligned. */
+ * Panics if virt or phys is not PAGE_SIZE-aligned, or if virt is already mapped. */
 void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
 
 /* Unmap one 4KB page. Panics if not mapped.
@@ -284,22 +323,46 @@ void vmm_unmap_page(uint64_t virt);
 #define PTE_ADDR_MASK 0x000FFFFFFFFFF000UL
 ```
 
+### Page zeroing
+
+`pmm_alloc_page()` returns unzeroed pages. Unzeroed page table pages contain
+garbage that the CPU may interpret as present PTEs — a security hazard. Every
+page allocated for a page table structure must be zeroed before any entry is written.
+
+Use a static helper (internal to `vmm.c`):
+
+```c
+static void zero_page(uint64_t phys)
+{
+    /* Safe before identity mapping is torn down: physical == virtual for [0..2MB). */
+    volatile uint64_t *p = (volatile uint64_t *)(uintptr_t)phys;
+    for (int i = 0; i < 512; i++)
+        p[i] = 0;
+}
+```
+
+This is valid in Phase 3 because the identity window keeps `phys == virt` for all
+PMM-allocated pages (which come from physical RAM above 1MB, well within the 2MB
+identity window). Phase 4, which tears down the identity map, must revisit this.
+
 ### vmm_init() sequence
 
 ```
-1. pml4_phys = pmm_alloc_page(); zero the page.
+1. pml4_phys = pmm_alloc_page(); zero_page(pml4_phys).
 
 2. Map identity window [0 .. 2MB):
-   - alloc pdpt, pd
+   - pdpt_phys = pmm_alloc_page(); zero_page(pdpt_phys)
+   - pd_phys   = pmm_alloc_page(); zero_page(pd_phys)
    - pml4[0]    = pdpt_phys | PRESENT | WRITABLE
    - pdpt[0]    = pd_phys   | PRESENT | WRITABLE
    - pd[0]      = 0x0       | PRESENT | WRITABLE | PS   (2MB huge page)
 
 3. Map kernel window [KERN_VMA .. KERN_VMA+2MB):
-   - alloc pdpt_hi, pd_hi
-   - pml4[511]  = pdpt_hi_phys | PRESENT | WRITABLE
-   - pdpt_hi[510] = pd_hi_phys | PRESENT | WRITABLE
-   - pd_hi[0]   = 0x0          | PRESENT | WRITABLE | PS
+   - pdpt_hi_phys = pmm_alloc_page(); zero_page(pdpt_hi_phys)
+   - pd_hi_phys   = pmm_alloc_page(); zero_page(pd_hi_phys)
+   - pml4[511]    = pdpt_hi_phys | PRESENT | WRITABLE
+   - pdpt_hi[510] = pd_hi_phys   | PRESENT | WRITABLE
+   - pd_hi[0]     = 0x0          | PRESENT | WRITABLE | PS
 
 4. arch_vmm_load_pml4(pml4_phys);
 
@@ -313,14 +376,23 @@ the kernel fits within the first 2MB of physical space, so one PD entry suffices
 ### vmm_map_page() walk
 
 Walk PML4 → PDPT → PD → PT. At each level: if entry not present, allocate a
-new page from PMM (zeroed), install it. At PT level: if entry already present,
-panic (double-map). Set the PT entry to `(phys & PTE_ADDR_MASK) | flags | PRESENT`.
+new page from PMM, call `zero_page()`, install it. At PT level: if entry already
+present, print `[VMM] FAIL: double-map at <addr>` then `for (;;) {}`. Otherwise
+set the PT entry to `(phys & PTE_ADDR_MASK) | flags | PRESENT`.
 
 ### vmm_unmap_page()
 
-Walk to PT. If entry not present, panic. Clear the entry. Issue `invlpg` via
-inline asm (only `cr3`/`invlpg` operations live in arch_vmm.c — add
-`arch_vmm_invlpg(uint64_t virt)` to arch.h and arch_vmm.c).
+Walk to PT. If entry not present, print `[VMM] FAIL: unmap of unmapped addr` then
+`for (;;) {}`. Clear the entry. Call `arch_vmm_invlpg(virt)` to flush the TLB
+entry for this address.
+
+**Panic pattern** (used by vmm_map_page, vmm_unmap_page, and vmm_init on OOM):
+```c
+printk("[VMM] FAIL: <reason>\n");
+for (;;) {}
+```
+This is consistent with `pmm.c`'s error handling and ensures the test harness
+captures the failure message before the halt.
 
 ---
 
@@ -376,6 +448,13 @@ arch_debug_exit(0x01);
 [CAP] OK: capability subsystem reserved
 [AEGIS] System halted.
 ```
+
+**Note on the PMM line:** The numbers `127MB` and `2 regions` match the Phase 2
+baseline from QEMU `-m 128M` with SeaBIOS. These values come from the multiboot2
+memory map and are not affected by the VMM changes. However, if the first GREEN
+run shows different numbers (e.g. because a GRUB or SeaBIOS update changed the
+reported map), update `boot.txt` to match the actual output and document the
+deviation. Do not hard-code numbers you haven't verified from a live boot.
 
 ### TDD order
 
