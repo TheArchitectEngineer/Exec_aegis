@@ -4,6 +4,7 @@
 #include "pmm.h"
 #include "vmm.h"
 #include "sched.h"
+#include "../proc/proc.h"
 #include <stdint.h>
 
 /*
@@ -67,14 +68,19 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_mm_init(mb_info);  /* parse multiboot2 memory map                   */
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */
+    arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
     cap_init();             /* capability stub — [CAP] OK                    */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */
     pic_init();             /* remap 8259A — [PIC] OK                        */
     pit_init();             /* 100 Hz timer — [PIT] OK                       */
     kbd_init();             /* PS/2 keyboard — [KBD] OK                      */
+    arch_gdt_init();        /* ring-3 GDT + TSS descriptors — [GDT] OK       */
+    arch_tss_init();        /* TSS RSP0 for ring-3 → ring-0 transitions      */
+    arch_syscall_init();    /* enable SYSCALL/SYSRET MSRs — [SYSCALL] OK     */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_kbd);
     sched_spawn(task_heartbeat);
+    proc_spawn_init();      /* spawn init user process in ring 3             */
     sched_start();          /* prints [SCHED] OK, switches into first task   */
     /* UNREACHABLE — sched_start() never returns */
     __builtin_unreachable();

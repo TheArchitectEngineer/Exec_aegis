@@ -3,7 +3,45 @@
 ; Each stub pushes a uniform stack frame (fake error code for exceptions
 ; that don't push one), then jumps to isr_common_stub.
 ;
-; isr_common_stub saves all GPRs, calls isr_dispatch(cpu_state_t*), restores.
+; isr_common_stub saves all GPRs, switches to the master PML4 (if needed),
+; calls isr_dispatch(cpu_state_t*), restores CR3 and registers, then iretq.
+;
+; CR3 save/restore (Phase 5 — user-process support):
+;   When an interrupt fires while the user PML4 is loaded (ring-3 context),
+;   all kernel code (isr_dispatch, scheduler, printk) must run with the
+;   master PML4 so it can safely dereference identity-mapped physical pointers
+;   (TCBs, kernel stacks, PMM bitmap).
+;
+;   We push the current CR3 onto the kernel stack (below the cpu_state_t) and
+;   restore it before iretq.  Saving CR3 on the stack (not in a global) is
+;   correct across context switches: if sched_tick abandons the current ISR
+;   frame on the old task's stack and switches to a new task, the saved CR3
+;   stays on the old stack and is restored when we context-switch back to it.
+;
+; Stack layout after all pushes (low address / RSP to high):
+;   [RSP+0]   saved CR3   (pushed last by isr_common_stub)
+;   [RSP+8]   r15         ← cpu_state_t begins here (rdi = rsp+8)
+;   [RSP+16]  r14
+;   [RSP+24]  r13
+;   [RSP+32]  r12
+;   [RSP+40]  r11
+;   [RSP+48]  r10
+;   [RSP+56]  r9
+;   [RSP+64]  r8
+;   [RSP+72]  rbp
+;   [RSP+80]  rdi
+;   [RSP+88]  rsi
+;   [RSP+96]  rdx
+;   [RSP+104] rcx
+;   [RSP+112] rbx
+;   [RSP+120] rax
+;   [RSP+128] vector
+;   [RSP+136] error_code
+;   [RSP+144] rip
+;   [RSP+152] cs
+;   [RSP+160] rflags
+;   [RSP+168] rsp  (user; only present on ring-3→ring-0 transition)
+;   [RSP+176] ss   (user; only present on ring-3→ring-0 transition)
 ;
 ; Vector → macro mapping (Intel SDM Vol 3A Table 6-1):
 ; ISR_NOERR: 0,1,2,3,4,5,6,7,9,15,16,18,19,20,28,31
@@ -15,6 +53,7 @@ bits 64
 section .text
 
 extern isr_dispatch
+extern g_master_pml4
 
 %macro ISR_NOERR 1
 global isr_%1
@@ -83,26 +122,13 @@ ISR_NOERR 0x2D ; IRQ13 — FPU
 ISR_NOERR 0x2E ; IRQ14 — primary ATA
 ISR_NOERR 0x2F ; IRQ15 — secondary ATA / spurious slave
 
-; Common stub — saves all GPRs, calls isr_dispatch, restores, iretq
+; isr_common_stub — save GPRs, switch to master PML4, dispatch, restore, iretq.
 ;
-; On entry the stack holds (low address to high):
-;   [RSP+0]  vector        (pushed by stub)
-;   [RSP+8]  error_code    (pushed by CPU or fake 0 from stub)
-;   [RSP+16] rip           (CPU-pushed interrupt frame)
-;   [RSP+24] cs
-;   [RSP+32] rflags
-;   [RSP+40] rsp
-;   [RSP+48] ss
-;
-; After GPR pushes RSP points to the cpu_state_t.r15 field.
-; Field layout (low to high) matches push order exactly:
-;   r15, r14, r13, r12, r11, r10, r9, r8,
-;   rbp, rdi, rsi, rdx, rcx, rbx, rax,
-;   vector, error_code, rip, cs, rflags, rsp, ss
-;
-; Clobbers: all registers (saved and restored here).
-; Calling convention: SystemV AMD64 ABI — rdi = first argument.
+; Calling convention: SystemV AMD64 ABI — rdi = first argument (cpu_state_t *).
+; The cpu_state_t pointer is rsp+8 after the saved-CR3 slot is pushed.
 isr_common_stub:
+    ; Save all GPRs (push order: rax first → r15 last at lowest address).
+    ; cpu_state_t field order (low→high): r15,r14,...,rax,vector,error,rip,cs,rf,rsp,ss.
     push rax
     push rbx
     push rcx
@@ -119,11 +145,37 @@ isr_common_stub:
     push r14
     push r15
 
-    ; RSP now points to cpu_state_t (r15 is the first/lowest field).
-    ; Pass pointer to the struct as first argument per SystemV AMD64 ABI.
-    mov rdi, rsp
+    ; Save current CR3 on the stack (below cpu_state_t, at [RSP]).
+    ; Saving it on the stack rather than a global ensures correctness across
+    ; context switches: the saved value stays with this task's stack frame.
+    mov  rax, cr3
+    push rax                        ; [RSP] = saved CR3
+
+    ; Switch to master PML4 so isr_dispatch and all downstream code can
+    ; dereference identity-mapped physical pointers (TCBs, stacks).
+    ; Skip if g_master_pml4 is 0 (early boot before vmm_init) or if CR3
+    ; already equals master PML4 (interrupt fired in kernel context).
+    mov  rbx, [rel g_master_pml4]
+    test rbx, rbx
+    jz   .no_switch
+    cmp  rax, rbx
+    je   .no_switch
+    mov  cr3, rbx
+.no_switch:
+
+    ; Pass cpu_state_t* as first argument.  cpu_state_t starts at RSP+8
+    ; (one qword above the saved-CR3 slot).
+    lea  rdi, [rsp + 8]
     call isr_dispatch
 
+    ; Restore the original CR3 (from the stack slot at [RSP]).
+    pop  rax                        ; rax = saved CR3
+    test rax, rax
+    jz   .no_restore
+    mov  cr3, rax
+.no_restore:
+
+    ; Restore GPRs in reverse push order.
     pop r15
     pop r14
     pop r13
