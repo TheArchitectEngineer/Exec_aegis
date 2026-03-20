@@ -15,11 +15,20 @@ ACTUAL=/tmp/aegis_serial.txt
 #   (isa-debug-exit: exit_code = (value << 1) | 1 = 3).
 #   timeout 10s prevents make test from hanging if the kernel stalls.
 #   || true: QEMU exit code 3 triggers set -e; we ignore it here.
+#
+# Display flags:
+#   -display none: no window (headless), but VGA device is still present.
+#   -vga std: give GRUB a VGA console so grub.cfg "terminal_output console"
+#     redirects GRUB's output to VGA (not serial). Without a VGA device,
+#     GRUB falls back to serial, contaminating COM1 with ANSI sequences.
+#   -nodefaults: suppress all other default devices.
+#   -serial stdio: capture COM1 (kernel serial output) on stdout.
 timeout 10s qemu-system-x86_64 \
     -machine pc \
     -cdrom "$ISO" \
     -boot order=d \
-    -nographic \
+    -display none \
+    -vga std \
     -nodefaults \
     -serial stdio \
     -no-reboot \
