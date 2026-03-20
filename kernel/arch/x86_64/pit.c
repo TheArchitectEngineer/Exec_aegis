@@ -1,0 +1,50 @@
+#include "pit.h"
+#include "pic.h"
+#include "arch.h"
+#include "printk.h"
+
+#define PIT_CHANNEL0 0x40
+#define PIT_CMD      0x43
+/* Channel 0, lobyte/hibyte, mode 3 (square wave) */
+#define PIT_MODE     0x36
+/* 1193182 Hz / 100 = 11931.82 → round to 11932 */
+#define PIT_DIVISOR  11932
+
+/* File-static: never accessed outside pit.c.
+ * kernel/core/ uses arch_get_ticks() declared in arch.h. */
+static volatile uint64_t s_ticks = 0;
+
+/* Forward declaration: sched_tick is implemented in kernel/sched/sched.c.
+ * We use a forward decl here to avoid a circular include dependency.
+ * -Ikernel/sched is in CFLAGS so we could include sched.h, but the
+ * forward decl is cleaner for a single-function dependency. */
+void sched_tick(void);
+
+void
+pit_init(void)
+{
+    /* Program PIT channel 0 */
+    outb(PIT_CMD, PIT_MODE);
+    outb(PIT_CHANNEL0, PIT_DIVISOR & 0xFF);        /* low byte  */
+    outb(PIT_CHANNEL0, (PIT_DIVISOR >> 8) & 0xFF); /* high byte */
+
+    /* Unmask IRQ0 so the PIT starts firing */
+    pic_unmask(0);
+
+    printk("[PIT] OK: timer at 100 Hz\n");
+}
+
+void
+pit_handler(void)
+{
+    s_ticks++;
+    sched_tick();
+}
+
+/* arch_get_ticks — arch-boundary accessor for the tick counter.
+ * Declared in arch.h so kernel/core/ can call it without including pit.h. */
+uint64_t
+arch_get_ticks(void)
+{
+    return s_ticks;
+}
