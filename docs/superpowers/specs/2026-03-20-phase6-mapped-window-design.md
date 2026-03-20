@@ -52,33 +52,50 @@ by `PT_kernel`), writing to it never requires a page-table walk.
 ### Virtual Address Assignment
 
 ```
-VMM_WINDOW_VA = ARCH_KERNEL_VIRT_BASE + 0x200000   // 0xFFFFFFFF80200000
+VMM_WINDOW_VA = ARCH_KERNEL_VIRT_BASE + 0x600000   // 0xFFFFFFFF80600000
 ```
 
-This address falls in `PD_kernel` entry 1 — currently NULL. A new BSS array
-`s_window_pt[512]` serves as the PT page for this range. Its physical address
-is computed at runtime from its link-time VMA:
+`vmm_init()` builds a `pd_hi` page-table page with:
+- `pd_hi[0]` → 2 MB huge page (PA `0x000000–0x1FFFFF`, kernel image + BSS)
+- `pd_hi[1]` → 2 MB huge page (PA `0x200000–0x3FFFFF`, kernel image continued)
+- `pd_hi[2]` → allocated at runtime by `vmm_map_page(KSTACK_VA, ...)` (KSTACK_VA = `0xFFFFFFFF80400000`)
+- `pd_hi[3]` → **currently NULL** — this is where the window PT is installed
+
+`VMM_WINDOW_VA` is `0xFFFFFFFF80600000`, which is `pd_hi[3]`'s 2 MB range.
+A new BSS array `s_window_pt[512]` serves as the PT page for this range.
+Its physical address is computed at runtime from its link-time VMA:
 
 ```c
 uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
                     - ARCH_KERNEL_VIRT_BASE + ARCH_KERNEL_PHYS_BASE;
 ```
 
+This formula is valid because `s_window_pt` is in BSS, which the linker script
+places within the kernel image segment loaded at `ARCH_KERNEL_PHYS_BASE`.
+
 ### Bootstrap Sequence (inside vmm_init)
 
 `vmm_init()` has a legitimate bootstrap exception: it may still use
 `phys_to_table()` and `zero_page()` internally while setting up the initial
-5-table page structure, because the identity map is guaranteed active at that
-point. This is the **last** permitted use of those helpers.
+page structure, because the identity map is guaranteed active at that point.
+This is the **last** permitted use of those helpers.
 
-At the end of `vmm_init()`, before printing its OK lines:
+`vmm_init()` holds a local pointer `pd_hi = phys_to_table(pd_hi_phys)` for the
+duration of the function. Before calling `arch_vmm_load_pml4()`, this pointer
+is still valid (identity map active). The window is installed using that local:
 
 ```c
-s_pd_kernel[1] = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
-s_window_pte   = &s_window_pt[0];
+/* Still inside vmm_init(), pd_hi local pointer in scope */
+uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
+                    - ARCH_KERNEL_VIRT_BASE + ARCH_KERNEL_PHYS_BASE;
+pd_hi[3]     = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+s_window_pte = &s_window_pt[0];
 ```
 
-After `vmm_init()` returns, all VMM operations use the window.
+`s_window_pt` is a static BSS array in the kernel image, mapped permanently by
+`pd_hi[0]`/`pd_hi[1]` (huge pages). So `&s_window_pt[0]` is a valid higher-half
+pointer both before and after the CR3 switch. After `vmm_init()` returns, all
+VMM operations use the window.
 
 ### Non-Reentrancy
 
@@ -94,7 +111,7 @@ before any re-entry is possible).
 ### New Static Data in vmm.c
 
 ```c
-#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x200000UL)
+#define VMM_WINDOW_VA (ARCH_KERNEL_VIRT_BASE + 0x600000UL)
 
 static uint64_t           s_window_pt[512];   /* BSS — PT for window range      */
 static volatile uint64_t *s_window_pte;       /* → s_window_pt[0], set at init  */
