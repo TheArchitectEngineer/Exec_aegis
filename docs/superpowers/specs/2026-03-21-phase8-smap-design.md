@@ -32,9 +32,12 @@ older CPUs rather than panicking — the bounds check remains effective either w
 
 **Why `stac`/`clac` are required:** enabling SMAP without them causes an
 immediate #PF on the first `s[i]` dereference in `sys_write`, since `s` points
-into a user-mode page. The window between `stac` and `clac` is safe because
-`SFMASK` keeps `IF=0` during syscall dispatch — no interrupt can fire inside
-that window and leave AC set.
+into a user-mode page. The `stac`/`clac` window is safe because `SFMASK` keeps
+`IF=0` during syscall dispatch — no interrupt can fire with AC set. The window
+must be as narrow as possible: bracket only the single user-memory load, not
+the surrounding `printk` call. This is both a correctness requirement (limits
+the AC window) and a security practice (never call code that may dereference
+user pointers while AC is already set).
 
 ---
 
@@ -50,12 +53,13 @@ static int
 cpuid_smap_supported(void)
 {
     uint32_t ebx;
-    /* CPUID leaf 7, subleaf 0, EBX bit 20 = SMAP */
+    /* CPUID leaf 7, subleaf 0, EBX bit 20 = SMAP.
+     * cpuid clobbers EAX, EBX, ECX, EDX; declare all four. */
     __asm__ volatile (
         "cpuid"
         : "=b"(ebx)
         : "a"(7), "c"(0)
-        : "edx"
+        : "eax", "ecx", "edx"
     );
     return (ebx >> 20) & 1;
 }
@@ -67,7 +71,7 @@ arch_smap_init(void)
         printk("[SMAP] WARN: not supported by CPU\n");
         return;
     }
-    /* Set CR4.SMAP (bit 21) */
+    /* Set CR4.SMAP (bit 21 = 0x200000) */
     __asm__ volatile (
         "mov %%cr4, %%rax\n"
         "or $0x200000, %%rax\n"
@@ -80,38 +84,44 @@ arch_smap_init(void)
 
 ### Additions to `kernel/arch/x86_64/arch.h`
 
-Declaration:
+Declaration (add after the SYSCALL section):
 ```c
 /* arch_smap_init — detect SMAP via CPUID and enable CR4.SMAP if supported.
  * Prints [SMAP] OK or [SMAP] WARN. Must be called after arch_syscall_init(). */
 void arch_smap_init(void);
 ```
 
-Static inline macros (placed near the syscall section of arch.h):
+Static inline macros (add immediately after the declaration):
 ```c
 /* arch_stac — set RFLAGS.AC, temporarily permitting ring-0 access to
- * user-mode pages under SMAP. Use only to bracket intentional user-memory
- * accesses; always pair with arch_clac(). No-op if SMAP is not enabled. */
+ * user-mode pages under SMAP. Bracket ONLY the single instruction that
+ * loads from a user address; always pair with arch_clac() and never call
+ * any function between stac and clac. No-op if SMAP is not enabled.
+ * The "memory" clobber prevents the compiler from hoisting user-memory
+ * loads before stac. */
 static inline void arch_stac(void) { __asm__ volatile("stac" ::: "memory"); }
 
 /* arch_clac — clear RFLAGS.AC, re-enabling SMAP protection.
- * Must be called after every arch_stac(). */
+ * Must be called after every arch_stac(). The "memory" clobber prevents
+ * the compiler from sinking user-memory loads past clac. */
 static inline void arch_clac(void) { __asm__ volatile("clac" ::: "memory"); }
 ```
 
-The `"memory"` clobber is a compiler barrier ensuring memory accesses inside
-the stac/clac window are not reordered outside it.
-
 ### `kernel/syscall/syscall.c`
 
-Add `user_ptr_valid` as a static inline above `sys_write`:
+Add `#include "arch.h"` to the include block (required for `arch_stac`/`arch_clac`).
+
+Add `USER_ADDR_MAX` and `user_ptr_valid` above `sys_write`:
 
 ```c
+/* USER_ADDR_MAX — highest canonical user-space virtual address (x86-64).
+ * Phase 9 forward-looking: move to arch.h when a second syscall file needs it. */
 #define USER_ADDR_MAX 0x00007FFFFFFFFFFFUL
 
 /* user_ptr_valid — return 1 if [addr, addr+len) lies entirely within the
  * canonical user address space, 0 otherwise.
- * Handles len=0 (always valid), len overflow, and kernel-address attacks. */
+ * Safe for len=0 (passes when addr is a valid user address).
+ * Overflow-safe: addr <= USER_ADDR_MAX - len avoids addr+len wraparound. */
 static inline int
 user_ptr_valid(uint64_t addr, uint64_t len)
 {
@@ -119,7 +129,7 @@ user_ptr_valid(uint64_t addr, uint64_t len)
 }
 ```
 
-Updated `sys_write`:
+Updated `sys_write` — narrow `stac`/`clac` window to the single byte load:
 
 ```c
 static uint64_t
@@ -130,19 +140,22 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         return (uint64_t)-14;   /* EFAULT */
     const char *s = (const char *)(uintptr_t)arg2;
     uint64_t i;
-    /* stac/clac bracket the intentional user-memory read.
-     * IF=0 (SFMASK) ensures no interrupt fires with AC set. */
-    arch_stac();
-    for (i = 0; i < arg3; i++)
-        printk("%c", s[i]);
-    arch_clac();
+    for (i = 0; i < arg3; i++) {
+        char c;
+        /* Narrow stac/clac window: bracket only the user-memory load.
+         * Never call functions between stac and clac. */
+        arch_stac();
+        c = s[i];
+        arch_clac();
+        printk("%c", c);
+    }
     return arg3;
 }
 ```
 
-The `(const char *)(uintptr_t)arg2` cast is safe here: `user_ptr_valid` has
-confirmed `arg2` is a canonical user-space address, and `stac` ensures SMAP
-permits the access.
+The `(const char *)(uintptr_t)arg2` cast is safe: `user_ptr_valid` has
+confirmed `arg2` is a canonical user-space address, and `stac` permits the
+load before `clac` restores protection.
 
 ### `kernel/core/main.c`
 
@@ -162,11 +175,23 @@ ARCH_SRCS = \
     kernel/arch/x86_64/arch_smap.c
 ```
 
-Add `-cpu Broadwell` to the QEMU test invocation so SMAP is always present
-and the boot.txt oracle is deterministic across QEMU versions:
-```makefile
-QEMU_FLAGS = ... -cpu Broadwell ...
+### `tests/run_tests.sh`
+
+Add `-cpu Broadwell` to the `qemu-system-x86_64` invocation so SMAP is always
+present and the boot.txt oracle is deterministic across QEMU versions:
+
+```bash
+timeout 10s qemu-system-x86_64 \
+    -machine pc \
+    -cpu Broadwell \
+    -cdrom "$ISO" \
+    ...
 ```
+
+**Note:** `make run` (interactive) does not use `run_tests.sh` and retains the
+host CPU. On hosts without SMAP, `make run` will emit `[SMAP] WARN` instead
+of `[SMAP] OK`. This is expected behavior — the test oracle is enforced only
+by `make test` (which uses `-cpu Broadwell`).
 
 ---
 
@@ -176,9 +201,10 @@ QEMU_FLAGS = ... -cpu Broadwell ...
 |------|--------|
 | `kernel/arch/x86_64/arch_smap.c` | New — CPUID check + CR4.SMAP enable |
 | `kernel/arch/x86_64/arch.h` | Add `arch_smap_init` declaration; add `arch_stac`/`arch_clac` static inlines |
-| `kernel/syscall/syscall.c` | Add `user_ptr_valid`; EFAULT return; `arch_stac`/`arch_clac` around user access |
+| `kernel/syscall/syscall.c` | Add `#include "arch.h"`; add `USER_ADDR_MAX` + `user_ptr_valid`; EFAULT return; narrow `stac`/`clac` around single byte load |
 | `kernel/core/main.c` | Call `arch_smap_init()` after `arch_syscall_init()` |
-| `Makefile` | Add `arch_smap.c` to `ARCH_SRCS`; add `-cpu Broadwell` to QEMU flags |
+| `Makefile` | Add `arch_smap.c` to `ARCH_SRCS` |
+| `tests/run_tests.sh` | Add `-cpu Broadwell` to QEMU invocation |
 | `tests/expected/boot.txt` | Add `[SMAP] OK: supervisor access prevention active` after `[SYSCALL] OK` |
 | `.claude/CLAUDE.md` | Update build status table |
 
@@ -219,6 +245,27 @@ QEMU_FLAGS = ... -cpu Broadwell ...
 
 1. `make test` exits 0.
 2. `grep -rn 'stac\|clac' kernel/` shows exactly the two definitions in
-   `arch.h` and their two call sites in `syscall.c`.
-3. `user_ptr_valid` returns 0 for `addr=0xFFFFFFFF80000000, len=1` (kernel
-   address) and 1 for `addr=0x400000, len=4096` (valid user address).
+   `arch.h` and their two call sites in `syscall.c` (one `arch_stac()`, one
+   `arch_clac()`).
+3. `user_ptr_valid(0xFFFFFFFF80000000UL, 1)` returns 0 (kernel address
+   rejected); `user_ptr_valid(0x400000UL, 4096)` returns 1 (valid user range).
+
+---
+
+## Phase 9 Forward-Looking Constraints
+
+**`USER_ADDR_MAX` should move to `arch.h`.** Currently defined in
+`syscall.c`. When `sys_read` or any other pointer-taking syscall is added in
+Phase 9, copy-pasting the constant is a vulnerability. Move it to `arch.h`
+(or a new `kernel/arch/x86_64/arch_uabi.h` included by `arch.h`) so all
+syscall handlers share a single definition.
+
+**`user_ptr_valid` should move to a shared header.** Same reason — a
+`kernel/syscall/syscall_util.h` with `user_ptr_valid` as a static inline
+ensures every future syscall gets validation for free.
+
+**`make run` WARN behavior.** On hosts without SMAP, `make run` emits
+`[SMAP] WARN`. This is not a bug, but it can confuse developers who diff
+against `boot.txt` manually. A Phase 9 improvement would be to make the
+`run` target also use `-cpu Broadwell`, or document this explicitly in the
+Makefile comment.
