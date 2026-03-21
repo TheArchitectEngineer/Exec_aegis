@@ -1,6 +1,6 @@
 #include "elf.h"
 #include "../mm/vmm.h"
-#include "../mm/pmm.h"
+#include "../mm/kva.h"
 #include "../core/printk.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -67,28 +67,14 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len)
         if (ph->p_type != PT_LOAD)
             continue;
 
-        /* Allocate physically contiguous pages for this segment.
-         *
-         * CONTIGUITY ASSUMPTION: The Phase 3 bitmap PMM allocates sequentially,
-         * so successive pmm_alloc_page() calls return physically adjacent frames.
-         * This allows treating the pages as a single region for memcpy.
-         * If the PMM becomes non-sequential (Phase 6+ buddy allocator),
-         * replace this with a page-by-page copy. Same assumption as sched_spawn. */
+        /* Allocate kva pages for this segment — no contiguity assumption on
+         * physical frames; kva maps each PMM page to a consecutive kernel VA. */
         uint64_t page_count = (ph->p_memsz + 4095UL) / 4096UL;
-        uint64_t first_phys = 0;
         uint64_t j;
-        for (j = 0; j < page_count; j++) {
-            uint64_t p = pmm_alloc_page();
-            if (!p) {
-                printk("[ELF] FAIL: OOM loading segment\n");
-                for (;;) {}
-            }
-            if (j == 0)
-                first_phys = p;
-        }
 
-        /* Copy file bytes into physical memory */
-        uint8_t *dst = (uint8_t *)(uintptr_t)first_phys;
+        uint8_t *dst = kva_alloc_pages(page_count);
+
+        /* Copy file bytes through kernel VA */
         const uint8_t *src = data + ph->p_offset;
         uint64_t k;
         for (k = 0; k < ph->p_filesz; k++)
@@ -98,7 +84,9 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len)
         for (k = ph->p_filesz; k < ph->p_memsz; k++)
             dst[k] = 0;
 
-        /* Map each page into the user address space */
+        /* Map each page into the user address space.
+         * kva_page_phys recovers the physical address of each page
+         * (individual walk — O(page_count × 4) invlpg, acceptable at this scale). */
         uint64_t map_flags = VMM_FLAG_USER;
         if (ph->p_flags & PF_W)
             map_flags |= VMM_FLAG_WRITABLE;
@@ -106,7 +94,7 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len)
         for (j = 0; j < page_count; j++) {
             vmm_map_user_page(pml4_phys,
                               ph->p_vaddr + j * 4096UL,
-                              first_phys  + j * 4096UL,
+                              kva_page_phys(dst + j * 4096UL),
                               map_flags);
         }
     }
