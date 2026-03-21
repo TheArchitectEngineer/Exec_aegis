@@ -298,6 +298,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Mapped-window allocator | ✅ Done | VMM_WINDOW_VA=0xFFFFFFFF80600000; phys_to_table/zero_page eliminated from vmm.c; identity map still active (teardown Phase 7) |
 | Identity map teardown | ✅ Done | kva bump allocator at pd_hi[4+]; phys casts in sched/proc/elf eliminated; pml4[0] cleared |
 | SMAP + user pointer validation | ✅ Done | CR4.SMAP enabled (Broadwell+); sys_write returns EFAULT for kernel addresses; stac/clac per-byte load |
+| Syscall cleanup + kva free path (Phase 9) | ✅ Done | syscall_util.h + uaccess.h; copy_from_user in sys_write; kva_free_pages wired into sched_exit |
 | IDT | ✅ Done | 48 interrupt gates; isr_dispatch handles PIC EOI before calling handlers |
 | PIC | ✅ Done | 8259A remapped; IRQ0-15 → vectors 0x20-0x2F; per-driver unmask |
 | PIT | ✅ Done | Channel 0 at 100 Hz; arch_get_ticks() accessor; arch_request_shutdown() defers exit to ISR |
@@ -356,6 +357,8 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 *Last updated: 2026-03-21 — Phase 7 complete, make test GREEN. Identity map removed; kva allocator live; per-process kernel stacks.*
 
 *Last updated: 2026-03-21 — Phase 8 complete, make test GREEN. SMAP enabled; sys_write validates user pointers; EFAULT returned for kernel addresses.*
+
+*Last updated: 2026-03-21 — Phase 9 complete, make test GREEN. syscall_util.h + uaccess.h introduced; copy_from_user in sys_write; kva_free_pages + deferred cleanup in sched_exit.*
 
 ### Phase 4 forward-looking constraints
 
@@ -446,21 +449,23 @@ remove the `[0..4MB) → [0..4MB)` identity entries from `pd_lo` and flush TLB.
 work involving concurrent kernel threads or DMA mappings may require additional
 slots.
 
-### Phase 9 forward-looking constraints
+### Phase 10 forward-looking constraints
 
-**`USER_ADDR_MAX` lives in `syscall.c`.** When `sys_read` or any other
-pointer-taking syscall is added, move `USER_ADDR_MAX` to `arch.h` and
-`user_ptr_valid` to a shared `kernel/syscall/syscall_util.h` so all syscall
-handlers share a single definition. Duplication is a vulnerability.
+**`copy_to_user` not yet needed.** When `sys_read` arrives in Phase 10, add a symmetric
+`copy_to_user(dst_user, src_kernel, len)` to `uaccess.h` alongside `copy_from_user`.
+Pattern is identical: `arch_stac`, `memcpy`, `arch_clac`.
 
-**Per-character stac/clac is intentionally conservative.** `sys_write` uses
-a per-byte `stac`/`clac` window because no kernel scratch buffer exists yet.
-Phase 9 must introduce a `copy_from_user(dst_kernel, src_user, len)` helper
-that does one `stac`, `memcpy`, `clac` — the standard Linux approach. This
-removes the per-iteration overhead and makes the pattern reusable for
-`sys_read`.
+**`is_user ? 1 : STACK_PAGES` is a hidden contract.** Add a `stack_pages` field to
+`aegis_task_t` and populate it at allocation time (`sched_spawn`, `proc_spawn`),
+eliminating the inference. A kernel task with a non-`STACK_PAGES` stack size would
+silently free the wrong number of pages.
 
-**kva has no free path.** Every exited process permanently leaks its TCB,
-PCB, and stack pages. Phase 9 must introduce a free-list for kva pages and
-wire `pmm_free_page` + `vmm_unmap_page` into `sched_exit`. Without this,
-sequential process execution exhausts physical memory.
+**Last-exit leak.** Simplest fix: permanent idle task. Rename `task_heartbeat` to
+`task_idle`, remove the 500-tick exit, and add a separate shutdown mechanism. A
+non-exiting kernel task in the run queue ensures every exiting process gets cleaned
+up by the deferred pattern at the next call to `sched_exit`.
+
+**User address space teardown deferred.** `sched_exit` still leaks the user PML4
+and ELF segment pages. Phase 10 must walk and free PML4 entries 0–255 only (the user
+half). Entries 256–511 are the kernel half, shared with the master PML4 — touching
+them would corrupt every other process.
