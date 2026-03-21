@@ -109,7 +109,12 @@ by different consumers as the kernel grows.
  * of AC-bit transitions regardless of len, replacing the per-byte pattern.
  *
  * The "memory" clobbers inside arch_stac/arch_clac prevent the compiler from
- * hoisting the memcpy before stac or sinking it past clac. */
+ * hoisting the memcpy before stac or sinking it past clac.
+ *
+ * No fault recovery: GCC may vectorize __builtin_memcpy, emitting multi-byte
+ * loads. If [src, src+len) crosses a page boundary where the second page is
+ * unmapped, a #PF fires with AC=1. There is no fixup table (Linux extable).
+ * Caller must ensure the entire range is mapped before calling. */
 static inline void
 copy_from_user(void *dst, const void *src, uint64_t len)
 {
@@ -291,11 +296,25 @@ ELF segment pages. Phase 10 must walk the user PML4, free all non-kernel-half ma
 pages, and free the PML4 page itself. This requires a `vmm_walk_user_pml4` helper that
 iterates all present PTEs in PML4 entries 0–255 and calls `pmm_free_page` for each.
 
+**`is_user ? 1 : STACK_PAGES` is a hidden contract.** The `g_prev_dying_stack_pages`
+calculation reconstructs the stack size from `is_user` rather than storing it
+directly. If any kernel task is ever allocated with a stack size other than `STACK_PAGES`,
+this silently frees the wrong number of pages. Phase 10 should add a `stack_pages`
+field to `aegis_task_t` and populate it at allocation time (`sched_spawn`,
+`proc_spawn`), eliminating the inference.
+
 **Last-exit leak.** The deferred cleanup pattern releases the TCB and stack of the
-*previous* exited process, not the current one. The final process's resources are freed
-only if another process exits afterward. A proper `sys_waitpid` or process reference
-count eliminates this. For Phase 9 scope this is acceptable — the leak is bounded
-(one process worth of kernel objects at shutdown).
+*previous* exited process, not the current one. The simplest fix is not `sys_waitpid`
+but a permanent idle task that never exits — if a non-exiting kernel task is always
+in the run queue, the "next `sched_exit` frees the previous" pattern means every
+exiting process gets cleaned up. Phase 10 should rename `task_heartbeat` to
+`task_idle`, remove the 500-tick exit, and add a separate shutdown mechanism.
+
+**User address space teardown deferred.** `sched_exit` still leaks the user PML4 and
+ELF segment pages. Phase 10 must walk the user PML4 and free all mapped pages.
+`vmm_walk_user_pml4` must only iterate PML4 entries 0–255 (user half), skip any
+entry that is zero, and never touch entries 256–511 (kernel half) — those pages are
+shared with the master PML4 and freeing them would corrupt every other process.
 
 **`vmm_unmap_page` is single-CPU.** Uses `invlpg` (local TLB invalidation only). When
 SMP is introduced, every `vmm_unmap_page` call must be followed by a TLB shootdown IPI
