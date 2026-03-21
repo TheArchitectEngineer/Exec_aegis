@@ -309,9 +309,10 @@ A subsystem is ✅ only when `make test` passes with it included.
 | SYSCALL/SYSRET | ✅ Done | IA32_STAR/LSTAR/SFMASK; syscall_entry.asm landing pad; o64 sysret |
 | ELF loader | ✅ Done | PT_LOAD segments mapped into user PML4 via vmm_map_user_page |
 | User process (proc_spawn) | ✅ Done | Per-process PML4; KSTACK_VA; proc_enter_user CR3 switch + iretq |
-| Syscall dispatch (C) | ✅ Done | sys_write (fd=1 → printk), sys_exit (→ sched_exit); Phase 5 |
-| Capability system (Rust) | ✅ Done | Stub only: cap_init() prints OK line |
-| VFS | ⬜ Not started | |
+| Syscall dispatch (C) | ✅ Done | sys_write cap-gated (VFS_WRITE) + fd-table dispatch; sys_exit/open/read/close |
+| Capability system (Rust) | ✅ Done | CapSlot type; cap_grant/cap_check FFI; per-process caps[] table; sys_open + sys_write gated |
+| VFS | ✅ Done | vfs.h + initrd.c + console.c; sys_open/read/write/close; fd 1 pre-opened at spawn |
+| stdin/stderr/sys_brk (Phase 13) | ✅ Done | kbd VFS (fd 0); stderr (fd 2); sys_brk (syscall 12); CAP_KIND_VFS_READ gate on sys_read; task_kbd retired; task count 2 |
 | musl port + shell | ⬜ Not started | |
 
 ### Phase 1 deviations from original spec
@@ -359,6 +360,24 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 *Last updated: 2026-03-21 — Phase 8 complete, make test GREEN. SMAP enabled; sys_write validates user pointers; EFAULT returned for kernel addresses.*
 
 *Last updated: 2026-03-21 — Phase 9 complete, make test GREEN. syscall_util.h + uaccess.h introduced; copy_from_user in sys_write; kva_free_pages + deferred cleanup in sched_exit.*
+
+*Last updated: 2026-03-21 — Phase 10 complete, make test GREEN. VFS + sys_read/open/close; static initrd; vmm_free_user_pml4; stack_pages field; task_idle; copy_to_user.*
+
+*Last updated: 2026-03-21 — Phase 11 complete, make test GREEN. CapSlot + cap_grant/cap_check Rust FFI; per-process cap table in aegis_process_t; sys_open gated on CAP_KIND_VFS_OPEN|CAP_RIGHTS_READ; docs/capability-model.md added.*
+
+*Last updated: 2026-03-21 — Phase 12 complete, make test GREEN. Console VFS device; fd 1 pre-opened at spawn; CAP_KIND_VFS_WRITE; sys_write capability-gated + routed through fd table.*
+
+*Last updated: 2026-03-21 — Phase 13 complete, make test GREEN. kbd VFS driver; fd 0/2 pre-open; CAP_KIND_VFS_READ gate on sys_read; sys_brk (syscall 12); task_kbd retired; task count 2.*
+
+### Phase 13 forward-looking constraints
+
+**`sys_brk` page-aligns the break.** `proc->brk` is always page-aligned after grow or shrink. musl's `malloc` passes exact byte offsets and expects the kernel to return the actual rounded-up break — Phase 13 rounds up, which musl handles correctly.
+
+**fd 0 blocks on `kbd_read()`.** A user process calling `sys_read(0, ...)` will block until a key is pressed. In headless `make test` there is no keyboard input — `init` must not call `sys_read(0, ...)`. Phase 14 or later should provide a `kbd_poll`-based non-blocking path or `sys_poll`.
+
+**No `sys_mmap`.** musl's allocator falls back to `mmap(MAP_ANONYMOUS)` if `brk` fails. Phase 13 provides no `mmap`. A musl port requires either a brk-only allocator config or a minimal `sys_mmap` in Phase 14.
+
+**Capability delegation deferred.** A second user process receives capabilities via `proc_spawn` grants only. `sys_cap_grant` for parent→child delegation remains future work.
 
 ### Phase 4 forward-looking constraints
 
