@@ -15,6 +15,11 @@ typedef struct {
     int (*write)(void *priv, const void *buf, uint64_t len);
     /* close — release any driver-side resources for this file. */
     void (*close)(void *priv);
+    /* readdir -- fill name_out (>=256 bytes) and type_out with the entry at index.
+     * Returns 0 on success, -1 if index is past the last entry.
+     * type: DT_REG=8, DT_DIR=4.
+     * Set to NULL for non-directory fds (e.g. console, kbd). */
+    int (*readdir)(void *priv, uint64_t index, char *name_out, uint8_t *type_out);
 } vfs_ops_t;
 
 /* Open file descriptor. Embedded inline in aegis_process_t.fds[].
@@ -23,6 +28,7 @@ typedef struct {
     const vfs_ops_t *ops;    /* NULL = free slot */
     void            *priv;   /* driver-private data */
     uint64_t         offset; /* current read position */
+    uint64_t         size;   /* file size in bytes; 0 for devices/directories */
 } vfs_file_t;
 
 /* vfs_init — print [VFS] OK line and register built-in drivers.
