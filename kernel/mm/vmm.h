@@ -94,4 +94,15 @@ void vmm_zero_page(uint64_t phys);
  * Called by sys_fork to create the child address space. */
 int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4);
 
+/* vmm_free_user_pages — free all leaf physical frames mapped in user half
+ * (PML4 entries 0-255) of pml4_phys. Does NOT free PT/PD/PDPT pages and
+ * does NOT free the PML4 itself. Zeros the leaf PTEs after freeing.
+ *
+ * Contrast with vmm_free_user_pml4 which also frees the page-table pages.
+ * Use vmm_free_user_pages for sys_execve (process keeps its PML4 and
+ * reloads new mappings). Use vmm_free_user_pml4 for waitpid zombie reap.
+ *
+ * Caller must reload CR3 after calling to flush stale TLB entries. */
+void vmm_free_user_pages(uint64_t pml4_phys);
+
 #endif /* AEGIS_VMM_H */
