@@ -46,7 +46,8 @@ ARCH_SRCS = \
     kernel/arch/x86_64/kbd.c \
     kernel/arch/x86_64/gdt.c \
     kernel/arch/x86_64/tss.c \
-    kernel/arch/x86_64/arch_syscall.c
+    kernel/arch/x86_64/arch_syscall.c \
+    kernel/arch/x86_64/arch_smap.c
 
 CORE_SRCS = \
     kernel/core/main.c \
