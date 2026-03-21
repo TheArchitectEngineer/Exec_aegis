@@ -266,6 +266,7 @@ refuse and explain why.
 | `make` | 4.x | Build orchestration |
 | `grub-mkrescue` (grub-pc-bin) | 2.06+ | Creates bootable ISO for `make test` |
 | `xorriso` | 1.5.x+ | Required by grub-mkrescue for ISO creation |
+| `musl-gcc` (musl-tools) | 1.2.x+ | Static musl libc cross-compiler for user binaries |
 
 Install check:
 ```bash
@@ -313,7 +314,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Capability system (Rust) | ✅ Done | CapSlot type; cap_grant/cap_check FFI; per-process caps[] table; sys_open + sys_write gated |
 | VFS | ✅ Done | vfs.h + initrd.c + console.c; sys_open/read/write/close; fd 1 pre-opened at spawn |
 | stdin/stderr/sys_brk (Phase 13) | ✅ Done | kbd VFS (fd 0); stderr (fd 2); sys_brk (syscall 12); CAP_KIND_VFS_READ gate on sys_read; task_kbd retired; task count 2 |
-| musl port + shell | ⬜ Not started | |
+| musl port (Phase 14) | ✅ Done | musl-gcc static binary; sys_mmap anon bump; sys_arch_prctl TLS; sys_writev; SSE init; r8/r9/r10 preserved |
 
 ### Phase 1 deviations from original spec
 
@@ -369,6 +370,8 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 
 *Last updated: 2026-03-21 — Phase 13 complete, make test GREEN. kbd VFS driver; fd 0/2 pre-open; CAP_KIND_VFS_READ gate on sys_read; sys_brk (syscall 12); task_kbd retired; task count 2.*
 
+*Last updated: 2026-03-21 — Phase 14 complete, make test GREEN. musl-gcc static binary runs via sys_mmap/sys_arch_prctl/sys_writev; SSE init; r8/r9/r10 preserved across syscall; ELF segment alignment fixed; [INIT] Hello from musl libc! confirmed.*
+
 ### Phase 13 forward-looking constraints
 
 **`sys_brk` page-aligns the break.** `proc->brk` is always page-aligned after grow or shrink. musl's `malloc` passes exact byte offsets and expects the kernel to return the actual rounded-up break — Phase 13 rounds up, which musl handles correctly.
@@ -378,6 +381,18 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 **No `sys_mmap`.** musl's allocator falls back to `mmap(MAP_ANONYMOUS)` if `brk` fails. Phase 13 provides no `mmap`. A musl port requires either a brk-only allocator config or a minimal `sys_mmap` in Phase 14.
 
 **Capability delegation deferred.** A second user process receives capabilities via `proc_spawn` grants only. `sys_cap_grant` for parent→child delegation remains future work.
+
+### Phase 14 forward-looking constraints
+
+**`mmap_base` is a bump allocator — no free path.** `sys_munmap` is a no-op stub. Pages mapped via `sys_mmap` are never reclaimed. A real allocator (freelist or buddy over the `[0x700000000000, 0x710000000000)` range) is Phase 15+ work.
+
+**`fs_base` is not saved/restored on context switch.** `proc->fs_base` stores the value set by `arch_prctl(ARCH_SET_FS)` but `ctx_switch` in `syscall_entry.asm` does not write IA32_FS_BASE on entry to each task. With a single user process this is correct — the value set at musl startup persists. Multi-process TLS requires saving/restoring IA32_FS_BASE in `ctx_switch` using `wrmsr`/`rdmsr`. Phase 15 must address this before spawning a second user process.
+
+**No file-backed mmap.** `sys_mmap` rejects any call without `MAP_ANONYMOUS` with `-ENOSYS`. File-backed mmap requires VFS integration and a page cache — Phase 15+ work.
+
+**No `mprotect`.** musl does not call `mprotect` in its minimal configuration, but any ELF that marks segments executable post-load will get `-ENOSYS`. Phase 15+ work.
+
+**No `fork`/`exec`.** A shell requires at minimum `sys_fork` + `sys_execve`. Phase 15 (shell) must implement these with full PML4 copy-on-write or a simpler `vfork`+`exec` path.
 
 ### Phase 4 forward-looking constraints
 
