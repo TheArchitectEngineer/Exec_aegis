@@ -25,6 +25,7 @@ ACTUAL=/tmp/aegis_serial.txt
 #   -serial stdio: capture COM1 (kernel serial output) on stdout.
 timeout 10s qemu-system-x86_64 \
     -machine pc \
+    -cpu Broadwell \
     -cdrom "$ISO" \
     -boot order=d \
     -display none \
