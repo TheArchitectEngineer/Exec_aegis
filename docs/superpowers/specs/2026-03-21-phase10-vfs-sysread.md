@@ -219,6 +219,13 @@ entry. For the Phase 10 init binary (a handful of PT entries), performance is
 not a concern.
 
 ```c
+/* PTE_PS — Page Size bit. Set in a PDE indicates a 2MB huge page (the entry
+ * maps a 2MB frame directly, not a PT). Set in a PDPTE indicates a 1GB page.
+ * vmm_map_user_page only creates 4KB PTEs, so no user mapping should ever
+ * have PS set. If encountered, skip (leak) rather than misinterpret as a
+ * page-table pointer and double-free 512 ghost frames. */
+#define PTE_PS (1UL << 7)
+
 void
 vmm_free_user_pml4(uint64_t pml4_phys)
 {
@@ -233,12 +240,14 @@ vmm_free_user_pml4(uint64_t pml4_phys)
             uint64_t pdpte = ((uint64_t *)vmm_window_map(pdpt_phys))[j];
             vmm_window_unmap();
             if (!(pdpte & VMM_FLAG_PRESENT)) continue;
+            if (pdpte & PTE_PS) continue; /* 1GB page — unexpected, skip */
             uint64_t pd_phys = pdpte & ~0xFFFUL;
 
             for (k = 0; k < 512; k++) {
                 uint64_t pde = ((uint64_t *)vmm_window_map(pd_phys))[k];
                 vmm_window_unmap();
                 if (!(pde & VMM_FLAG_PRESENT)) continue;
+                if (pde & PTE_PS) continue; /* 2MB page — unexpected, skip */
                 uint64_t pt_phys = pde & ~0xFFFUL;
 
                 for (l = 0; l < 512; l++) {
@@ -256,6 +265,10 @@ vmm_free_user_pml4(uint64_t pml4_phys)
     pmm_free_page(pml4_phys);
 }
 ```
+
+`PTE_PS` is defined locally in `vmm.c` (not exported to `vmm.h`) — it is an
+x86-64 PTE bit and belongs alongside the other architectural PTE manipulation
+code in that file.
 
 `vmm_window_map` and `vmm_window_unmap` are static helpers already in `vmm.c`
 (used by `vmm_phys_of` and related functions). No new window infrastructure
