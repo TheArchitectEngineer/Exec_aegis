@@ -191,17 +191,22 @@ void arch_syscall_init(void);
  * [SMAP] WARN: not supported by CPU. Must be called after arch_syscall_init(). */
 void arch_smap_init(void);
 
+/* Set to 1 by arch_smap_init() after successfully enabling CR4.SMAP.
+ * Checked by arch_stac/arch_clac to avoid #UD on CPUs without SMAP. */
+extern int arch_smap_enabled;
+
 /* arch_stac — set RFLAGS.AC, temporarily permitting ring-0 access to
  * user-mode pages under SMAP. Bracket ONLY the single instruction that
  * loads from a user address; always pair with arch_clac() immediately after.
  * Never call any function between arch_stac() and arch_clac().
  * The "memory" clobber prevents the compiler from hoisting user-memory
- * loads before stac. No-op if SMAP is not enabled. */
-static inline void arch_stac(void) { __asm__ volatile("stac" ::: "memory"); }
+ * loads before stac. No-op if SMAP is not enabled (guards against #UD). */
+static inline void arch_stac(void) { if (arch_smap_enabled) __asm__ volatile("stac" ::: "memory"); }
 
 /* arch_clac — clear RFLAGS.AC, re-enabling SMAP protection.
  * Must be called after every arch_stac(). The "memory" clobber prevents
- * the compiler from sinking user-memory loads past clac. */
-static inline void arch_clac(void) { __asm__ volatile("clac" ::: "memory"); }
+ * the compiler from sinking user-memory loads past clac.
+ * No-op if SMAP is not enabled (guards against #UD). */
+static inline void arch_clac(void) { if (arch_smap_enabled) __asm__ volatile("clac" ::: "memory"); }
 
 #endif

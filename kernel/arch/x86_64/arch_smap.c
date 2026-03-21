@@ -1,5 +1,8 @@
+#include "arch.h"
 #include "printk.h"
 #include <stdint.h>
+
+int arch_smap_enabled = 0;
 
 static int
 cpuid_smap_supported(void)
@@ -33,5 +36,6 @@ arch_smap_init(void)
         "mov %%rax, %%cr4\n"
         : : : "rax"
     );
+    arch_smap_enabled = 1;
     printk("[SMAP] OK: supervisor access prevention active\n");
 }
