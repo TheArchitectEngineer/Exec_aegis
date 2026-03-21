@@ -79,6 +79,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_gdt_init();        /* ring-3 GDT + TSS descriptors — [GDT] OK       */
     arch_tss_init();        /* TSS RSP0 for ring-3 → ring-0 transitions      */
     arch_syscall_init();    /* enable SYSCALL/SYSRET MSRs — [SYSCALL] OK     */
+    arch_smap_init();       /* SMAP detect + enable — [SMAP] OK/WARN         */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_kbd);
     sched_spawn(task_heartbeat);
