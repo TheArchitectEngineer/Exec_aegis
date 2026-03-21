@@ -101,7 +101,17 @@ static uint64_t g_prev_dying_stack_pages = 0;
 void
 sched_exit(void)
 {
-    /* Switch to master PML4 at entry (defensive measure).
+    /* ── Deferred cleanup from the PREVIOUS exiting kernel/orphaned task ──
+     * Free TCB + kernel stack of the task that exited last time.
+     * Safe: ctx_switch has completed; that TCB and stack are no longer live
+     * on any CPU. Must be at the TOP of sched_exit, before any new exit logic. */
+    if (g_prev_dying_tcb) {
+        kva_free_pages(g_prev_dying_stack, g_prev_dying_stack_pages);
+        kva_free_pages(g_prev_dying_tcb, 1);
+        g_prev_dying_tcb = NULL;
+    }
+
+    /* Switch to master PML4 so kernel structures are safely accessible.
      *
      * Before Phase 7: required because TCBs were in identity-mapped [0..4MB),
      * which is absent from user PML4s.
@@ -109,13 +119,52 @@ sched_exit(void)
      * (pd_hi is shared). The switch is retained as a defensive measure. */
     vmm_switch_to(vmm_get_master_pml4());
 
-    /* Free resources of the previously exited task (safe: ctx_switch has
-     * completed; that TCB and stack are no longer live on any CPU). */
-    if (g_prev_dying_tcb) {
-        kva_free_pages(g_prev_dying_stack, g_prev_dying_stack_pages);
-        kva_free_pages(g_prev_dying_tcb, 1);
-        g_prev_dying_tcb = NULL;
+    if (s_current->is_user) {
+        aegis_process_t *dying = (aegis_process_t *)s_current;
+        /* dying->exit_status was set by sys_exit before calling sched_exit. */
+
+        /* Mark self zombie — stays in run queue until waitpid reaps. */
+        s_current->state = TASK_ZOMBIE;
+
+        /* Wake blocked parent waiting for this child, if any. */
+        aegis_task_t *t = s_current->next;
+        while (t != s_current) {
+            if (t->is_user && t->state == TASK_BLOCKED) {
+                aegis_process_t *p = (aegis_process_t *)t;
+                if (p->pid == dying->ppid &&
+                    (t->waiting_for == 0 || t->waiting_for == dying->pid)) {
+                    sched_wake(t);
+                    break;
+                }
+            }
+            t = t->next;
+        }
+
+        /* Shutdown detection: scan for remaining RUNNING user tasks.
+         * Zombies have is_user=1 but state==TASK_ZOMBIE — they are not live.
+         * Without the state check, this scan would never trigger shutdown
+         * because the just-zombified task is still in the queue with is_user=1. */
+        int live_users = 0;
+        t = s_current->next;
+        while (t != s_current) {
+            if (t->is_user && t->state != TASK_ZOMBIE)
+                live_users = 1;
+            t = t->next;
+        }
+        if (!live_users) {
+            printk("[AEGIS] System halted.\n");
+            arch_request_shutdown();
+        }
+
+        /* Yield — zombie stays in queue until waitpid reaps.
+         * Do NOT use the deferred-cleanup (g_prev_dying_tcb) path; that is
+         * for non-zombie kernel task exits only. */
+        sched_yield_to_next();
+        /* unreachable — zombie never resumes */
+        for (;;) {}
     }
+
+    /* ── Kernel task (non-user) exit path ── */
 
     /* IF=0 throughout (IA32_SFMASK cleared IF on SYSCALL entry) —
      * no preemption can occur during list manipulation. */
@@ -123,54 +172,79 @@ sched_exit(void)
     while (prev->next != s_current)
         prev = prev->next;
 
-    aegis_task_t *dying = s_current;
-    s_current           = dying->next;
-    prev->next          = s_current;
+    aegis_task_t *dying_k = s_current;
+    s_current             = dying_k->next;
+    prev->next            = s_current;
     s_task_count--;
 
-    if (dying->is_user) {
-        aegis_process_t *proc = (aegis_process_t *)dying;
-        vmm_free_user_pml4(proc->pml4_phys);
-
-        /* If no user tasks remain, request halt (deferred to next PIT tick). */
-        int has_user = 0;
-        aegis_task_t *t = s_current;
-        do {
-            if (t->is_user) { has_user = 1; break; }
-            t = t->next;
-        } while (t != s_current);
-
-        if (!has_user) {
-            printk("[AEGIS] System halted.\n");
-            arch_request_shutdown();
-            /* Continue — ctx_switch to idle/kbd; PIT tick exits QEMU. */
-        }
-    }
-
-    if (s_current == dying) {  /* last task — everything has exited */
+    if (s_current == dying_k) {  /* last task — everything has exited */
         arch_request_shutdown();
         for (;;) __asm__ volatile ("hlt");
     }
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
 
-    /* If dying is a user task and the next task is a kernel task, switch to
-     * master PML4. Kernel task stacks are kva-mapped (higher-half), visible
-     * in any PML4, but the switch ensures a clean CR3 state for the resume. */
-    if (dying->is_user && !s_current->is_user)
-        vmm_switch_to(vmm_get_master_pml4());
-    else if (s_current->is_user)
+    /* If the next task is a user task, switch to its PML4. */
+    if (s_current->is_user)
         vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
-    /* Record dying task for deferred cleanup at the next sched_exit entry.
+    /* Record dying kernel task for deferred cleanup at the next sched_exit entry.
      * Must be set AFTER all list manipulation and BEFORE ctx_switch:
-     * ctx_switch writes dying->rsp, so the TCB must remain valid until
+     * ctx_switch writes dying_k->rsp, so the TCB must remain valid until
      * after the RSP switch completes. */
-    g_prev_dying_stack       = (void *)dying->stack_base;
-    g_prev_dying_stack_pages = dying->stack_pages;
-    g_prev_dying_tcb         = dying;
-    ctx_switch(dying, s_current);
+    g_prev_dying_stack       = (void *)dying_k->stack_base;
+    g_prev_dying_stack_pages = dying_k->stack_pages;
+    g_prev_dying_tcb         = dying_k;
+    ctx_switch(dying_k, s_current);
     __builtin_unreachable();
+}
+
+void
+sched_block(void)
+{
+    aegis_task_t *old = s_current;
+    aegis_task_t *prev;
+
+    old->state = TASK_BLOCKED;
+
+    /* Unlink old from the circular run queue.
+     * Walk to find the node whose next == old. */
+    prev = old;
+    while (prev->next != old)
+        prev = prev->next;
+    prev->next = old->next;  /* splice out old */
+
+    /* Advance s_current past the unlinked task; skip non-RUNNING tasks.
+     * task_idle guarantees the loop terminates. */
+    s_current = old->next;
+    while (s_current->state != TASK_RUNNING)
+        s_current = s_current->next;
+
+    ctx_switch(old, s_current);
+}
+
+void
+sched_wake(aegis_task_t *task)
+{
+    aegis_task_t *prev;
+
+    task->state = TASK_RUNNING;
+    /* Insert before s_current: find the node whose next == s_current */
+    prev = s_current;
+    while (prev->next != s_current)
+        prev = prev->next;
+    task->next = s_current;
+    prev->next = task;
+}
+
+void
+sched_yield_to_next(void)
+{
+    aegis_task_t *old = s_current;
+    do {
+        s_current = s_current->next;
+    } while (s_current->state != TASK_RUNNING);
+    ctx_switch(old, s_current);
 }
 
 void
@@ -224,7 +298,10 @@ sched_tick(void)
         return;
 
     aegis_task_t *old = s_current;
-    s_current = s_current->next;
+    /* Skip blocked/zombie tasks. task_idle guarantees termination. */
+    do {
+        s_current = s_current->next;
+    } while (s_current->state != TASK_RUNNING);
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
 
@@ -255,4 +332,13 @@ sched_tick(void)
     /* ctx_switch is declared in arch.h with a forward struct declaration.
      * It saves old->rsp, loads s_current->rsp, and returns into new task. */
     ctx_switch(old, s_current);
+
+    /* Restore the incoming user process's FS base.
+     * This must run AFTER ctx_switch returns (s_current is now the new task).
+     * proc_enter_user handles only the first entry; preempted tasks resume
+     * via isr_common_stub which does not reload FS.base. IF=0 here (PIT ISR). */
+    if (s_current->is_user) {
+        aegis_process_t *p = (aegis_process_t *)s_current;
+        arch_set_fs_base(p->fs_base);
+    }
 }

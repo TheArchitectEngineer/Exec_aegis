@@ -120,7 +120,10 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 static uint64_t
 sys_exit(uint64_t arg1)
 {
-    (void)arg1;
+    if (sched_current()->is_user) {
+        aegis_process_t *proc = (aegis_process_t *)sched_current();
+        proc->exit_status = arg1 & 0xFF;
+    }
     sched_exit();
     __builtin_unreachable();
 }
@@ -426,7 +429,10 @@ sys_arch_prctl(uint64_t arg1, uint64_t arg2)
  */
 static uint64_t sys_exit_group(uint64_t arg1)
 {
-    (void)arg1;
+    if (sched_current()->is_user) {
+        aegis_process_t *proc = (aegis_process_t *)sched_current();
+        proc->exit_status = arg1 & 0xFF;
+    }
     sched_exit();
     __builtin_unreachable();
 }

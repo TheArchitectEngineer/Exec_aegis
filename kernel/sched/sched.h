@@ -47,4 +47,22 @@ void sched_exit(void);
 /* Return a pointer to the currently running task. */
 aegis_task_t *sched_current(void);
 
+/* sched_block — mark current task TASK_BLOCKED and yield.
+ * Unlinks current from the run queue; switches to next RUNNING task.
+ * REQUIRES: at least one other TASK_RUNNING task in the queue.
+ *            Guaranteed by task_idle which never blocks or exits. */
+void sched_block(void);
+
+/* sched_wake — mark task TASK_RUNNING and re-add to run queue.
+ * Inserts before s_current so the woken task runs next tick.
+ * Called from sched_exit when the parent is found waiting. IF=0. */
+void sched_wake(aegis_task_t *task);
+
+/* sched_yield_to_next — advance s_current to the next RUNNING task
+ * and ctx_switch. Used by the zombie path in sched_exit.
+ * The zombie's kernel stack is still live during ctx_switch; the caller
+ * must not touch task state after sched_yield_to_next returns (it returns
+ * in the new task's context, not the zombie's). */
+void sched_yield_to_next(void);
+
 #endif /* AEGIS_SCHED_H */
