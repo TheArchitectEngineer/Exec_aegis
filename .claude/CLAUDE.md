@@ -315,6 +315,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | VFS | ✅ Done | vfs.h + initrd.c + console.c; sys_open/read/write/close; fd 1 pre-opened at spawn |
 | stdin/stderr/sys_brk (Phase 13) | ✅ Done | kbd VFS (fd 0); stderr (fd 2); sys_brk (syscall 12); CAP_KIND_VFS_READ gate on sys_read; task_kbd retired; task count 2 |
 | musl port (Phase 14) | ✅ Done | musl-gcc static binary; sys_mmap anon bump; sys_arch_prctl TLS; sys_writev; SSE init; r8/r9/r10 preserved |
+| musl port + shell (Phase 15) | ✅ Done | fork/execve/waitpid; interactive shell; 8 companion programs in initrd |
 
 ### Phase 1 deviations from original spec
 
@@ -393,6 +394,20 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 **No `mprotect`.** musl does not call `mprotect` in its minimal configuration, but any ELF that marks segments executable post-load will get `-ENOSYS`. Phase 15+ work.
 
 **No `fork`/`exec`.** A shell requires at minimum `sys_fork` + `sys_execve`. Phase 15 (shell) must implement these with full PML4 copy-on-write or a simpler `vfork`+`exec` path.
+
+### Phase 15 forward-looking constraints
+
+**No `sys_munmap` VA reclaim.** Each fork+exec child allocates mmap VA before execve resets it. At Phase 15 scale this is negligible; a real mmap with page freeing is Phase 16 work.
+
+**`sys_chdir` does not validate path existence.** Any string is accepted. Full validation requires a real filesystem in Phase 16.
+
+**No I/O redirection or pipes.** `>`, `<`, `|` are Phase 16.
+
+**No signal handling.** `Ctrl-C` does not kill the foreground process. Phase 16.
+
+**`sys_fork` fd copy without reference counting.** console and kbd close ops are no-ops; safe for Phase 15. Reference counting deferred.
+
+**`opendir`/`readdir` are not generic VFS paths.** The initrd `readdir` is a synthetic listing. A real directory hierarchy with on-disk inodes is Phase 16+.
 
 ### Phase 4 forward-looking constraints
 
@@ -503,3 +518,5 @@ up by the deferred pattern at the next call to `sched_exit`.
 and ELF segment pages. Phase 10 must walk and free PML4 entries 0–255 only (the user
 half). Entries 256–511 are the kernel half, shared with the master PML4 — touching
 them would corrupt every other process.
+
+*Last updated: 2026-03-21 — Phase 15 complete, make test GREEN. Interactive shell live; fork/execve/waitpid; 8 companion programs in initrd.*
