@@ -125,14 +125,9 @@ sched_exit(void)
     else if (s_current->is_user)
         vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
 
-    /*
-     * PHASE 6 CLEANUP NOTE: ctx_switch saves dying->rsp here — that RSP
-     * is somewhere in the middle of the kernel stack (the call depth at
-     * sched_exit time). Phase 6 must free dying->stack_base (the PMM
-     * allocation) and the process TCB using the physical addresses, not
-     * by dereferencing dying->rsp. dying->stack_base + STACK_SIZE gives
-     * the allocation top; dying->rsp is the current stack pointer.
-     */
+    /* PHASE 8 CLEANUP: free dying->stack_base (kva pages) and dying itself
+     * once a kernel page-table free path (vmm_unmap_page + pmm_free_page)
+     * is available. See CLAUDE.md Phase 8 forward-looking constraints. */
     ctx_switch(dying, s_current);
     __builtin_unreachable();
 }
@@ -198,11 +193,12 @@ sched_tick(void)
      *     the user PML4 is performed by proc_enter_user (first entry) or by
      *     isr_common_stub's saved-CR3 restore (subsequent preemptions).
      *
-     *     CRITICAL: sched_tick runs on the OUTGOING kernel task's physical
-     *     stack (identity-mapped only in master PML4).  Calling
-     *     vmm_switch_to(user_pml4) from that stack would remove the identity
-     *     map, making the stack inaccessible, and causing a triple fault on
-     *     the very next stack access inside arch_vmm_load_pml4.
+     *     CRITICAL: sched_tick runs on the OUTGOING kernel task's kva-mapped
+     *     stack.  Calling vmm_switch_to(user_pml4) from mid-sched_tick would
+     *     switch away from the task being context-switched out while its stack
+     *     is still live on the CPU — the next stack access would use the wrong
+     *     CR3 context.  CR3 switches happen only in proc_enter_user (ring-3
+     *     entry) and sched_exit (task teardown).
      *
      * (b) Switching FROM a user task to a kernel task: isr_common_stub
      *     already switched to master PML4 at interrupt entry.  No further

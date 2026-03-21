@@ -14,8 +14,8 @@
 ;   safe because:
 ;     (a) The user PML4 shares the full kernel higher-half (PML4[511])
 ;         so all kernel code and higher-half stacks are accessible.
-;         Kernel task stacks use KSTACK_VA (a higher-half VA present in
-;         both master and user PML4 via the shared pdpt_hi PDPT page).
+;         Kernel task stacks use kva-allocated per-process VAs (higher-half
+;         pages present in both master and user PML4 via the shared pdpt_hi).
 ;     (b) When sched_exit() transitions from a user task to a kernel task
 ;         it calls vmm_switch_to(master_pml4) before ctx_switch, ensuring
 ;         ctx_switch always runs with the correct PML4.
@@ -80,17 +80,16 @@ syscall_entry:
 ;   [rsp+32] RSP  (user stack top, 16-byte aligned)
 ;   [rsp+40] SS   (0x1B = user data | RPL=3)
 ;
-; We are executing on the user task's kernel stack (KSTACK_VA), which is
+; We are executing on the user task's kva-allocated kernel stack, which is
 ; mapped in BOTH the master and user PML4 via the shared pdpt_hi PDPT page.
-; Switching CR3 here (on KSTACK_VA) is safe: after the CR3 switch the stack
-; is still accessible in the user PML4, and iretq consumes the remaining
-; 5 qwords from the same stack.
+; Switching CR3 here (on the kva stack) is safe: after the CR3 switch the
+; stack is still accessible in the user PML4, and iretq consumes the
+; remaining 5 qwords from the same stack.
 ;
 ; This is the ONLY correct place to switch CR3 to the user PML4 on first
-; entry.  sched_tick must NOT switch CR3 before ctx_switch because sched_tick
-; runs on the outgoing kernel task's physical stack (identity-mapped only in
-; the master PML4); switching to the user PML4 there removes the identity map,
-; causing a triple fault on the very next stack access.
+; entry.  sched_tick must NOT switch CR3 before ctx_switch because switching
+; mid-context-switch would leave the outgoing task's stack live on the CPU
+; under the wrong CR3, causing a triple fault on the very next stack access.
 proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — safe, on KSTACK_VA (shared)
