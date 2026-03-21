@@ -71,14 +71,12 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     /* Allocate kernel stack (single 4KB page) and map it at a fixed higher-half
      * virtual address shared by both the master PML4 and all user PML4s.
      *
-     * IDENTITY MAP DEPENDENCY: kstack_phys is a physical address returned by
-     * pmm_alloc_page().  We pass it to vmm_map_page() which walks the master PML4
-     * via phys_to_table() — valid only while the identity window [0..4MB) is live.
-     *
-     * After vmm_map_page() the kernel stack is accessible at KSTACK_VA in both
-     * the master PML4 and the user PML4 (shared pdpt_hi PDPT page).  We then
-     * use KSTACK_VA (not kstack_phys) for all subsequent pointer arithmetic so
-     * the stack is reachable regardless of which PML4 is loaded in CR3. */
+     * vmm_map_page() walks the master PML4 using the mapped-window allocator
+     * (vmm_window_map/unmap) to access page-table pages. After vmm_map_page()
+     * the kernel stack is accessible at KSTACK_VA in both the master PML4 and
+     * the user PML4 (shared pdpt_hi PDPT page).  We then use KSTACK_VA (not
+     * kstack_phys) for all subsequent pointer arithmetic so the stack is
+     * reachable regardless of which PML4 is loaded in CR3. */
     uint64_t kstack_phys = pmm_alloc_page();
     if (!kstack_phys) {
         printk("[PROC] FAIL: OOM allocating kernel stack\n");
