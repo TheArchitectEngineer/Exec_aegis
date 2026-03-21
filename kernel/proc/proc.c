@@ -183,6 +183,12 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     /* Initialise heap break to top of ELF segments. */
     proc->brk = brk_start;
 
+    /* Initialise mmap bump allocator base (112 TB — safely above heap, below stack). */
+    proc->mmap_base = 0x0000700000000000ULL;
+
+    /* FS base starts at zero; arch_prctl(ARCH_SET_FS) sets it at musl startup. */
+    proc->fs_base = 0;
+
     printk("[CAP] OK: 3 capabilities granted to init\n");
 
     sched_add(&proc->task);
