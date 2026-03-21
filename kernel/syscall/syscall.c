@@ -305,6 +305,8 @@ sys_brk(uint64_t arg1)
 #define PROT_WRITE      0x02
 #endif
 
+#define WNOHANG  1
+
 static uint64_t
 sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
          uint64_t arg4, uint64_t arg5, uint64_t arg6)
@@ -563,6 +565,74 @@ sys_fork(syscall_frame_t *frame)
 
     /* Return child PID to parent */
     return (uint64_t)child->pid;
+}
+
+/*
+ * sys_waitpid — syscall 61
+ *
+ * pid_arg = PID to wait for (-1 = any child)
+ * wstatus_ptr = user pointer to write exit status (0 = ignored)
+ * options = WNOHANG (1) = return 0 immediately if no zombie child
+ *
+ * Scans the run queue for a zombie child matching the request.
+ * On match: writes exit status (if wstatus_ptr != 0), removes zombie from
+ * run queue, frees its resources, and returns the child's PID.
+ * If no zombie is found and WNOHANG is set: returns 0.
+ * If no zombie is found and WNOHANG is not set: blocks until a child exits
+ * (sched_block), then retries via goto.
+ */
+static uint64_t
+sys_waitpid(uint64_t pid_arg, uint64_t wstatus_ptr, uint64_t options)
+{
+    aegis_process_t *caller = (aegis_process_t *)sched_current();
+    int32_t          pid    = (int32_t)(uint32_t)pid_arg;
+
+retry:;
+    /* Scan run queue for a zombie child matching the request. */
+    aegis_task_t *t = sched_current()->next;
+    while (t != sched_current()) {
+        if (t->is_user && t->state == TASK_ZOMBIE) {
+            aegis_process_t *child = (aegis_process_t *)t;
+            if (child->ppid == caller->pid &&
+                (pid == -1 || (uint32_t)pid == child->pid)) {
+                /* Found a zombie to reap. */
+                uint32_t child_pid = child->pid;
+                uint64_t status    = child->exit_status & 0xFF;
+
+                /* Write exit status to user if requested. */
+                if (wstatus_ptr) {
+                    if (!user_ptr_valid(wstatus_ptr, 4)) return (uint64_t)-(int64_t)14; /* EFAULT */
+                    uint32_t wstatus_val = (uint32_t)(status << 8);
+                    copy_to_user((void *)(uintptr_t)wstatus_ptr,
+                                 &wstatus_val, 4);
+                }
+
+                /* Remove zombie from run queue (find predecessor). */
+                aegis_task_t *prev = t;
+                while (prev->next != t) prev = prev->next;
+                prev->next = t->next;
+
+                /* Free zombie resources. */
+                kva_free_pages(child->task.stack_base, child->task.stack_pages);
+                vmm_free_user_pml4(child->pml4_phys);
+                kva_free_pages(child, 1);
+
+                /* Clear waiting_for on the caller — no longer blocked. */
+                sched_current()->waiting_for = 0;
+
+                return (uint64_t)child_pid;
+            }
+        }
+        t = t->next;
+    }
+
+    /* No zombie found. */
+    if (options & WNOHANG) return 0;
+
+    /* Block until a child changes state, then retry. */
+    sched_current()->waiting_for = (pid == -1) ? 0 : (uint32_t)pid;
+    sched_block();
+    goto retry;
 }
 
 /*
@@ -836,6 +906,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 57: return sys_fork(frame);
     case 59: return sys_execve(frame, arg1, arg2, arg3);
     case 60: return sys_exit(arg1);
+    case 61: return sys_waitpid(arg1, arg2, arg3);
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);
     case 231: return sys_exit_group(arg1);
