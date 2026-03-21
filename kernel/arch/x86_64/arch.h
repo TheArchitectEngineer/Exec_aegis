@@ -182,4 +182,26 @@ void arch_set_master_pml4(uint64_t pml4_phys);
  * Prints [SYSCALL] OK. */
 void arch_syscall_init(void);
 
+/* -------------------------------------------------------------------------
+ * Phase 8: SMAP (Supervisor Mode Access Prevention)
+ * ------------------------------------------------------------------------- */
+
+/* arch_smap_init — detect SMAP via CPUID and enable CR4.SMAP if supported.
+ * Prints [SMAP] OK: supervisor access prevention active, or
+ * [SMAP] WARN: not supported by CPU. Must be called after arch_syscall_init(). */
+void arch_smap_init(void);
+
+/* arch_stac — set RFLAGS.AC, temporarily permitting ring-0 access to
+ * user-mode pages under SMAP. Bracket ONLY the single instruction that
+ * loads from a user address; always pair with arch_clac() immediately after.
+ * Never call any function between arch_stac() and arch_clac().
+ * The "memory" clobber prevents the compiler from hoisting user-memory
+ * loads before stac. No-op if SMAP is not enabled. */
+static inline void arch_stac(void) { __asm__ volatile("stac" ::: "memory"); }
+
+/* arch_clac — clear RFLAGS.AC, re-enabling SMAP protection.
+ * Must be called after every arch_stac(). The "memory" clobber prevents
+ * the compiler from sinking user-memory loads past clac. */
+static inline void arch_clac(void) { __asm__ volatile("clac" ::: "memory"); }
+
 #endif
