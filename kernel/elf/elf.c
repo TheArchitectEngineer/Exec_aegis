@@ -1,6 +1,6 @@
 #include "elf.h"
 #include "../mm/vmm.h"
-#include "../mm/kva.h"
+#include "kva.h"
 #include "../core/printk.h"
 #include <stdint.h>
 #include <stddef.h>
