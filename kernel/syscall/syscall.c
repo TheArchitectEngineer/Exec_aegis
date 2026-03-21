@@ -431,6 +431,73 @@ sys_arch_prctl(uint64_t arg1, uint64_t arg2)
     return (uint64_t)-(int64_t)22;   /* EINVAL */
 }
 
+/* ERANGE — result too large; not defined in kernel headers, value matches Linux. */
+#ifndef ERANGE
+#define ERANGE 34
+#endif
+
+/*
+ * sys_getcwd — syscall 79
+ *
+ * arg1 = user buffer pointer
+ * arg2 = buffer size in bytes
+ *
+ * Copies proc->cwd (including null terminator) into the user buffer.
+ * Returns the buffer pointer on success (Linux getcwd ABI), -ERANGE if the
+ * buffer is too small, -EFAULT if the pointer is invalid.
+ */
+static uint64_t
+sys_getcwd(uint64_t buf_ptr, uint64_t size)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    uint64_t len = 0;
+    while (proc->cwd[len]) len++;
+    len++;  /* include null terminator */
+    if (size < len) return (uint64_t)-(int64_t)ERANGE;
+    if (!user_ptr_valid(buf_ptr, len)) return (uint64_t)-(int64_t)14; /* EFAULT */
+    copy_to_user((void *)(uintptr_t)buf_ptr, proc->cwd, len);
+    return buf_ptr;  /* Linux getcwd returns the buffer pointer */
+}
+
+/*
+ * sys_chdir — syscall 80
+ *
+ * arg1 = user pointer to null-terminated path
+ *
+ * Sets proc->cwd to the provided path (up to 255 bytes + null).
+ * Returns 0 on success, -EFAULT if the pointer is invalid.
+ * Note: no filesystem validation in Phase 15; shell is responsible for
+ * passing valid paths.
+ */
+static uint64_t
+sys_chdir(uint64_t path_ptr)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (!user_ptr_valid(path_ptr, 1)) return (uint64_t)-(int64_t)14; /* EFAULT */
+    uint64_t i;
+    for (i = 0; i < 255; i++) {
+        char c;
+        copy_from_user(&c, (const void *)(uintptr_t)(path_ptr + i), 1);
+        proc->cwd[i] = c;
+        if (c == '\0') break;
+    }
+    proc->cwd[255] = '\0';
+    return 0;
+}
+
+/*
+ * sys_getppid — syscall 110
+ *
+ * Returns the parent PID of the calling process.
+ * No capability gate — a process may always query its own parent.
+ */
+static uint64_t
+sys_getppid(void)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    return (uint64_t)proc->ppid;
+}
+
 /* ── Stubs ─────────────────────────────────────────────────────────────────
  * musl startup calls these; they do not require real implementations in
  * Phase 14 with a single short-lived process.
@@ -907,6 +974,9 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 59: return sys_execve(frame, arg1, arg2, arg3);
     case 60: return sys_exit(arg1);
     case 61: return sys_waitpid(arg1, arg2, arg3);
+    case  79: return sys_getcwd(arg1, arg2);
+    case  80: return sys_chdir(arg1);
+    case 110: return sys_getppid();
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);
     case 231: return sys_exit_group(arg1);
