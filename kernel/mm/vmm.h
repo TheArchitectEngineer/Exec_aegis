@@ -86,4 +86,12 @@ void vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt);
  * Uses the internal vmm_window_map/vmm_window_unmap pair. */
 void vmm_zero_page(uint64_t phys);
 
+/* vmm_copy_user_pages — full copy of all user-half (PML4 entries 0-255) pages
+ * from src_pml4 to dst_pml4.
+ * For each present user leaf PTE in src_pml4: allocates a new frame via pmm,
+ * copies contents via the two-window-slot mechanism, maps into dst_pml4.
+ * Returns 0 on success, -1 on OOM.
+ * Called by sys_fork to create the child address space. */
+int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4);
+
 #endif /* AEGIS_VMM_H */

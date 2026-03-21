@@ -30,6 +30,7 @@ static volatile uint64_t *s_window_pte;     /* → s_window_pt[0], set at init  
                                              * from caching the PTE value; each *
                                              * write must reach memory before   *
                                              * the __asm__ volatile invlpg.     */
+static volatile uint64_t *s_window_pte2;    /* → s_window_pt[1], second window slot */
 
 /*
  * vmm_window_map — map an arbitrary physical page into the window slot.
@@ -60,6 +61,26 @@ vmm_window_unmap(void)
 {
     *s_window_pte = 0;
     arch_vmm_invlpg(VMM_WINDOW_VA);
+}
+
+/* vmm_window_map2 — map phys into the second window slot (VMM_WINDOW_VA + 4096).
+ * Returns the VA of the mapped page.
+ * Non-reentrant with vmm_window_map: never hold both simultaneously
+ * across any call that may call vmm_window_map/map2 internally. */
+static void *
+vmm_window_map2(uint64_t phys)
+{
+    *s_window_pte2 = phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+    arch_vmm_invlpg(VMM_WINDOW_VA + 4096);
+    return (void *)(VMM_WINDOW_VA + 4096);
+}
+
+/* vmm_window_unmap2 — clear the second window PTE and flush TLB. */
+static void
+vmm_window_unmap2(void)
+{
+    *s_window_pte2 = 0;
+    arch_vmm_invlpg(VMM_WINDOW_VA + 4096);
 }
 
 /*
@@ -186,8 +207,9 @@ vmm_init(void)
          * where the first section starts, not an additive offset. */
         uint64_t win_phys = (uint64_t)(uintptr_t)s_window_pt
                             - ARCH_KERNEL_VIRT_BASE;
-        pd_hi[3]     = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
-        s_window_pte = &s_window_pt[0];
+        pd_hi[3]      = win_phys | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE;
+        s_window_pte  = &s_window_pt[0];
+        s_window_pte2 = &s_window_pt[1];
     }
 
     s_pml4_phys = pml4_phys;
@@ -538,4 +560,69 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
         pt[pt_idx] = 0;
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
+}
+
+/* vmm_copy_user_pages — full copy of all user-half (PML4 entries 0-255) pages
+ * from src_pml4 to dst_pml4.
+ * For each present user leaf PTE in src_pml4: allocates a new frame via pmm,
+ * copies contents via the two-window-slot mechanism, maps into dst_pml4.
+ * Returns 0 on success, -1 on OOM.
+ * Called by sys_fork to create the child address space. */
+int
+vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
+{
+    uint64_t pml4i, pdpti, pdi, pti;
+    for (pml4i = 0; pml4i < 256; pml4i++) {
+        uint64_t *pml4 = vmm_window_map(src_pml4);
+        uint64_t pml4e = pml4[pml4i];
+        vmm_window_unmap();
+        if (!(pml4e & VMM_FLAG_PRESENT)) continue;
+
+        uint64_t pdpt_phys = pml4e & ~0xFFFULL;
+        for (pdpti = 0; pdpti < 512; pdpti++) {
+            uint64_t *pdpt = vmm_window_map(pdpt_phys);
+            uint64_t pdpte = pdpt[pdpti];
+            vmm_window_unmap();
+            if (!(pdpte & VMM_FLAG_PRESENT)) continue;
+
+            uint64_t pd_phys = pdpte & ~0xFFFULL;
+            for (pdi = 0; pdi < 512; pdi++) {
+                uint64_t *pd = vmm_window_map(pd_phys);
+                uint64_t pde = pd[pdi];
+                vmm_window_unmap();
+                if (!(pde & VMM_FLAG_PRESENT)) continue;
+
+                uint64_t pt_phys = pde & ~0xFFFULL;
+                for (pti = 0; pti < 512; pti++) {
+                    uint64_t *pgtbl = vmm_window_map(pt_phys);
+                    uint64_t pte = pgtbl[pti];
+                    vmm_window_unmap();
+                    if (!(pte & VMM_FLAG_PRESENT)) continue;
+                    if (!(pte & VMM_FLAG_USER)) continue;
+
+                    uint64_t src_phys = pte & ~0x8000000000000FFFULL;
+                    /* Preserve all PTE flags including bit 63 (NX/XD bit). */
+                    uint64_t flags    = pte &  0x8000000000000FFFULL;
+
+                    /* Allocate destination frame */
+                    uint64_t dst_phys = pmm_alloc_page();
+                    if (!dst_phys) return -1;
+
+                    /* Copy via two window slots: slot 1 = src, slot 2 = dst */
+                    void *src_va = vmm_window_map(src_phys);
+                    void *dst_va = vmm_window_map2(dst_phys);
+                    __builtin_memcpy(dst_va, src_va, 4096);
+                    vmm_window_unmap2();
+                    vmm_window_unmap();
+
+                    /* Reconstruct virtual address */
+                    uint64_t va = (pml4i << 39) | (pdpti << 30) |
+                                  (pdi   << 21) | (pti   << 12);
+
+                    vmm_map_user_page(dst_pml4, va, dst_phys, flags);
+                }
+            }
+        }
+    }
+    return 0;
 }
