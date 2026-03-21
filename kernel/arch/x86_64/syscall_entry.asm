@@ -49,49 +49,39 @@ syscall_entry:
     push rcx                       ; return RIP
     push r11                       ; RFLAGS    (top, popped first on return)
 
-    ; ── Step 3: Linux syscall ABI → SysV C 7-argument calling convention ──────
-    ;   Linux:  rax=num, rdi=arg1, rsi=arg2, rdx=arg3, r10=arg4, r8=arg5, r9=arg6
-    ;   SysV 7-arg: rdi=num, rsi=arg1, rdx=arg2, rcx=arg3, r8=arg4, r9=arg5, [rsp+8]=arg6
+    ; ── Step 3: save r8/r9/r10; build 8-arg SysV call ────────────────────────
+    ; Linux: rax=num, rdi=arg1, rsi=arg2, rdx=arg3, r10=arg4, r8=arg5, r9=arg6
+    ; New SysV 8-arg: rdi=frame, rsi=num, rdx=arg1, rcx=arg2, r8=arg3,
+    ;                 r9=arg4, [rsp+8]=arg5(r8), [rsp+16]=arg6(r9) after call.
     ;
-    ;   The Linux syscall ABI requires the kernel to preserve r8, r9, r10 for the
-    ;   calling process — musl relies on r8 surviving across syscall (e.g.
-    ;   __stdout_write saves FILE* in r8 and reads it back after a failed ioctl).
-    ;   We save them on the kernel stack and restore them after the C call.
-    ;
-    ;   Stack layout after the push block (deepest = saved first):
-    ;     ... (Step 2 frame: user RSP, rcx=RIP, r11=RFLAGS)
-    ;     [rsp+0]  = saved user r10
-    ;     [rsp+8]  = saved user r9
-    ;     [rsp+16] = saved user r8
-    ;   After push r9_arg6 (arg6 slot for SysV 7th param):
-    ;     [rsp+0]  = user arg6 (originally r9) — SysV 7th-argument slot
-    ;     [rsp+8]  = saved user r10
-    ;     [rsp+16] = saved user r9
-    ;     [rsp+24] = saved user r8
-    ;   After call instruction:
-    ;     [rsp+0]  = return addr; [rsp+8] = user arg6 (SysV stack arg)
-    ;
-    ;   ORDERING: save r8/r9/r10 first, then do the shuffle.
-    ;             push r9 (user arg6) AFTER saving r9, and the call makes it [rsp+8].
-    push r8          ; save user r8 (to restore after syscall_dispatch returns)
-    push r9          ; save user r9 (to restore after syscall_dispatch returns)
-    push r10         ; save user r10 (to restore after syscall_dispatch returns)
-    push r9          ; arg6 (user r9) → stack for 7th SysV arg (call makes it [rsp+8])
-    mov  r9, r8      ; SysV arg5 ← user r8  (user arg5)
-    mov  r8, r10     ; SysV arg4 ← user r10 (user arg4)
-    mov  rcx, rdx    ; arg3 ← user rdx (safe: rcx was saved to stack in Step 2)
-    mov  rdx, rsi    ; arg2 ← user rsi
-    mov  rsi, rdi    ; arg1 ← user rdi
-    mov  rdi, rax    ; num  ← syscall number (rax unchanged since SYSCALL)
+    ; Push r8/r9/r10 for restore-on-return AND as the syscall_frame_t body
+    ; (frame->r10 is at the lowest address = struct base).
+    push r8          ; save user r8  (also frame->r8 at +16)
+    push r9          ; save user r9  (also frame->r9 at +8)
+    push r10         ; save user r10 (also frame->r10 at +0 = struct base)
+    ; rsp → frame base (&frame->r10)
+
+    ; Push two stack args for 8-arg call (deepest = arg6 first):
+    push r9          ; → [rsp+16] after call = arg6 (user r9)
+    push r8          ; → [rsp+8]  after call = arg5 (user r8)
+    ; rsp → top of stack arg slots; frame is at [rsp+16]
+
+    ; Shuffle registers (dependency-safe order):
+    mov  r9,  r10    ; SysV arg6 = arg4 = user r10
+    mov  r8,  rdx    ; SysV arg5 = arg3 = user rdx
+    mov  rcx, rsi    ; SysV arg4 = arg2 = user rsi
+    mov  rdx, rdi    ; SysV arg3 = arg1 = user rdi
+    mov  rsi, rax    ; SysV arg2 = num  = syscall number
+    lea  rdi, [rsp+16] ; SysV arg1 = frame ptr (past 2 stack-arg slots)
 
     call syscall_dispatch
-    add  rsp, 8      ; discard pushed arg6 slot; stack top = saved user r10
+    add  rsp, 16     ; discard two stack-arg slots; rsp → saved r10
 
-    ; Restore user r8/r9/r10 so the process sees them unchanged after sysret.
-    pop  r10         ; restore user r10
-    pop  r9          ; restore user r9
-    pop  r8          ; restore user r8
-    ; rax = return value (syscall_dispatch sets it; sysretq returns it to user)
+    ; Restore user r10/r9/r8
+    pop  r10
+    pop  r9
+    pop  r8
+    ; rax = return value from syscall_dispatch
 
     ; ── Step 4: restore RFLAGS, RIP, RSP; return to ring 3 ──────────────────
     pop  r11          ; RFLAGS
@@ -126,3 +116,28 @@ proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — safe, on KSTACK_VA (shared)
     iretq
+
+; fork_child_return — SYSRET path for a newly-created child process.
+;
+; The child's kernel stack is built by sys_fork to exactly mirror the
+; syscall_frame_t layout at the top, with callee-saves below.  When
+; ctx_switch returns here via `ret`, the stack looks like:
+;   [rsp+0]  = saved r10  (frame->r10)
+;   [rsp+8]  = saved r9   (frame->r9)
+;   [rsp+16] = saved r8   (frame->r8)
+;   [rsp+24] = RFLAGS     (frame->rflags)
+;   [rsp+32] = user RIP   (frame->rip)
+;   [rsp+40] = user RSP   (frame->user_rsp)
+;
+; We restore r10/r9/r8 and RFLAGS/RIP/RSP exactly as the normal sysret
+; tail does, then force RAX=0 (child's return value from fork()).
+global fork_child_return
+fork_child_return:
+    pop  r10          ; restore user r10
+    pop  r9           ; restore user r9
+    pop  r8           ; restore user r8
+    pop  r11          ; RFLAGS → r11 (sysretq reads r11)
+    pop  rcx          ; user RIP → rcx (sysretq reads rcx)
+    mov  rax, 0       ; child returns 0 from fork()
+    pop  rsp          ; user RSP
+    o64 sysret

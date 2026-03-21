@@ -449,10 +449,11 @@ static uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
 }
 
 uint64_t
-syscall_dispatch(uint64_t num, uint64_t arg1, uint64_t arg2,
-                 uint64_t arg3, uint64_t arg4, uint64_t arg5,
-                 uint64_t arg6)
+syscall_dispatch(syscall_frame_t *frame, uint64_t num,
+                 uint64_t arg1, uint64_t arg2, uint64_t arg3,
+                 uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
+    (void)frame;  /* used by sys_fork/sys_execve in future phases */
     switch (num) {
     case  0: return sys_read(arg1, arg2, arg3);
     case  1: return sys_write(arg1, arg2, arg3);
