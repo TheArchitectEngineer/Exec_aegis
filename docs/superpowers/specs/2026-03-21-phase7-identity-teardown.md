@@ -168,6 +168,8 @@ be freed when a kernel page-table free path exists.
 
 ### `kernel/sched/sched.c`
 
+Add `#include "kva.h"` at the top.
+
 In `sched_spawn`, replace physical-cast allocations:
 
 ```c
@@ -188,13 +190,17 @@ replaced by `kva_alloc_pages(STACK_PAGES)`, which maps `STACK_PAGES`
 individually-allocated PMM pages to consecutive virtual addresses. Physical
 contiguity is no longer assumed or required.
 
-Update `sched_exit` comment: TCBs are now in the kernel higher-half (kva
-range), accessible from any CR3 including user PML4s. The unconditional master
-PML4 switch at the top of `sched_exit` is retained as a defensive measure
-(ensures we're always on a stack that's identity-free and fully mapped) but
-its original reason (TCBs in identity-mapped low memory) no longer applies.
+Update `sched_exit` comments in two places:
+1. Top-of-function comment: TCBs are now in the kernel higher-half (kva
+   range), accessible from any CR3. The master PML4 switch is retained as a
+   defensive measure but its original reason no longer applies.
+2. Bottom conditional comment block (~line 154): update the phrase
+   "identity-mapped stack" — stacks are now kva-mapped higher-half VAs,
+   not identity-mapped low memory.
 
 ### `kernel/proc/proc.c`
+
+Add `#include "kva.h"` at the top.
 
 In `proc_spawn`, replace physical-cast TCB allocation and fixed KSTACK_VA:
 
@@ -221,6 +227,8 @@ kernel stack VA from the bump allocator. `proc->task.stack_base` and
 to the per-process value.
 
 ### `kernel/elf/elf.c`
+
+Add `#include "kva.h"` at the top.
 
 In `elf_load`, replace the physical-cast segment write:
 
@@ -258,7 +266,7 @@ vmm_teardown_identity();  /* pml4[0] = 0, CR3 reload */
 sched_start();
 ```
 
-Add `#include "../mm/kva.h"`.
+Add `#include "kva.h"` (consistent with the bare-name include style used for `vmm.h` and `pmm.h` in this file).
 
 ---
 
@@ -270,10 +278,10 @@ Add `#include "../mm/kva.h"`.
 | `kernel/mm/kva.h` | New — `kva_init`, `kva_alloc_pages`, `kva_page_phys` |
 | `kernel/mm/vmm.c` | Add `vmm_phys_of`, `vmm_teardown_identity` |
 | `kernel/mm/vmm.h` | Declare `vmm_phys_of`, `vmm_teardown_identity` |
-| `kernel/sched/sched.c` | Replace physical casts with `kva_alloc_pages` |
-| `kernel/proc/proc.c` | Replace physical casts + delete `KSTACK_VA` |
-| `kernel/elf/elf.c` | Replace physical cast + `kva_page_phys` for user mapping |
-| `kernel/core/main.c` | Wire `kva_init` + `vmm_teardown_identity` |
+| `kernel/sched/sched.c` | Add `#include "kva.h"`; replace physical casts with `kva_alloc_pages`; update stale `sched_exit` comments |
+| `kernel/proc/proc.c` | Add `#include "kva.h"`; replace physical casts + delete `KSTACK_VA` |
+| `kernel/elf/elf.c` | Add `#include "kva.h"`; replace physical cast + `kva_page_phys` for user mapping |
+| `kernel/core/main.c` | Add `#include "kva.h"`; wire `kva_init` + `vmm_teardown_identity` |
 | `Makefile` | Add `kva.c` to `MM_SRCS` |
 | `tests/expected/boot.txt` | Add `[KVA] OK` and `[VMM] OK: identity map removed` lines |
 | `.claude/CLAUDE.md` | Update build status table |
@@ -282,15 +290,34 @@ Add `#include "../mm/kva.h"`.
 
 ## Test Oracle
 
-`tests/expected/boot.txt` gains two lines after the mapped-window line:
+`tests/expected/boot.txt` gains two lines. `[KVA] OK` appears immediately
+after `[VMM] OK: mapped-window allocator active` (because `kva_init` is called
+right after `vmm_init`). `[VMM] OK: identity map removed` appears after
+`[SYSCALL] OK` and before `[SCHED] OK` (because `vmm_teardown_identity` is
+called after all spawning, just before `sched_start`):
 
 ```
+[SERIAL] OK: COM1 initialized at 115200 baud
+[VGA] OK: text mode 80x25
+[PMM] OK: 127MB usable across 2 regions
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
 [VMM] OK: mapped-window allocator active
 [KVA] OK: kernel virtual allocator active
-[VMM] OK: identity map removed
 [CAP] OK: capability subsystem reserved
-...
+[IDT] OK: 48 vectors installed
+[PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
+[PIT] OK: timer at 100 Hz
+[KBD] OK: PS/2 keyboard ready
+[GDT] OK: ring 3 descriptors installed
+[TSS] OK: RSP0 initialized
+[SYSCALL] OK: SYSCALL/SYSRET enabled
+[VMM] OK: identity map removed
+[SCHED] OK: scheduler started, 3 tasks
+[USER] hello from ring 3
+[USER] hello from ring 3
+[USER] hello from ring 3
+[USER] done
+[AEGIS] System halted.
 ```
 
 ---
