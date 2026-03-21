@@ -18,6 +18,5 @@
 [CAP] OK: 3 capabilities granted to init
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 2 tasks
-[MOTD] Hello from initrd!
-[HEAP] OK: brk works
+[INIT] Hello from musl libc!
 [AEGIS] System halted.
