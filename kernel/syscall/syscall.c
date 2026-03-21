@@ -436,6 +436,92 @@ sys_arch_prctl(uint64_t arg1, uint64_t arg2)
 #define ERANGE 34
 #endif
 
+/* EBADF — bad file descriptor; value matches Linux. */
+#ifndef EBADF
+#define EBADF 9
+#endif
+
+/* ENOTDIR — not a directory; value matches Linux. */
+#ifndef ENOTDIR
+#define ENOTDIR 20
+#endif
+
+/*
+ * sys_getdents64 — syscall 217
+ *
+ * arg1 = fd (must be a directory)
+ * arg2 = user pointer to output buffer
+ * arg3 = buffer size in bytes
+ *
+ * Fills the buffer with linux_dirent64 records for entries starting at the
+ * current directory offset (f->offset), advancing the offset for each entry
+ * consumed.  Returns total bytes written, or negative errno.
+ *
+ * The linux_dirent64 layout matches the Linux kernel ABI exactly:
+ *   d_ino    uint64  inode number (we use offset+1 as a synthetic value)
+ *   d_off    int64   offset to next record (we use offset+1)
+ *   d_reclen uint16  length of this record including trailing padding
+ *   d_type   uint8   DT_REG=8, DT_DIR=4
+ *   d_name   char[]  null-terminated name, padded to 8-byte record boundary
+ *
+ * Record size formula: (19 + namelen + 1) rounded up to 8 bytes.
+ *   19 = sizeof(d_ino)+sizeof(d_off)+sizeof(d_reclen)+sizeof(d_type)
+ *        = 8 + 8 + 2 + 1 = 19
+ */
+
+/* linux_dirent64 matches the Linux kernel structure exactly. */
+typedef struct {
+    uint64_t d_ino;
+    int64_t  d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[1];  /* flexible — actual size determined by d_reclen */
+} __attribute__((packed)) linux_dirent64_t;
+
+static uint64_t
+sys_getdents64(uint64_t fd_num, uint64_t dirp, uint64_t count)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (fd_num >= PROC_MAX_FDS) return (uint64_t)-(int64_t)EBADF;
+    vfs_file_t *f = &proc->fds[fd_num];
+    if (!f->ops) return (uint64_t)-(int64_t)EBADF;
+    if (!f->ops->readdir) return (uint64_t)-(int64_t)ENOTDIR;
+    if (!user_ptr_valid(dirp, count)) return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    uint64_t written = 0;
+    char name[256];
+    uint8_t type;
+
+    while (1) {
+        if (f->ops->readdir(f->priv, f->offset, name, &type) != 0) break;
+
+        /* Record size: fixed header (19 bytes) + name + null, rounded up to 8 */
+        uint64_t namelen = 0;
+        while (name[namelen]) namelen++;
+        uint16_t reclen = (uint16_t)(19 + namelen + 1);
+        reclen = (uint16_t)((reclen + 7) & ~7);
+
+        if (written + reclen > count) break;
+
+        /* Build dirent in kernel buffer, then copy_to_user */
+        uint8_t kbuf[300];
+        linux_dirent64_t *d = (linux_dirent64_t *)kbuf;
+        d->d_ino    = f->offset + 1;
+        d->d_off    = (int64_t)(f->offset + 1);
+        d->d_reclen = reclen;
+        d->d_type   = type;
+        uint64_t i;
+        for (i = 0; i <= namelen; i++) d->d_name[i] = name[i];
+        /* zero-pad trailing bytes to reach record boundary */
+        for (i = 1 + namelen; i < (uint64_t)(reclen - 19); i++) d->d_name[i] = '\0';
+
+        copy_to_user((void *)(uintptr_t)(dirp + written), kbuf, reclen);
+        written += reclen;
+        f->offset++;
+    }
+    return written;
+}
+
 /*
  * sys_getcwd — syscall 79
  *
@@ -976,6 +1062,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 61: return sys_waitpid(arg1, arg2, arg3);
     case  79: return sys_getcwd(arg1, arg2);
     case  80: return sys_chdir(arg1);
+    case 217: return sys_getdents64(arg1, arg2, arg3);
     case 110: return sys_getppid();
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);

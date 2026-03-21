@@ -30,15 +30,17 @@ kbd_vfs_close_fn(void *priv)
 }
 
 static const vfs_ops_t s_kbd_ops = {
-	.read  = kbd_vfs_read_fn,
-	.write = kbd_vfs_write_fn,
-	.close = kbd_vfs_close_fn,
+	.read    = kbd_vfs_read_fn,
+	.write   = kbd_vfs_write_fn,
+	.close   = kbd_vfs_close_fn,
+	.readdir = (void *)0,
 };
 
 static vfs_file_t s_kbd_file = {
 	.ops    = &s_kbd_ops,
 	.priv   = (void *)0,
 	.offset = 0,
+	.size   = 0,
 };
 
 vfs_file_t *
