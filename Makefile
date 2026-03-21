@@ -25,7 +25,8 @@ CFLAGS = \
     -Ikernel/sched \
     -Ikernel/proc \
     -Ikernel/syscall \
-    -Ikernel/elf
+    -Ikernel/elf \
+    -Ikernel/fs
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -68,6 +69,14 @@ ARCH_ASMS = \
 
 SCHED_SRCS = kernel/sched/sched.c
 
+FS_SRCS = \
+    kernel/fs/vfs.c \
+    kernel/fs/initrd.c \
+    kernel/fs/console.c \
+    kernel/fs/kbd_vfs.c
+
+FS_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(FS_SRCS))
+
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
     kernel/proc/proc.c \
@@ -82,7 +91,7 @@ ARCH_ASM_OBJS = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
 SCHED_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
 USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 
-ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) $(SCHED_OBJS) $(USERSPACE_OBJS)
+ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) $(SCHED_OBJS) $(FS_OBJS) $(USERSPACE_OBJS)
 
 .PHONY: all iso run test clean
 
