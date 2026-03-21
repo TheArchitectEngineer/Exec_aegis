@@ -626,3 +626,54 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
     }
     return 0;
 }
+
+/* vmm_free_user_pages — free only leaf physical frames in user half.
+ * Does NOT free PT/PD/PDPT pages and does NOT free the PML4 itself.
+ * Intended for sys_execve: the process keeps its PML4 and page-table
+ * structure, discards only the old data/text frames, then loads new ones.
+ *
+ * The inner PT loop holds the window open across all 512 slots.  This is
+ * safe because pmm_free_page does not call vmm_window_map; the non-
+ * reentrancy guarantee holds for single-CPU operation (Phase 15 scope). */
+void
+vmm_free_user_pages(uint64_t pml4_phys)
+{
+    uint64_t pml4i, pdpti, pdi, pti;
+    for (pml4i = 0; pml4i < 256; pml4i++) {
+        uint64_t *pml4 = vmm_window_map(pml4_phys);
+        uint64_t pml4e = pml4[pml4i];
+        vmm_window_unmap();
+        if (!(pml4e & VMM_FLAG_PRESENT)) continue;
+
+        uint64_t pdpt_phys = pml4e & ~0xFFFULL;
+        for (pdpti = 0; pdpti < 512; pdpti++) {
+            uint64_t *pdpt = vmm_window_map(pdpt_phys);
+            uint64_t pdpte = pdpt[pdpti];
+            vmm_window_unmap();
+            if (!(pdpte & VMM_FLAG_PRESENT)) continue;
+            if (pdpte & PTE_PS) continue; /* 1GB page — unexpected, skip */
+
+            uint64_t pd_phys = pdpte & ~0xFFFULL;
+            for (pdi = 0; pdi < 512; pdi++) {
+                uint64_t *pd = vmm_window_map(pd_phys);
+                uint64_t pde = pd[pdi];
+                vmm_window_unmap();
+                if (!(pde & VMM_FLAG_PRESENT)) continue;
+                if (pde & PTE_PS) continue; /* 2MB page — unexpected, skip */
+
+                uint64_t pt_phys = pde & ~0xFFFULL;
+                /* Hold window open across all PT slots: pmm_free_page does
+                 * not call vmm_window_map so the mapping remains valid. */
+                uint64_t *pt = vmm_window_map(pt_phys);
+                for (pti = 0; pti < 512; pti++) {
+                    uint64_t pte = pt[pti];
+                    if (pte & VMM_FLAG_PRESENT) {
+                        pt[pti] = 0;
+                        pmm_free_page(pte & ~0xFFFULL);
+                    }
+                }
+                vmm_window_unmap();
+            }
+        }
+    }
+}
