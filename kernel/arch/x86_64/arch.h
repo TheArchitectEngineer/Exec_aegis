@@ -209,4 +209,23 @@ static inline void arch_stac(void) { if (arch_smap_enabled) __asm__ volatile("st
  * No-op if SMAP is not enabled (guards against #UD). */
 static inline void arch_clac(void) { if (arch_smap_enabled) __asm__ volatile("clac" ::: "memory"); }
 
+/* -------------------------------------------------------------------------
+ * Phase 14: FS segment base (TLS)
+ * ------------------------------------------------------------------------- */
+
+/* arch_set_fs_base — write addr to IA32_FS_BASE MSR (0xC0000100).
+ * Used by sys_arch_prctl(ARCH_SET_FS) to configure musl's TLS pointer.
+ * The SYSCALL instruction does not save/restore FS.base, so the value
+ * set here persists across all subsequent syscalls for the lifetime of
+ * the process. When a second user process is introduced, ctx_switch must
+ * save proc->fs_base on outgoing and call arch_set_fs_base(proc->fs_base)
+ * on incoming before returning to user space. */
+static inline void
+arch_set_fs_base(uint64_t addr)
+{
+    uint32_t lo = (uint32_t)addr;
+    uint32_t hi = (uint32_t)(addr >> 32);
+    __asm__ volatile ("wrmsr" : : "c"(0xC0000100U), "a"(lo), "d"(hi));
+}
+
 #endif
