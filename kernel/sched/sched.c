@@ -1,6 +1,6 @@
 #include "sched.h"
 #include "arch.h"
-#include "pmm.h"
+#include "kva.h"
 #include "printk.h"
 #include "vmm.h"
 #include "proc.h"
@@ -29,41 +29,12 @@ sched_init(void)
 void
 sched_spawn(void (*fn)(void))
 {
-    /* Allocate TCB (one page from PMM — plenty of space).
-     *
-     * IDENTITY MAP DEPENDENCY: pmm_alloc_page() returns a physical address.
-     * The cast to aegis_task_t * is valid only while the identity window
-     * [0..4MB) is active. Phase 4 must not tear down the identity map before
-     * replacing these raw physical casts with a mapped-window allocator.
-     * See CLAUDE.md "Phase 3 forward-looking constraints". */
-    uint64_t tcb_phys = pmm_alloc_page();
-    if (!tcb_phys) {
-        printk("[SCHED] FAIL: OOM allocating TCB\n");
-        for (;;) {}
-    }
-    aegis_task_t *task = (aegis_task_t *)(uintptr_t)tcb_phys;
+    /* Allocate TCB (one kva page — higher-half VA, no identity-map dependency). */
+    aegis_task_t *task = kva_alloc_pages(1);
 
-    /* Allocate stack (STACK_PAGES individual pages).
-     *
-     * CONTIGUITY ASSUMPTION: The Phase 3 PMM is a bitmap allocator over the
-     * physical memory map. Early boot memory is a single contiguous range and
-     * the bitmap allocates sequentially, so successive pmm_alloc_page() calls
-     * return physically adjacent frames. This allows treating the pages as a
-     * single STACK_SIZE region. If the PMM ever becomes non-sequential (e.g.
-     * after buddy allocator introduction in Phase 5), this must be replaced
-     * with a multi-page contiguous allocation.
-     */
-    uint8_t *stack = (void *)0;
-    uint32_t i;
-    for (i = 0; i < STACK_PAGES; i++) {
-        uint64_t p = pmm_alloc_page();
-        if (!p) {
-            printk("[SCHED] FAIL: OOM allocating stack\n");
-            for (;;) {}
-        }
-        if (i == 0)
-            stack = (uint8_t *)(uintptr_t)p;
-    }
+    /* Allocate stack (STACK_PAGES kva pages — consecutive VAs, no contiguity
+     * assumption on physical addresses). */
+    uint8_t *stack = kva_alloc_pages(STACK_PAGES);
 
     /* Set up the stack to look like ctx_switch already ran.
      *
@@ -120,17 +91,12 @@ sched_add(aegis_task_t *task)
 void
 sched_exit(void)
 {
-    /* Switch to master PML4 immediately.
+    /* Switch to master PML4 at entry (defensive measure).
      *
-     * sched_exit is called from sys_exit → syscall_dispatch, which runs with
-     * the user PML4 loaded in CR3.  The user PML4 has no identity map for
-     * [0..4MB); all TCBs and their ->next pointers are physical addresses in
-     * that range.  Any dereference of s_current or prev->next before switching
-     * to the master PML4 causes a #PF.
-     *
-     * We switch unconditionally here (even if dying is a kernel task, the
-     * master PML4 is always valid) and then re-switch at the bottom when we
-     * know which PML4 the next task needs. */
+     * Before Phase 7: required because TCBs were in identity-mapped [0..4MB),
+     * which is absent from user PML4s.
+     * After Phase 7: TCBs are kva-mapped higher-half VAs, visible from any CR3
+     * (pd_hi is shared). The switch is retained as a defensive measure. */
     vmm_switch_to(vmm_get_master_pml4());
 
     /* IF=0 throughout (IA32_SFMASK cleared IF on SYSCALL entry) —
@@ -151,10 +117,9 @@ sched_exit(void)
 
     arch_set_kernel_stack(s_current->kernel_stack_top);
 
-    /* sched_exit is called from syscall context (ring-3 → ring-0 via SYSCALL).
-     * At this point the user PML4 is loaded.  If the next task is a kernel
-     * task, switch back to master PML4 so its identity-mapped stack is
-     * accessible.  If the next task is another user task, switch to its PML4. */
+    /* If dying is a user task and the next task is a kernel task, switch to
+     * master PML4. Kernel task stacks are kva-mapped (higher-half), visible
+     * in any PML4, but the switch ensures a clean CR3 state for the resume. */
     if (dying->is_user && !s_current->is_user)
         vmm_switch_to(vmm_get_master_pml4());
     else if (s_current->is_user)
