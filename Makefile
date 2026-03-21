@@ -81,7 +81,7 @@ USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
-    kernel/init_bin.c
+    kernel/hello_bin.c
 
 ARCH_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
 CORE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(CORE_SRCS))
@@ -114,13 +114,13 @@ $(CAP_LIB): kernel/cap/src/lib.rs kernel/cap/Cargo.toml
 	    --target x86_64-unknown-none \
 	    --manifest-path kernel/cap/Cargo.toml
 
-user/init/init.elf: user/init/main.c
-	$(MAKE) -C user/init
+user/hello/hello.elf: user/hello/main.c
+	$(MAKE) -C user/hello
 
-kernel/init_bin.c: user/init/init.elf
-	cd user/init && xxd -i init.elf > ../../kernel/init_bin.c
+kernel/hello_bin.c: user/hello/hello.elf
+	cd user/hello && xxd -i hello.elf > ../../kernel/hello_bin.c
 
-$(BUILD)/aegis.elf: kernel/init_bin.c $(ALL_OBJS) $(CAP_LIB)
+$(BUILD)/aegis.elf: kernel/hello_bin.c $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
 $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
@@ -142,6 +142,7 @@ test: iso
 
 clean:
 	rm -rf $(BUILD)
-	rm -f kernel/init_bin.c
+	rm -f kernel/init_bin.c kernel/hello_bin.c
 	$(MAKE) -C user/init clean
+	$(MAKE) -C user/hello clean
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml
