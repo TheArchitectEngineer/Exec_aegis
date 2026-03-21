@@ -24,6 +24,8 @@ typedef struct {
     vfs_file_t    fds[PROC_MAX_FDS];      /* Phase 10 — ops==NULL means slot free */
     cap_slot_t    caps[CAP_TABLE_SIZE];   /* Phase 11 — capability table */
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
+    uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
+    uint64_t      fs_base;                /* FS segment base for TLS; set by arch_prctl */
 } aegis_process_t;
 
 /* Load elf_data into a new user process and add it to the scheduler run queue.
