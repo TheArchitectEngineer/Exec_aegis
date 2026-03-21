@@ -5,7 +5,7 @@
 
 typedef struct aegis_task_t {
     uint64_t             rsp;              /* MUST be first — ctx_switch reads [rdi+0] */
-    uint8_t             *stack_base;       /* bottom of PMM-allocated stack (for future cleanup) */
+    uint8_t             *stack_base;       /* bottom of kva-allocated stack (freed on exit via kva_free_pages) */
     uint64_t             kernel_stack_top; /* RSP0 value: kernel stack top for this task */
     uint32_t             tid;              /* task ID */
     uint8_t              is_user;          /* 1 = user process (aegis_process_t), 0 = kernel task */
@@ -33,8 +33,8 @@ void sched_tick(void);
 void sched_add(aegis_task_t *task);
 
 /* Remove the current task from the run queue and switch to the next task.
- * Called from syscall exit (60). Does not return. Memory is leaked
- * (intentional for Phase 5 — Phase 6 adds cleanup). */
+ * Called from sys_exit (syscall 60). Does not return.
+ * TCB and kernel stack are freed via deferred kva_free_pages at the next sched_exit call. */
 void sched_exit(void);
 
 #endif /* AEGIS_SCHED_H */
