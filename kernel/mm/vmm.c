@@ -176,7 +176,7 @@ vmm_init(void)
     /* Install the mapped-window PT into pd_hi[3].
      * pd_hi is a local pointer (identity-cast of pd_hi_phys) in scope here.
      * pd_hi[0] and pd_hi[1] are the two 2MB kernel huge pages.
-     * pd_hi[2] is used by KSTACK_VA at runtime — do not touch.
+     * pd_hi[2] is available (KSTACK_VA was deleted in Phase 7; kva starts at pd_hi[4]).
      * pd_hi[3] covers 0xFFFFFFFF80600000 (VMM_WINDOW_VA) — currently NULL. */
     {
         /* Physical address of s_window_pt: PA = VA - KERN_VMA.

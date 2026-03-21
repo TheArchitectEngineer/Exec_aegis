@@ -9,8 +9,8 @@
 ; CR3 save/restore (Phase 5 — user-process support):
 ;   When an interrupt fires while the user PML4 is loaded (ring-3 context),
 ;   all kernel code (isr_dispatch, scheduler, printk) must run with the
-;   master PML4 so it can safely dereference identity-mapped physical pointers
-;   (TCBs, kernel stacks, PMM bitmap).
+;   master PML4 so that kva-mapped objects (TCBs, kernel stacks) are
+;   reachable via the shared pd_hi page-table chain.
 ;
 ;   We push the current CR3 onto the kernel stack (below the cpu_state_t) and
 ;   restore it before iretq.  Saving CR3 on the stack (not in a global) is
@@ -152,7 +152,7 @@ isr_common_stub:
     push rax                        ; [RSP] = saved CR3
 
     ; Switch to master PML4 so isr_dispatch and all downstream code can
-    ; dereference identity-mapped physical pointers (TCBs, stacks).
+    ; access kva-mapped kernel objects (TCBs, stacks) via the shared pd_hi.
     ; Skip if g_master_pml4 is 0 (early boot before vmm_init) or if CR3
     ; already equals master PML4 (interrupt fired in kernel context).
     mov  rbx, [rel g_master_pml4]
