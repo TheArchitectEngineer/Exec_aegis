@@ -6,6 +6,8 @@
 #include "kva.h"
 #include "sched.h"
 #include "../proc/proc.h"
+#include "vfs.h"
+#include "console.h"
 #include <stdint.h>
 
 /*
@@ -19,43 +21,13 @@
  *   mb_info  — physical address of multiboot2 info struct
  */
 
-/* Task 0: keyboard echo — reads keystrokes and prints them. */
+/* Task 0: idle — enables interrupts and halts until next tick.
+ * Never exits. Shutdown is triggered by sched_exit when the last user
+ * process calls sys_exit. */
 static void
-task_kbd(void)
+task_idle(void)
 {
-    /* Enable interrupts. Tasks own their interrupt-enable state.
-     * sti is called here (not in sched_start) so that the first ctx_switch
-     * into this task lands on our own stack before the PIT can fire. */
     __asm__ volatile ("sti");
-    for (;;) {
-        char c = kbd_read();
-        printk("%c", c);
-    }
-}
-
-/* Task 1: heartbeat — exits after 500 ticks to allow make test to complete. */
-static void
-task_heartbeat(void)
-{
-    /* Enable interrupts — see task_kbd comment. */
-    __asm__ volatile ("sti");
-
-    /* Spin until 500 ticks have elapsed. The scheduler preempts us on each
-     * timer tick; we simply loop until the condition is met. */
-    while (arch_get_ticks() < 500)
-        ;
-
-    printk("[AEGIS] System halted.\n");
-
-    /* Request shutdown via pit_handler (ISR context, IF=0).
-     * Calling arch_debug_exit directly from task context races with
-     * QEMU 10's async isa-debug-exit: the CPU keeps running for several
-     * ticks after the port write, allowing this task to re-enter printk
-     * and emit a partial second line. Deferring to the ISR eliminates
-     * the race — pit_handler runs with IF=0 and exits immediately. */
-    arch_request_shutdown();
-
-    /* Spin until the next timer tick fires and pit_handler exits QEMU. */
     for (;;)
         __asm__ volatile ("hlt");
 }
@@ -80,9 +52,10 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_tss_init();        /* TSS RSP0 for ring-3 → ring-0 transitions      */
     arch_syscall_init();    /* enable SYSCALL/SYSRET MSRs — [SYSCALL] OK     */
     arch_smap_init();       /* SMAP detect + enable — [SMAP] OK/WARN         */
+    vfs_init();             /* [VFS] OK + [INITRD] OK                        */
+    console_init();         /* register stdout device (silent)               */
     sched_init();           /* init run queue (no tasks yet)                 */
-    sched_spawn(task_kbd);
-    sched_spawn(task_heartbeat);
+    sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */
     /* All TCBs and stacks are in kva range at this point —
      * safe to remove the identity map. */
