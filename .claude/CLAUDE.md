@@ -295,6 +295,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Test harness (make test) | ✅ Done | GRUB ISO + ANSI-strip + diff; exits 0 |
 | Physical memory manager | ✅ Done | Bitmap allocator; single-page (4KB) only; multi-page deferred to buddy allocator |
 | Virtual memory / paging | ✅ Done | Higher-half kernel at 0xFFFFFFFF80000000; 5-table setup (identity + kernel); identity map kept; teardown deferred to Phase 4 |
+| Mapped-window allocator | ✅ Done | VMM_WINDOW_VA=0xFFFFFFFF80600000; phys_to_table/zero_page eliminated from vmm.c; identity map still active (teardown Phase 7) |
 | IDT | ✅ Done | 48 interrupt gates; isr_dispatch handles PIC EOI before calling handlers |
 | PIC | ✅ Done | 8259A remapped; IRQ0-15 → vectors 0x20-0x2F; per-driver unmask |
 | PIT | ✅ Done | Channel 0 at 100 Hz; arch_get_ticks() accessor; arch_request_shutdown() defers exit to ISR |
@@ -348,6 +349,8 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 
 *Last updated: 2026-03-20 — Phase 5 complete, make test GREEN. User-space process runs init binary via SYSCALL/SYSRET; sys_write + sys_exit wired; CR3 save/restore in isr_common_stub; proc_enter_user switches PML4 on KSTACK_VA.*
 
+*Last updated: 2026-03-21 — Phase 6 complete, make test GREEN. Mapped-window allocator live; phys_to_table/zero_page eliminated from vmm.c.*
+
 ### Phase 4 forward-looking constraints
 
 **Identity map still active.** TCB and stack allocations in `sched.c` cast PMM
@@ -384,3 +387,55 @@ because TCBs live in the identity-mapped [0..4MB) range, which is absent from
 user PML4s. This is correct and intentional. Phase 6 cleanup: after introducing
 a proper kernel allocator, TCBs should be allocated from the higher-half so
 this unconditional switch is no longer necessary.
+
+### Phase 6 constraints — Mapped-window allocator implementation
+
+**Window-map walk pattern: map once, unmap once — not per-level.**
+The `vmm_window_map` / `vmm_window_unmap` pair exposes a single fixed virtual
+slot backed by `s_window_pte`. The correct walk pattern is:
+
+  map(pml4_phys) → read PML4[i] → overwrite PTE with pdpt_phys → read PDPT[j]
+  → overwrite PTE with pd_phys → read PD[k] → overwrite PTE with pt_phys
+  → read PT[l] → vmm_window_unmap()
+
+One `invlpg` per level (4 total for a 4-level walk), one unmap at the end.
+Do NOT call `vmm_window_unmap()` between levels — that doubles the `invlpg`
+count to 8 and creates a window between unmap and re-map where a stale TLB
+entry could produce a silent wrong read if any code path (assertion, printk)
+executes between the two calls. Overwriting the PTE directly to advance to the
+next level is safe: the non-reentrancy guarantee holds because this is
+single-threaded at Phase 6 scope.
+
+**`s_window_pte` must remain `volatile` — do not remove it.**
+The compiler must not cache the PTE value or reorder the write to `*s_window_pte`
+against the `invlpg` instruction. `volatile` prevents the compiler from hoisting
+or coalescing the write. The `invlpg` itself is inside an `__asm__ volatile`
+block, which acts as a compiler barrier, so write ordering is correct as long as
+the `volatile` qualifier stays. Any future maintainer who sees `volatile` on a
+static pointer and reaches for the delete key must read this comment first.
+
+**Identity map teardown order is non-negotiable.**
+Phase 6 sequence:
+  1. Implement `vmm_window_map` / `vmm_window_unmap` (the window slot).
+  2. Replace every `phys_to_table()` call in `vmm.c` with window-mapped access.
+  3. Verify `make test` is GREEN.
+  4. Only then clear PML4[0] (the identity-map entry) and `invlpg` the range.
+Tearing down PML4[0] before step 2-3 is complete will cause an undebuggable
+fault on the next `phys_to_table()` call.
+
+### Phase 7 forward-looking constraints
+
+**Identity map still active.** Phase 6 eliminated `phys_to_table` from `vmm.c`
+but TCBs and kernel stacks in `sched.c` and `proc.c` still cast PMM physical
+addresses to pointers via the identity map. Run the following to get a complete
+list before starting Phase 7:
+```bash
+grep -rn '(uint64_t \*)(uintptr_t)\|(uint8_t \*)(uintptr_t)\|(void \*)(uintptr_t)' kernel/
+```
+Known sites: `sched_spawn` (TCB + stack), `proc_spawn` (PCB + kernel stack).
+Phase 7 must migrate these to a higher-half slab or kernel allocator, then
+remove the `[0..4MB) → [0..4MB)` identity entries from `pd_lo` and flush TLB.
+
+**Single window slot.** `s_window_pt[512]` has 511 unused entries. Phase 7+
+work involving concurrent kernel threads or DMA mappings may require additional
+slots.
