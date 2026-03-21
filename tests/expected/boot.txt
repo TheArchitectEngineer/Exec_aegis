@@ -2,6 +2,7 @@
 [VGA] OK: text mode 80x25
 [PMM] OK: 127MB usable across 2 regions
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
+[VMM] OK: mapped-window allocator active
 [CAP] OK: capability subsystem reserved
 [IDT] OK: 48 vectors installed
 [PIC] OK: IRQ0-15 remapped to vectors 0x20-0x2F
