@@ -2,6 +2,7 @@
 #include "elf.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "kva.h"
 #include "printk.h"
 #include "arch.h"
 #include <stdint.h>
@@ -22,27 +23,6 @@ extern const unsigned int  init_elf_len;
 #define STACK_SIZE  4096UL
 
 /*
- * KSTACK_VA — fixed higher-half virtual address for the user process kernel stack.
- *
- * The kernel's higher-half mapping covers [0xFFFFFFFF80000000, 0xFFFFFFFF80400000)
- * via 2MB huge pages.  We place the user kernel stack immediately above this range,
- * mapping a single 4KB page at 0xFFFFFFFF80400000 via vmm_map_page().
- *
- * Because vmm_map_page() adds PTE entries under the shared pdpt_hi PDPT page
- * (index 510 in PML4[511]), this mapping is visible in BOTH the master PML4 and
- * every user-process PML4 created by vmm_create_user_pml4().  That property is
- * required so that:
- *   (a) ctx_switch can access the kernel stack via this VA regardless of which
- *       PML4 is active (master or user), and
- *   (b) TSS.rsp0 (set to KSTACK_VA + STACK_SIZE) is a valid virtual address in
- *       the user PML4, allowing the CPU to deliver ring-3 interrupts.
- *
- * Phase 5 constraint: single user process only.  A multi-process design must
- * allocate a distinct kernel-stack VA for each process (e.g. via a VA allocator).
- */
-#define KSTACK_VA   0xFFFFFFFF80400000ULL
-
-/*
  * User stack layout:
  *   top = USER_STACK_TOP  (= 0x7FFFFFFF000, 16-byte aligned)
  *   page = [USER_STACK_PAGE, USER_STACK_TOP)
@@ -60,31 +40,15 @@ extern void proc_enter_user(void);
 void
 proc_spawn(const uint8_t *elf_data, size_t elf_len)
 {
-    /* Allocate process control block (one PMM page) */
-    uint64_t tcb_phys = pmm_alloc_page();
-    if (!tcb_phys) {
-        printk("[PROC] FAIL: OOM allocating process TCB\n");
-        for (;;) {}
-    }
-    aegis_process_t *proc = (aegis_process_t *)(uintptr_t)tcb_phys;
+    /* Allocate process control block (one kva page — higher-half VA). */
+    aegis_process_t *proc = kva_alloc_pages(1);
 
-    /* Allocate kernel stack (single 4KB page) and map it at a fixed higher-half
-     * virtual address shared by both the master PML4 and all user PML4s.
-     *
-     * vmm_map_page() walks the master PML4 using the mapped-window allocator
-     * (vmm_window_map/unmap) to access page-table pages. After vmm_map_page()
-     * the kernel stack is accessible at KSTACK_VA in both the master PML4 and
-     * the user PML4 (shared pdpt_hi PDPT page).  We then use KSTACK_VA (not
-     * kstack_phys) for all subsequent pointer arithmetic so the stack is
-     * reachable regardless of which PML4 is loaded in CR3. */
-    uint64_t kstack_phys = pmm_alloc_page();
-    if (!kstack_phys) {
-        printk("[PROC] FAIL: OOM allocating kernel stack\n");
-        for (;;) {}
-    }
-    vmm_map_page(KSTACK_VA, kstack_phys,
-                 VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
-    uint8_t *kstack = (uint8_t *)KSTACK_VA;
+    /* Allocate kernel stack (one kva page — per-process higher-half VA).
+     * kva pages are mapped into pd_hi (shared with user PML4s), so this
+     * stack VA is reachable regardless of which PML4 is loaded in CR3.
+     * Each proc_spawn call gets a distinct VA; the single-KSTACK_VA
+     * limitation from Phase 5 is now resolved. */
+    uint8_t *kstack = kva_alloc_pages(1);
 
     /* Create per-process page tables (kernel high entries shared) */
     proc->pml4_phys = vmm_create_user_pml4();
@@ -132,14 +96,13 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * User PML4 physical address: popped by proc_enter_user before iretq.
      * proc_enter_user does: pop rax; mov cr3, rax; iretq.
      * This switches CR3 to the user PML4 while still on the higher-half
-     * kernel stack (KSTACK_VA — accessible in both master and user PML4).
+     * kernel stack (kva-allocated VA — accessible in both master and user
+     * PML4, as kva pages live in pd_hi which is shared across all PML4s).
      *
      * We must switch CR3 here rather than before ctx_switch in sched_tick
-     * because sched_tick runs on the outgoing task's physical kernel stack
-     * (accessible only via the identity map in the master PML4).  Switching
-     * to the user PML4 from that stack would remove the identity map,
-     * causing a triple fault on the next stack access (stack is not
-     * mapped in the user PML4).
+     * because sched_tick runs on the outgoing task's kernel stack. Switching
+     * to the user PML4 from that stack must not occur until we are on a stack
+     * that is mapped in the user PML4.
      */
     *--sp = proc->pml4_phys;    /* user PML4 phys — popped by proc_enter_user */
 
