@@ -115,7 +115,7 @@ syscall_entry:
     jz   .sig_sysret_done
 
     ; Case 3/4: deliver signal
-    ; After push rax: [rsp+0]=saved rax, so add +8 to all pre-push offsets
+    ; After push rax: [rsp+0]=saved rax, [rsp+24]=saved rdi, [rsp+32]=frame*
     push rax
     lea  rdi, [rsp + 32]    ; frame* = rsp+8(push)+24(frame_offset) = rsp+32
     lea  rsi, [rsp + 24]    ; &saved_rdi = rsp+8(push)+16(rdi_offset) = rsp+24
