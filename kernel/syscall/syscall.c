@@ -211,14 +211,21 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         return (uint64_t)-14;  /* EFAULT */
 
     /* Single read call — return whatever the VFS gives us.
-     * This matches Unix semantics: read() returns ≤ n bytes, callers loop.
-     * Do NOT loop here: character devices (kbd) always return 1 byte and
-     * never return 0, so a loop would block until arg3 bytes are read. */
-    char kbuf[256];
+     * Pipe reads may block inside f->ops->read() via sched_block().
+     * After unblocking, f->ops->read() returns the byte count and we
+     * copy to user space and return normally via sysret.
+     *
+     * SYS_READ_BUF 4096: large enough for pipe PIPE_BUF_SIZE (4060) reads.
+     * Stack budget: 4096 bytes here; sys_write path has ~4060 in pipe_write_fn.
+     * These are separate syscall paths — they do not stack on each other.
+     * Kernel stack is 16 KB; both are within budget. */
+    #define SYS_READ_BUF 4096
+    char kbuf[SYS_READ_BUF];
     uint64_t n = arg3;
-    if (n > sizeof(kbuf)) n = sizeof(kbuf);
-    int got = f->ops->read(f->priv, kbuf, f->offset, n);
-    if (got <= 0) return 0;
+    if (n > SYS_READ_BUF) n = SYS_READ_BUF;
+    int64_t got = (int64_t)f->ops->read(f->priv, kbuf, f->offset, n);
+    if (got < 0) return (uint64_t)got;   /* propagate -errno (e.g. -EPIPE) */
+    if (got == 0) return 0;              /* clean EOF */
     copy_to_user((void *)(uintptr_t)arg2, kbuf, (uint64_t)got);
     f->offset += (uint64_t)got;
     return (uint64_t)got;
