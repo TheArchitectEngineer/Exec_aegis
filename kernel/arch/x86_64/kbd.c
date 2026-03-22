@@ -157,15 +157,11 @@ kbd_read_interruptible(int *interrupted)
             __asm__ volatile("cli");
             return c;
         }
-        /* Check for pending signals before halting */
-        aegis_task_t *task = sched_current();
-        if (task->is_user) {
-            aegis_process_t *proc = (aegis_process_t *)task;
-            if (proc->pending_signals & ~proc->signal_mask) {
-                __asm__ volatile("cli");
-                *interrupted = 1;
-                return '\0';
-            }
+        /* Check for pending signals before halting — use canonical helper */
+        if (signal_check_pending()) {
+            __asm__ volatile("cli");
+            *interrupted = 1;
+            return '\0';
         }
         __asm__ volatile("hlt");
     }
