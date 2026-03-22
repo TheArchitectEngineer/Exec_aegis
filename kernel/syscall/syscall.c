@@ -806,6 +806,10 @@ sys_fork(syscall_frame_t *frame)
     child->pid             = proc_alloc_pid();
     child->ppid            = parent->pid;
     child->exit_status     = 0;
+    /* Signal state: inherit mask and dispositions; clear pending (Linux semantics) */
+    child->signal_mask     = parent->signal_mask;
+    __builtin_memcpy(child->sigactions, parent->sigactions, sizeof(parent->sigactions));
+    child->pending_signals = 0;
     child->task.state      = TASK_RUNNING;
     child->task.waiting_for = 0;
     child->task.is_user    = 1;
