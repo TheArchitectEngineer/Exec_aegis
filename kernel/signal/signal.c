@@ -89,11 +89,74 @@ signal_deliver(cpu_state_t *s)
     proc->signal_mask |= sa->sa_mask | (1ULL << (uint32_t)signum);
 }
 
+/*
+ * signal_deliver_sysret — deliver pending signal on the syscall return path.
+ *
+ * frame:          syscall_frame_t * — patch rip/user_rsp for user handler delivery
+ * saved_rdi_ptr:  pointer to saved user rdi slot on kernel stack; write signum here
+ *                 so that `pop rdi` in syscall_entry.asm loads the signal number
+ *                 as the first argument to the handler.
+ *
+ * Returns 0 if no signal or SIG_DFL action (sched_exit never returns for SIG_DFL).
+ * Returns 1 if a user handler was installed (caller sets rax=0, does sysret).
+ *
+ * Phase 17 limitation: only rip/rflags/user_rsp/r8/r9/r10 are saved in
+ * syscall_frame_t. rbx/rbp/r11-r15/rax/rcx/rdx/rsi/rdi from the interrupted
+ * context are not restored into the signal frame gregs. Signal handlers that
+ * rely on exact register restoration of these fields will not work correctly.
+ * SIG_DFL (sched_exit) and simple SIGCHLD handlers work fine.
+ */
 int
 signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
 {
-    (void)frame; (void)saved_rdi_ptr;
-    return 0;
+    aegis_task_t *task = sched_current();
+    if (!task || !task->is_user) return 0;
+    aegis_process_t *proc = (aegis_process_t *)task;
+
+    uint64_t deliverable = proc->pending_signals & ~proc->signal_mask;
+    if (!deliverable) return 0;
+
+    int signum = (int)__builtin_ctzll(deliverable);
+    proc->pending_signals &= ~(1ULL << (uint32_t)signum);
+
+    k_sigaction_t *sa = &proc->sigactions[signum];
+
+    if (sa->sa_handler == SIG_DFL) {
+        if (signum == SIGCHLD) return 0; /* ignore */
+        sched_exit();  /* never returns */
+    }
+
+    if (sa->sa_handler == SIG_IGN) return 0;
+
+    /* User handler: build rt_sigframe_t on user stack */
+    uint64_t user_rsp = frame->user_rsp;
+    uint64_t new_rsp  = ((user_rsp - sizeof(rt_sigframe_t)) & ~15ULL) - 8;
+
+    rt_sigframe_t sf;
+    __builtin_memset(&sf, 0, sizeof(sf));
+    sf.pretcode          = (uint64_t)sa->sa_restorer;
+    sf.gregs[REG_R8]     = (int64_t)frame->r8;
+    sf.gregs[REG_R9]     = (int64_t)frame->r9;
+    sf.gregs[REG_R10]    = (int64_t)frame->r10;
+    sf.gregs[REG_RIP]    = (int64_t)frame->rip;
+    sf.gregs[REG_EFL]    = (int64_t)frame->rflags;
+    sf.gregs[REG_RSP]    = (int64_t)frame->user_rsp;
+    sf.uc_sigmask        = proc->signal_mask;
+
+    if (!user_ptr_valid(new_rsp, sizeof(sf))) {
+        sched_exit();  /* never returns */
+    }
+    copy_to_user((void *)new_rsp, &sf, sizeof(sf));
+
+    /* Patch sysret frame: return to handler instead of original RIP */
+    frame->rip      = (uint64_t)sa->sa_handler;
+    frame->user_rsp = new_rsp;
+
+    /* Write signum to the saved rdi slot so pop rdi loads it as handler arg1 */
+    *saved_rdi_ptr = (uint64_t)signum;
+
+    proc->signal_mask |= sa->sa_mask | (1ULL << (uint32_t)signum);
+    return 1;
 }
 
 void
