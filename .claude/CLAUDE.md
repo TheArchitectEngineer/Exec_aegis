@@ -466,6 +466,16 @@ debug. The order is non-negotiable: mapped-window allocator → tear down identi
 
 **`opendir`/`readdir` are not generic VFS paths.** The initrd `readdir` is a synthetic listing. A real directory hierarchy with on-disk inodes is Phase 16+.
 
+### Phase 16 forward-looking constraints
+
+**`O_CLOEXEC` deferred.** `sys_pipe2` accepts but ignores the `O_CLOEXEC` flag. Pipe fds are inherited by `execve`. A server that forks workers while holding pipe fds will leak them into workers. Implement `O_CLOEXEC` alongside Phase 17 signal work.
+
+**`SIGPIPE` deferred.** Writers to a closed-read pipe get `-EPIPE` (errno), not a signal. musl handles `-EPIPE` gracefully. Full `SIGPIPE` delivery requires Phase 17 signal infrastructure.
+
+**Single waiter per pipe end.** `pipe_t` holds one `reader_waiting` and one `writer_waiting`. Multiple concurrent readers or writers on the same pipe end are not supported — the second waiter is never woken. Not a concern for Phase 16 shell pipelines.
+
+**No `sys_munmap` VA reclaim for pipe_t.** `kva_free_pages` is called on pipe close, but the kva VA range is not returned to a free list (bump allocator). Negligible at Phase 16 scale.
+
 ### Phase 4 forward-looking constraints
 
 **Identity map still active.** TCB and stack allocations in `sched.c` cast PMM
