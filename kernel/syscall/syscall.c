@@ -673,6 +673,17 @@ sys_fork(syscall_frame_t *frame)
     uint32_t ci;
     for (ci = 0; ci < PROC_MAX_FDS; ci++)
         child->fds[ci] = parent->fds[ci];
+
+    /* Call dup hooks after the full fd table is copied.
+     * Two-pass ordering is required: copy all fds first (struct copy by value,
+     * no ref bumps), then bump all refs. If we bumped during the copy loop,
+     * an OOM failure midway would leave ref counts inconsistent.
+     * The child now holds an additional reference to every open fd. */
+    for (ci = 0; ci < PROC_MAX_FDS; ci++) {
+        if (child->fds[ci].ops && child->fds[ci].ops->dup)
+            child->fds[ci].ops->dup(child->fds[ci].priv);
+    }
+
     for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
         child->caps[ci] = parent->caps[ci];
     child->brk             = parent->brk;
