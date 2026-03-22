@@ -121,7 +121,26 @@ sched_exit(void)
 
     if (s_current->is_user) {
         aegis_process_t *dying = (aegis_process_t *)s_current;
+        int fd_i;
         /* dying->exit_status was set by sys_exit before calling sched_exit. */
+
+        /* Close all open fds before entering zombie state.
+         *
+         * Required for pipe correctness: write-end close fires sched_wake()
+         * on any blocked reader, which must happen while the task is still
+         * TASK_RUNNING (not TASK_ZOMBIE) so the woken task can be properly
+         * scheduled.
+         *
+         * Ordering invariant: this loop runs before vmm_free_user_pml4
+         * (wherever it is called). pipe_t lives in kva (kernel VA, always
+         * accessible). Any future fd type whose close op touches user memory
+         * must also rely on this ordering — do not move this loop later. */
+        for (fd_i = 0; fd_i < PROC_MAX_FDS; fd_i++) {
+            if (dying->fds[fd_i].ops) {
+                dying->fds[fd_i].ops->close(dying->fds[fd_i].priv);
+                dying->fds[fd_i].ops = NULL;
+            }
+        }
 
         /* Mark self zombie — stays in run queue until waitpid reaps. */
         s_current->state = TASK_ZOMBIE;
