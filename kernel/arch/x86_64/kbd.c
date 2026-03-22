@@ -2,6 +2,9 @@
 #include "pic.h"
 #include "arch.h"
 #include "printk.h"
+#include "signal.h"
+#include "proc.h"
+#include "sched.h"
 
 #define KBD_DATA 0x60
 
@@ -13,6 +16,10 @@ static volatile uint32_t s_tail = 0;  /* next read position  */
 
 /* Shift state */
 static volatile int s_shift = 0;
+
+/* Ctrl state and foreground process PID for Ctrl-C delivery */
+static volatile int      s_ctrl   = 0;
+static volatile uint32_t s_fg_pid = 0;
 
 /* US QWERTY scancode set 1 — unshifted (make codes 0x01–0x39) */
 static const char s_sc_lower[] = {
@@ -72,6 +79,7 @@ kbd_handler(void)
         /* Track shift releases */
         if (make == 0x2A || make == 0x36)
             s_shift = 0;
+        if (make == 0x1D) { s_ctrl = 0; }
         return;
     }
 
@@ -79,6 +87,16 @@ kbd_handler(void)
     if (sc == 0x2A || sc == 0x36) {    /* left or right shift */
         s_shift = 1;
         return;
+    }
+
+    /* Ctrl key: left Ctrl = 0x1D make, 0x9D break */
+    if (sc == 0x1D) { s_ctrl = 1; return; }
+
+    /* Ctrl-C = Ctrl held + scancode 0x2E ('c') */
+    if (s_ctrl && sc == 0x2E) {
+        if (s_fg_pid != 0)
+            signal_send_pid(s_fg_pid, SIGINT);
+        return;  /* do not push 'c' to the buffer */
     }
 
     if (sc < SC_TABLE_SIZE) {
@@ -120,4 +138,35 @@ kbd_poll(char *out)
     *out = s_buf[s_tail];
     s_tail = (s_tail + 1) & (KBD_BUF_SIZE - 1);
     return 1;
+}
+
+void
+kbd_set_foreground_pid(uint32_t pid)
+{
+    s_fg_pid = pid;
+}
+
+char
+kbd_read_interruptible(int *interrupted)
+{
+    char c = 0;
+    *interrupted = 0;
+    __asm__ volatile("sti");
+    for (;;) {
+        if (kbd_poll(&c)) {
+            __asm__ volatile("cli");
+            return c;
+        }
+        /* Check for pending signals before halting */
+        aegis_task_t *task = sched_current();
+        if (task->is_user) {
+            aegis_process_t *proc = (aegis_process_t *)task;
+            if (proc->pending_signals & ~proc->signal_mask) {
+                __asm__ volatile("cli");
+                *interrupted = 1;
+                return '\0';
+            }
+        }
+        __asm__ volatile("hlt");
+    }
 }

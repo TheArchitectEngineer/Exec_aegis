@@ -1,6 +1,8 @@
 #include "kbd_vfs.h"
 #include "vfs.h"
 #include "kbd.h"
+#include "proc.h"
+#include "sched.h"
 #include <stdint.h>
 
 static int
@@ -9,16 +11,10 @@ kbd_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 	(void)priv; (void)off;
 	if (len == 0) return 0;
 	char *kbuf = (char *)buf;
-	/*
-	 * Return exactly 1 byte per call regardless of len.
-	 *
-	 * POSIX allows read() to return fewer bytes than requested.  Callers
-	 * (musl fgets, read loop) must tolerate partial reads.  If we looped
-	 * to fill 'len' bytes, musl's fully-buffered stdin would ask for 4096
-	 * bytes and block until 4096 keystrokes arrived — making the shell
-	 * unusable.  One-byte-at-a-time matches standard Unix tty semantics.
-	 */
-	kbuf[0] = kbd_read();
+	int   interrupted;
+	char  c = kbd_read_interruptible(&interrupted);
+	if (interrupted) return -4; /* EINTR */
+	kbuf[0] = c;
 	return 1;
 }
 
