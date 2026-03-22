@@ -95,6 +95,7 @@ initrd_close_fn(void *priv)
 
 static const vfs_ops_t initrd_ops = {
     .read    = initrd_read_fn,
+    .write   = (void *)0,
     .close   = initrd_close_fn,
     .readdir = (void *)0,
     .dup     = (void *)0,
@@ -146,6 +147,7 @@ dir_close_fn(void *priv)
 
 static const vfs_ops_t dir_ops = {
     .read    = dir_read_fn,
+    .write   = (void *)0,
     .close   = dir_close_fn,
     .readdir = dir_readdir_fn,
     .dup     = (void *)0,
