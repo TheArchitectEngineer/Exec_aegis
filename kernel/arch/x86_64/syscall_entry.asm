@@ -63,10 +63,20 @@ syscall_entry:
     push r10         ; save user r10 (also frame->r10 at +0 = struct base)
     ; rsp → frame base (&frame->r10)
 
+    ; Save user rdi/rsi/rdx BEFORE the SysV shuffle destroys them.
+    ; Linux ABI guarantees all registers except rax/rcx/r11 are preserved
+    ; across syscall.  musl relies on this — readdir sets rsi=dir->buf before
+    ; getdents64 and uses rsi AFTER the syscall returns.  Without this save,
+    ; rsi contains post-call garbage and readdir computes a null pointer.
+    push rdx         ; save user rdx (user arg3) — preserved per Linux ABI
+    push rsi         ; save user rsi (user arg2) — preserved per Linux ABI
+    push rdi         ; save user rdi (user arg1) — preserved per Linux ABI
+    ; rsp → saved user rdi; frame base at [rsp+24]
+
     ; Push two stack args for 8-arg call (deepest = arg6 first):
     push r9          ; → [rsp+16] after call = arg6 (user r9)
     push r8          ; → [rsp+8]  after call = arg5 (user r8)
-    ; rsp → top of stack arg slots; frame is at [rsp+16]
+    ; rsp → top of stack arg slots; frame is at [rsp+40]
 
     ; Shuffle registers (dependency-safe order):
     mov  r9,  r10    ; SysV arg6 = arg4 = user r10
@@ -74,16 +84,22 @@ syscall_entry:
     mov  rcx, rsi    ; SysV arg4 = arg2 = user rsi
     mov  rdx, rdi    ; SysV arg3 = arg1 = user rdi
     mov  rsi, rax    ; SysV arg2 = num  = syscall number
-    lea  rdi, [rsp+16] ; SysV arg1 = frame ptr (past 2 stack-arg slots)
+    lea  rdi, [rsp+40] ; SysV arg1 = frame ptr (past 2 stack-arg + 3 user-reg-save slots)
 
     call syscall_dispatch
-    add  rsp, 16     ; discard two stack-arg slots; rsp → saved r10
+    add  rsp, 16     ; discard two stack-arg slots; rsp → saved user rdi
+
+    ; Restore user rdi/rsi/rdx — these must have their original user-space
+    ; values when we push them into the signal slots below.
+    pop  rdi         ; restore user rdi
+    pop  rsi         ; restore user rsi (critical: musl readdir uses rsi after getdents64)
+    pop  rdx         ; restore user rdx
+    ; rsp → frame base (&frame->r10) — same as old code after add rsp,16
 
     ; ── Allocate saved rdi/rsi/rdx slots for signal delivery ─────────────────
     ; Push in reverse pop order: rdi deepest, rdx shallowest.
     ; rdi slot will be overwritten by signal_deliver_sysret if a handler
     ; is installed, so pop rdi delivers signum as arg1 to the handler.
-    ; (User values of rdi/rsi/rdx are not preserved across syscalls anyway.)
     push rdi         ; [rsp+16] = saved rdi slot  (deepest of the three)
     push rsi         ; [rsp+8]  = saved rsi slot
     push rdx         ; [rsp+0]  = saved rdx slot   (top, popped first)

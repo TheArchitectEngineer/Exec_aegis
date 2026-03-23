@@ -34,6 +34,12 @@ extern const unsigned char true_bin_elf[];
 extern const unsigned int  true_bin_elf_len;
 extern const unsigned char false_bin_elf[];
 extern const unsigned int  false_bin_elf_len;
+extern const unsigned char wc_elf[];
+extern const unsigned int  wc_elf_len;
+extern const unsigned char grep_elf[];
+extern const unsigned int  grep_elf_len;
+extern const unsigned char sort_elf[];
+extern const unsigned int  sort_elf_len;
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -56,13 +62,16 @@ static const initrd_entry_t s_files[] = {
     { "/bin/clear", (const char *)clear_elf,     &clear_elf_len     },
     { "/bin/true",  (const char *)true_bin_elf,  &true_bin_elf_len  },
     { "/bin/false", (const char *)false_bin_elf, &false_bin_elf_len },
+    { "/bin/wc",    (const char *)wc_elf,        &wc_elf_len        },
+    { "/bin/grep",  (const char *)grep_elf,      &grep_elf_len      },
+    { "/bin/sort",  (const char *)sort_elf,      &sort_elf_len      },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
 /* s_motd_size is a compile-time constant separate from the size_ptr scheme. */
 static const uint32_t s_motd_size = sizeof(s_motd) - 1;
 
-static const uint32_t s_nfiles = 10;
+static const uint32_t s_nfiles = 13;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -153,7 +162,8 @@ static const dir_entry_t s_etc_entries[] = {
 static const dir_entry_t s_bin_entries[] = {
     { "sh",    8 }, { "ls",    8 }, { "cat",   8 }, { "echo",  8 },
     { "pwd",   8 }, { "uname", 8 }, { "clear",  8 }, { "true",  8 },
-    { "false", 8 }, { (const char *)0, 0 }
+    { "false", 8 }, { "wc",    8 }, { "grep",  8 }, { "sort",  8 },
+    { (const char *)0, 0 }
 };
 
 static int

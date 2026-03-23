@@ -393,6 +393,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | musl port + shell (Phase 15) | ✅ Done | fork/execve/waitpid; interactive shell; 8 companion programs in initrd |
 | Pipes + I/O redirection (Phase 16) | ✅ Done | sys_pipe2/dup/dup2; pipe.c ring buffer; shell pipeline parser; 5/5 smoke tests pass |
 | Signals (Phase 17) | ✅ Done | sigaction/sigprocmask/sigreturn/kill/setfg; Ctrl-C kills foreground; iretq+sysret delivery paths; 1/1 smoke test pass |
+| stat/getdents64/utilities (Phase 18) | ✅ Done | sys_stat/fstat/lstat/access/nanosleep; getdents64; wc/grep/sort binaries; syscall_entry.asm rdi/rsi/rdx preservation; 4/4 smoke tests pass |
 
 ### Phase 1 deviations from original spec
 
@@ -627,5 +628,19 @@ them would corrupt every other process.
 *Last updated: 2026-03-21 — Phase 15 post-fix: three bugs resolved, test_shell.py all 9 commands clean. (1) fork_child_return SYSRET path replaced with isr_post_dispatch iretq path — child's first scheduling now uses complete fake isr_common_stub frame, eliminating r12=0 #PF. (2) arch_set_fs_base now set BEFORE ctx_switch for incoming task in sched_tick/block/yield_to_next. (3) sys_open 256-byte bulk copy replaced with byte-by-byte null-terminated copy — prevents #PF when argv string is within 256 bytes of USER_STACK_TOP (0x7fffffff000). console_write_fn capped to current page boundary.*
 
 *Last updated: 2026-03-21 — Phase 16 complete, test_pipe.py 5/5 GREEN. sys_pipe2/dup/dup2; kernel/fs/pipe.c ring buffer; shell pipeline parser; I/O redirection (<, >, 2>&1). Root cause of test_redirect_stdin flakiness: boot takes 600+ s on loaded host; BOOT_TIMEOUT raised to 900 s and separated from CMD_TIMEOUT (120 s). sys_read gains page-boundary cap matching console_write_fn. test_pipe.py wired into run_tests.sh.*
+
+*Last updated: 2026-03-22 — Phase 18 complete, test_stat.py 4/4 GREEN. sys_stat/fstat/lstat/access/nanosleep/getdents64; wc/grep/sort binaries; syscall_entry.asm now saves/restores user rdi/rsi/rdx across syscall_dispatch (Linux ABI requirement — musl readdir uses rsi after getdents64); sys_brk zeroes new pages. wc -c/-l/-w flag parsing added.*
+
+### Phase 18 forward-looking constraints
+
+**`syscall_entry.asm` rdi/rsi/rdx preservation is a correctness fix, not an optimization.** Any future syscall that passes pointers in rdi/rsi/rdx and has the caller inspect those registers after the syscall returns will now work correctly. This fix is a prerequisite for any musl function that follows the Linux syscall ABI preservation guarantee.
+
+**`sys_stat` field coverage.** `k_stat_t` populates `st_ino`, `st_mode`, `st_size`, `st_nlink`=1, and zeroes uid/gid/dev/rdev/blksize/blocks/timestamps. musl's `stat(3)` works because it only uses `st_size` for most operations. A future phase may populate timestamps from a wall clock when one is available.
+
+**`sys_nanosleep` busy-waits.** The current implementation converts `timespec` to PIT ticks and busy-waits in a loop. This blocks the CPU; the scheduler continues to preempt the process but the process immediately re-enters the busy-wait. A proper `nanosleep` should block the task (sched_block with a wakeup timer) rather than spinning.
+
+**`getdents64` returns synthetic initrd directory.** The directory listing is built directly from `s_files[]` without a real on-disk directory structure. A future VFS redesign with proper directory inodes will replace this.
+
+**No `O_CLOEXEC` on stat-related opens.** File descriptors used internally by stat (via sys_open) are not automatically closed on exec. Deferred alongside full O_CLOEXEC support.
 
 *Last updated: 2026-03-22 — Phase 17 complete, test_signal.py 1/1 GREEN. sigaction/sigprocmask/sigreturn/kill/setfg; iretq and sysret signal delivery paths; Ctrl-C kills foreground process via kbd_handler→signal_send_pid→signal_deliver. Three scheduler/CR3 bugs fixed: sched_block now leaves tasks in run queue so sched_exit can find blocked parents; CR3 restored to user PML4 after ctx_switch returns in sched_block/sched_yield_to_next; signal_deliver temporarily switches to user PML4 for copy_to_user.*
