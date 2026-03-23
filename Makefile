@@ -29,7 +29,8 @@ CFLAGS = \
     -Ikernel/syscall \
     -Ikernel/elf \
     -Ikernel/fs \
-    -Ikernel/signal
+    -Ikernel/signal \
+    -Ikernel/drivers
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -91,12 +92,16 @@ ARCH_ASMS = \
 
 SCHED_SRCS = kernel/sched/sched.c
 
+DRIVER_SRCS = \
+    kernel/drivers/nvme.c
+
 FS_SRCS = \
     kernel/fs/vfs.c \
     kernel/fs/initrd.c \
     kernel/fs/console.c \
     kernel/fs/kbd_vfs.c \
-    kernel/fs/pipe.c
+    kernel/fs/pipe.c \
+    kernel/fs/blkdev.c
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
@@ -127,13 +132,14 @@ BOOT_OBJ       = $(BUILD)/arch/x86_64/boot.o
 ARCH_ASM_OBJS  = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
 SCHED_OBJS     = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
 FS_OBJS        = $(patsubst kernel/%.c,$(BUILD)/%.o,$(FS_SRCS))
+DRIVER_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(DRIVER_SRCS))
 USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 PROG_BIN_OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(PROG_BIN_SRCS))
 
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
-           $(SCHED_OBJS) $(FS_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
+           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
 
-.PHONY: all iso run shell test clean
+.PHONY: all iso disk run shell test clean
 
 all: $(BUILD)/aegis.elf
 
@@ -267,11 +273,27 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
 # ── Run targets ───────────────────────────────────────────────────────────────
 iso: $(BUILD)/aegis.iso
 
+DISK = $(BUILD)/disk.img
+
+disk: $(DISK)
+
+$(DISK):
+	@mkdir -p $(BUILD)
+	dd if=/dev/zero of=$(DISK) bs=1M count=64 2>/dev/null
+	mke2fs -t ext2 -F -L aegis-root $(DISK)
+	@echo "Disk image created: $(DISK)"
+
+comma := ,
+NVME_FLAGS = $(if $(wildcard $(DISK)),\
+    -drive file=$(DISK)$(comma)if=none$(comma)id=nvme0 \
+    -device nvme$(comma)drive=nvme0$(comma)serial=aegis0,)
+
 run: iso
 	qemu-system-x86_64 \
 	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial stdio -vga std -no-reboot -m 128M \
+	    $(NVME_FLAGS) \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 shell:
