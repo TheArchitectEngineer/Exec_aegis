@@ -692,7 +692,7 @@ them would corrupt every other process.
 
 **New build dependency: `e2tools` (e2mkdir, e2cp) and `debugfs` (from e2fsprogs).** Used by `make disk` to populate the ext2 image. Install: `apt install e2tools e2fsprogs`.
 
-**ext2_vfs_dup_fn is a no-op.** Closing either dup'd fd frees the shared pool slot; subsequent access via the remaining fd will use a freed priv pointer (use-after-free). Safe only when ext2 fds are never dup'd, which holds for Phase 21 shell workloads.
+**ext2_vfs_dup_fn uses ref counting.** `ext2_fd_priv_t` carries a `ref_count`; `ext2_vfs_dup_fn` increments it and `ext2_pool_free` decrements, only clearing `in_use` at zero. The previous use-after-free (UAF on dup) was fixed in the security audit pass following Phase 22.
 
 *Last updated: 2026-03-23 — Phase 21 complete, test_ext2.py PASS. ext2 read-write filesystem on nvme0; 16-slot LRU cache; path walk; create/write/unlink/mkdir/rename; 5 user commands; ext2_sync on sched_exit; SMAP-safe write via copy_from_user bounce.*
 
