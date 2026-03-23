@@ -52,6 +52,7 @@ kernel/core/            ← Architecture-agnostic kernel logic only.
 kernel/mm/              ← Memory management (arch-agnostic logic)
 kernel/cap/             ← Capability subsystem (Rust)
 kernel/fs/              ← VFS and filesystem drivers
+kernel/drivers/         ← Hardware device drivers (NVMe, AHCI, etc.)
 kernel/sched/           ← Scheduler
 tests/                  ← Test harness and expected output
 tools/                  ← Build helpers, QEMU wrappers
@@ -395,6 +396,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Signals (Phase 17) | ✅ Done | sigaction/sigprocmask/sigreturn/kill/setfg; Ctrl-C kills foreground; iretq+sysret delivery paths; 1/1 smoke test pass |
 | stat/getdents64/utilities (Phase 18) | ✅ Done | sys_stat/fstat/lstat/access/nanosleep; getdents64; wc/grep/sort binaries; syscall_entry.asm rdi/rsi/rdx preservation; 4/4 smoke tests pass |
 | PCIe enumeration + ACPI (Phase 19) | ✅ Done | MCFG+MADT on q35; graceful skip on -machine pc; kva_alloc_pages ECAM mapping; make test GREEN |
+| NVMe driver + blkdev (Phase 20) | ✅ Done | nvme_init on q35; blkdev_register; alloc_queue_page kva window; sfence doorbell; ECAM capped at 8 buses; make test GREEN; test_nvme.py PASS |
 
 ### Phase 1 deviations from original spec
 
@@ -657,3 +659,19 @@ them would corrupt every other process.
 **MADT is located but not parsed.** `g_madt_found` is set to 1 but MADT entries (LAPIC, IOAPIC, interrupt source override) are not parsed. SMP and APIC-based interrupt routing require MADT parsing — Phase 22+ work.
 
 *Last updated: 2026-03-23 — Phase 19 complete, make test GREEN. ACPI MCFG+MADT parsing; PCIe ECAM enumeration on q35; graceful fallback on -machine pc.*
+
+### Phase 20 forward-looking constraints
+
+**NVMe I/O is synchronous doorbell+poll.** No interrupt-driven completion. A single shared bounce buffer (`s_iobuf`) handles all reads and writes — no concurrent I/O is possible. MSI/MSI-X and interrupt-driven I/O are Phase 22+ work.
+
+**Single namespace only (NSID=1).** Multi-namespace NVMe devices are not enumerated. NSID=1 is hardcoded throughout the driver.
+
+**Transfer size capped at 4096 bytes (one page).** `nvme_blkdev_read` and `nvme_blkdev_write` reject transfers larger than 4096 bytes (`count × 512 > 4096`). PRP list support for multi-page transfers is Phase 21+ work if needed.
+
+**ECAM bus scan capped at 8 buses (`PCIE_MAX_SCAN_BUSES`).** Full 256-bus ECAM mapping would require 256MB of kernel VA — too large for a 128MB test VM. 8 buses = 8MB is sufficient for QEMU q35 and most desktop hardware. A server with many PCIe bridges may need a larger cap.
+
+**Queue memory is never freed.** Admin and I/O queue pages allocated via `alloc_queue_page` are permanent. NVMe hot-remove is not supported.
+
+**No partition table parsing.** `nvme_init` registers `"nvme0"` as a whole-disk blkdev. GPT partition parsing (nvme0p1, nvme0p2) is Phase 25 work.
+
+*Last updated: 2026-03-23 — Phase 20 complete, make test GREEN. NVMe 1.4 driver on q35; blkdev abstraction layer; ACPI kva-window for tables above 4MB; ECAM 8-bus cap; test_nvme.py PASS.*
