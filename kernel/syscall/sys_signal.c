@@ -36,6 +36,17 @@ sys_rt_sigaction(uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
         k_sigaction_t sa;
         copy_from_user(&sa, (const void *)(uintptr_t)arg2,
                        sizeof(k_sigaction_t));
+        /* Validate handler: must be SIG_DFL (0), SIG_IGN (1),
+         * or a user-space address — never a kernel address. */
+        if (sa.sa_handler != SIG_DFL && sa.sa_handler != SIG_IGN) {
+            if (!user_ptr_valid((uint64_t)(uintptr_t)sa.sa_handler, 1))
+                return (uint64_t)-(int64_t)14; /* EFAULT */
+        }
+        /* Validate restorer similarly if provided */
+        if (sa.sa_restorer != 0) {
+            if (!user_ptr_valid((uint64_t)(uintptr_t)sa.sa_restorer, 1))
+                return (uint64_t)-(int64_t)14; /* EFAULT */
+        }
         proc->sigactions[signum] = sa;
     }
     return 0;

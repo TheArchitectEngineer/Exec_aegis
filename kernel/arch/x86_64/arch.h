@@ -195,6 +195,10 @@ void arch_syscall_init(void);
  * [SMAP] WARN: not supported by CPU. Must be called after arch_syscall_init(). */
 void arch_smap_init(void);
 
+/* arch_smep_init — detect SMEP via CPUID and enable CR4.SMEP if supported.
+ * Call after arch_smap_init. Prints [SMEP] OK or [SMEP] WARN. */
+void arch_smep_init(void);
+
 /* arch_sse_init — enable SSE/SSE2 for user-mode execution.
  * Clears CR0.EM, sets CR0.MP, sets CR4.OSFXSR + CR4.OSXMMEXCPT.
  * Must be called before sched_start() so that user processes can execute
