@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Phase 21 ext2 persistence test.
+
+Boots the shell ISO twice with the same NVMe disk image:
+  Boot 1 — write /tmp/test.txt via 'echo hello > /tmp/test.txt', verify read-back.
+  Boot 2 — read /tmp/test.txt, verify 'hello' survived the reboot.
+
+Uses the QEMU monitor unix socket to inject PS/2 keyboard events (same
+pattern as test_pipe.py).  NVMe requires -machine q35.
+"""
+import subprocess, time, sys, os, socket, select, fcntl, tempfile
+
+QEMU         = "qemu-system-x86_64"
+ISO          = "build/aegis.iso"
+DISK         = "build/disk.img"
+BOOT_TIMEOUT = 900    # generous: slow/loaded host machines can take 600+ s
+CMD_TIMEOUT  = 120    # per-command wait after shell prompt appears
+
+# ---------------------------------------------------------------------------
+# Key name map: ASCII char → QEMU monitor sendkey name.
+# ---------------------------------------------------------------------------
+_KEY_MAP = {
+    ' ':  'spc',
+    '\n': 'ret',
+    '/':  'slash',
+    '|':  'shift-backslash',
+    '<':  'shift-comma',
+    '>':  'shift-dot',
+    '&':  'shift-7',
+    '.':  'dot',
+    '-':  'minus',
+    '_':  'shift-minus',
+}
+for ch in 'abcdefghijklmnopqrstuvwxyz':
+    _KEY_MAP[ch] = ch
+for ch in '0123456789':
+    _KEY_MAP.setdefault(ch, ch)
+
+
+def _char_to_key(ch):
+    return _KEY_MAP.get(ch)
+
+
+def build_iso():
+    """Build shell ISO (make INIT=shell iso)."""
+    real_uid = os.getuid()
+    real_gid = os.getgid()
+
+    def drop_euid():
+        os.setegid(real_gid)
+        os.seteuid(real_uid)
+
+    r = subprocess.run(["make", "INIT=shell", "iso"], preexec_fn=drop_euid)
+    if r.returncode != 0:
+        print("[FAIL] make INIT=shell iso failed")
+        sys.exit(1)
+
+
+def build_disk():
+    """Create the ext2 disk image (make disk), or reuse if already present."""
+    if os.path.exists(DISK):
+        return
+    r = subprocess.run(["make", "disk"])
+    if r.returncode != 0:
+        print("[FAIL] make disk failed")
+        sys.exit(1)
+
+
+def _send_key(mon_sock, keyname):
+    """Send a single key via the QEMU monitor unix socket."""
+    cmd = ("sendkey %s\n" % keyname).encode()
+    mon_sock.sendall(cmd)
+    # Drain any monitor echo/prompt to avoid buffer overflow
+    time.sleep(0.03)
+    try:
+        mon_sock.recv(4096)
+    except BlockingIOError:
+        pass
+
+
+def _type_string(mon_sock, text):
+    """Inject each character of text as QEMU keyboard events."""
+    for ch in text:
+        key = _char_to_key(ch)
+        if key is None:
+            raise ValueError("No key mapping for character %r" % ch)
+        _send_key(mon_sock, key)
+
+
+def _read_until_prompt(proc, deadline):
+    """Read serial bytes from proc.stdout until '\\n#' is seen or deadline.
+
+    Uses os.read() on the raw fd with O_NONBLOCK to bypass Python's
+    BufferedReader (same rationale as test_pipe.py).
+    """
+    fd = proc.stdout.fileno()
+    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+    buf = b""
+    while time.time() < deadline:
+        ready, _, _ = select.select([proc.stdout], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        buf += chunk
+        if b"\n#" in buf:
+            return buf.decode(errors="replace")
+    return buf.decode(errors="replace")
+
+
+def run_shell_session(disk_path, commands):
+    """Boot QEMU (q35 + NVMe) with shell, inject commands, collect output.
+
+    Returns the combined serial output as a string.
+    """
+    mon_path = tempfile.mktemp(suffix=".sock", prefix="aegis_mon_")
+    cmd = [
+        QEMU,
+        "-machine", "q35", "-cpu", "Broadwell",
+        "-cdrom", ISO, "-boot", "order=d",
+        "-drive", "file=%s,format=raw,if=none,id=nvme0" % disk_path,
+        "-device", "nvme,drive=nvme0,serial=aegis00",
+        "-display", "none", "-vga", "std",
+        "-nodefaults", "-serial", "stdio",
+        "-no-reboot", "-m", "128M",
+        "-monitor", "unix:%s,server,nowait" % mon_path,
+        "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+    ]
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL
+    )
+
+    # Wait for QEMU monitor socket to appear
+    deadline = time.time() + BOOT_TIMEOUT
+    while time.time() < deadline:
+        if os.path.exists(mon_path):
+            break
+        time.sleep(0.1)
+    else:
+        proc.kill()
+        raise RuntimeError("QEMU monitor socket never appeared: %s" % mon_path)
+
+    # Connect to monitor (non-blocking recv to drain prompts without hanging)
+    mon_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    mon_sock.connect(mon_path)
+    mon_sock.setblocking(False)
+
+    all_output = []
+
+    # Wait for initial shell prompt '\n# '.
+    boot_out = _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
+    all_output.append(boot_out)
+
+    # Inject each command and collect output until next prompt
+    for line in commands:
+        _type_string(mon_sock, line + "\n")
+        out = _read_until_prompt(proc, time.time() + CMD_TIMEOUT)
+        all_output.append(out)
+
+    # Inject 'exit' to trigger isa-debug-exit and halt QEMU
+    _type_string(mon_sock, "exit\n")
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+    mon_sock.close()
+    try:
+        os.unlink(mon_path)
+    except OSError:
+        pass
+
+    return "\n".join(all_output)
+
+
+def test_ext2_persistence():
+    """Write a file in boot 1; verify it persists in boot 2."""
+    # Use a fresh copy of the disk for each test run so tests are independent.
+    fd, disk_path = tempfile.mkstemp(suffix=".img")
+    os.close(fd)
+    try:
+        # Copy the base disk image (built by make disk) to a temp file.
+        with open(DISK, "rb") as src, open(disk_path, "wb") as dst:
+            while True:
+                block = src.read(1 << 20)   # 1MB chunks
+                if not block:
+                    break
+                dst.write(block)
+
+        # ── Boot 1: write /tmp/test.txt ────────────────────────────────
+        print("  boot 1: writing /tmp/test.txt ...")
+        out1 = run_shell_session(disk_path, [
+            "echo hello > /tmp/test.txt",
+            "cat /tmp/test.txt",
+        ])
+
+        assert "hello" in out1, (
+            "FAIL test_ext2_persistence: 'hello' not in boot-1 output\n%s" % out1)
+        print("  boot 1: 'hello' confirmed in cat output")
+
+        # ── Boot 2: verify /tmp/test.txt persists ─────────────────────
+        print("  boot 2: reading /tmp/test.txt ...")
+        out2 = run_shell_session(disk_path, [
+            "cat /tmp/test.txt",
+        ])
+
+        assert "hello" in out2, (
+            "FAIL test_ext2_persistence: 'hello' not in boot-2 output "
+            "(ext2 write or sync failed)\n%s" % out2)
+        print("  boot 2: 'hello' persists across reboot — ext2 write confirmed")
+
+    finally:
+        os.unlink(disk_path)
+
+    print("PASS test_ext2_persistence")
+
+
+if __name__ == "__main__":
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    build_iso()
+    build_disk()
+    tests = [
+        test_ext2_persistence,
+    ]
+    failures = 0
+    for t in tests:
+        try:
+            t()
+        except AssertionError as e:
+            print(e)
+            failures += 1
+        except Exception as e:
+            print("ERROR in %s: %s" % (t.__name__, e))
+            failures += 1
+    if failures:
+        print("\n%d/%d tests FAILED" % (failures, len(tests)))
+        sys.exit(1)
+    print("\n%d/%d tests PASSED" % (len(tests), len(tests)))

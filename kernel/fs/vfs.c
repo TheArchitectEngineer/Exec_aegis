@@ -2,6 +2,7 @@
 #include "initrd.h"
 #include "ext2.h"
 #include "printk.h"
+#include "uaccess.h"
 #include <stdint.h>
 
 void
@@ -66,6 +67,12 @@ ext2_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
     return ext2_read(p->ino, buf, (uint32_t)off, (uint32_t)len);
 }
 
+/* EXT2_WRITE_CHUNK — maximum bytes copied per write pass.
+ * Matches NVMe single-transfer limit (one 4 KB block).  buf is a user-space
+ * pointer passed from sys_write; copy_from_user transfers it to a kernel
+ * bounce buffer before calling ext2_write, avoiding a SMAP violation. */
+#define EXT2_WRITE_CHUNK 4096
+
 static int
 ext2_vfs_write_fn(void *priv, const void *buf, uint64_t len)
 {
@@ -74,11 +81,34 @@ ext2_vfs_write_fn(void *priv, const void *buf, uint64_t len)
      * in the priv struct for sequential writes.  This is correct for:
      *   - shell redirection (O_WRONLY|O_CREAT|O_TRUNC): write from 0.
      *   - append writes: each call advances write_offset by bytes written.
-     * Concurrent writes to the same fd are not supported (single-process). */
-    int n = ext2_write(p->ino, buf, p->write_offset, (uint32_t)len);
-    if (n > 0)
+     * Concurrent writes to the same fd are not supported (single-process).
+     *
+     * buf is a user-space pointer (validated by sys_write before dispatch).
+     * ext2_write accesses it in kernel mode, which SMAP forbids.  Copy into
+     * a kernel bounce buffer first.  Loop in EXT2_WRITE_CHUNK slices to keep
+     * the stack frame bounded. */
+    static uint8_t s_kbuf[EXT2_WRITE_CHUNK];   /* kernel bounce buffer */
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t chunk = len - done;
+        if (chunk > EXT2_WRITE_CHUNK)
+            chunk = EXT2_WRITE_CHUNK;
+        /* Cap chunk to the current page boundary so we never cross an
+         * unmapped page (same guard as console_write_fn). */
+        {
+            uint64_t page_off = (uint64_t)(uintptr_t)((const uint8_t *)buf + done) & 0xFFFULL;
+            uint64_t to_end   = 0x1000ULL - page_off;
+            if (chunk > to_end)
+                chunk = to_end;
+        }
+        copy_from_user(s_kbuf, (const uint8_t *)buf + done, (uint32_t)chunk);
+        int n = ext2_write(p->ino, s_kbuf, p->write_offset, (uint32_t)chunk);
+        if (n <= 0)
+            return (done > 0) ? (int)done : n;
         p->write_offset += (uint32_t)n;
-    return n;
+        done += (uint64_t)n;
+    }
+    return (int)done;
 }
 
 static void

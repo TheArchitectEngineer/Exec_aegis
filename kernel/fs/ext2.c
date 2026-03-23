@@ -1015,6 +1015,9 @@ int ext2_rename(const char *old_path, const char *new_path)
 void ext2_sync(void)
 {
     int i;
+    int flushed = 0;
+    if (!s_mounted || !s_dev)
+        return;
     for (i = 0; i < CACHE_SLOTS; i++) {
         if (s_cache[i].dirty && s_cache[i].block_num != 0) {
             uint64_t lba = (uint64_t)s_cache[i].block_num *
@@ -1022,6 +1025,8 @@ void ext2_sync(void)
             s_dev->write(s_dev, lba, s_block_size / 512,
                          s_cache[i].data);
             s_cache[i].dirty = 0;
+            flushed++;
         }
     }
+    printk("[EXT2] sync: flushed %u dirty blocks\n", (uint32_t)flushed);
 }
