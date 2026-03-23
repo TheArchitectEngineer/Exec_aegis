@@ -146,6 +146,12 @@ kbd_set_foreground_pid(uint32_t pid)
     s_fg_pid = pid;
 }
 
+uint32_t
+kbd_get_foreground_pid(void)
+{
+    return s_fg_pid;
+}
+
 char
 kbd_read_interruptible(int *interrupted)
 {

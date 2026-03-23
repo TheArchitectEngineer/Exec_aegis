@@ -210,6 +210,8 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     int r = vfs_open(kpath, &proc->fds[fd]);
     if (r < 0)
         return (uint64_t)(int64_t)r;
+    /* Store open flags in the fd slot for F_GETFL */
+    proc->fds[fd].flags = (uint32_t)arg2;
     return fd;
 }
 
@@ -831,6 +833,127 @@ sys_setfg(uint64_t arg1)
 
 static uint64_t sys_set_tid_address(uint64_t arg1) { (void)arg1; return 1; }
 
+/* ── Phase 18 syscalls ───────────────────────────────────────────────────── */
+
+static int
+stat_copy_path(uint64_t user_ptr, char *out, uint32_t bufsz)
+{
+    uint32_t i;
+    for (i = 0; i < bufsz - 1; i++) {
+        uint8_t c;
+        if (!user_ptr_valid(user_ptr + i, 1))
+            return -14; /* EFAULT */
+        copy_from_user(&c, (const void *)(uintptr_t)(user_ptr + i), 1);
+        out[i] = (char)c;
+        if (c == 0) return 0;
+    }
+    out[bufsz - 1] = '\0';
+    return 0;
+}
+
+/*
+ * sys_stat — syscall 4
+ * arg1 = user pointer to path string (null-terminated, max 256 bytes)
+ * arg2 = user pointer to struct stat output buffer
+ */
+static uint64_t
+sys_stat(uint64_t arg1, uint64_t arg2)
+{
+    char path[256];
+    if (stat_copy_path(arg1, path, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    k_stat_t ks;
+    int rc = vfs_stat_path(path, &ks);
+    if (rc != 0) return (uint64_t)-(int64_t)2; /* ENOENT */
+
+    if (!user_ptr_valid(arg2, sizeof(ks)))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    copy_to_user((void *)(uintptr_t)arg2, &ks, sizeof(ks));
+    return 0;
+}
+
+/*
+ * sys_fstat — syscall 5
+ * arg1 = fd, arg2 = user pointer to struct stat output buffer
+ */
+static uint64_t
+sys_fstat(uint64_t arg1, uint64_t arg2)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
+    vfs_file_t *f = &proc->fds[arg1];
+    if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    k_stat_t ks;
+    __builtin_memset(&ks, 0, sizeof(ks));
+
+    if (f->ops->stat) {
+        int rc = f->ops->stat(f->priv, &ks);
+        if (rc != 0) return (uint64_t)-(int64_t)5; /* EIO */
+    } else {
+        /* Synthesize minimal stat for drivers without a stat hook. */
+        ks.st_mode  = S_IFREG | 0444;
+        ks.st_size  = (int64_t)f->size;
+        ks.st_dev   = 1;
+        ks.st_nlink = 1;
+    }
+
+    if (!user_ptr_valid(arg2, sizeof(ks)))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    copy_to_user((void *)(uintptr_t)arg2, &ks, sizeof(ks));
+    return 0;
+}
+
+/*
+ * sys_access — syscall 21
+ * arg1 = user pointer to path string, arg2 = mode (F_OK=0, R_OK=4, W_OK=2, X_OK=1)
+ * Phase 18: return 0 if file exists, -ENOENT otherwise (no permission checks).
+ */
+static uint64_t
+sys_access(uint64_t arg1, uint64_t arg2)
+{
+    (void)arg2;
+    char path[256];
+    if (stat_copy_path(arg1, path, sizeof(path)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    k_stat_t ks;
+    return (vfs_stat_path(path, &ks) == 0) ? 0 : (uint64_t)-(int64_t)2;
+}
+
+/*
+ * sys_nanosleep — syscall 35
+ * arg1 = user pointer to struct timespec { int64_t tv_sec; int64_t tv_nsec; }
+ * arg2 = user pointer to remainder (NULL allowed; not populated)
+ *
+ * Uses sti; hlt; cli loop. PIT fires at 100 Hz (1 tick = 10ms).
+ * Phase 18 limitation: starves other tasks (correct for single-process usage).
+ */
+static uint64_t
+sys_nanosleep(uint64_t arg1, uint64_t arg2)
+{
+    (void)arg2;
+    struct { int64_t tv_sec; int64_t tv_nsec; } ts;
+    if (!user_ptr_valid(arg1, sizeof(ts)))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    copy_from_user(&ts, (const void *)(uintptr_t)arg1, sizeof(ts));
+
+    uint64_t ticks = (uint64_t)ts.tv_sec * 100ULL
+                   + (uint64_t)ts.tv_nsec / 10000000ULL;
+    if (ticks == 0 && ts.tv_nsec > 0) ticks = 1;
+
+    uint64_t deadline = arch_get_ticks() + ticks;
+    while (arch_get_ticks() < deadline)
+        __asm__ volatile("sti; hlt; cli");
+    return 0;
+}
+
+/* Phase 18: all identity syscalls return 0 (root). */
+static uint64_t sys_getuid(void)  { return 0; }
+static uint64_t sys_geteuid(void) { return 0; }
+static uint64_t sys_getgid(void)  { return 0; }
+static uint64_t sys_getegid(void) { return 0; }
+
 static uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
 {
     (void)a; (void)b;
@@ -839,14 +962,51 @@ static uint64_t sys_set_robust_list(uint64_t a, uint64_t b)
 
 /*
  * sys_ioctl — syscall 16
- * Stub: musl calls ioctl(TIOCGWINSZ) for terminal width detection.
- * Return ENOTTY for all requests — we have no real tty.
+ *
+ * arg1 = fd, arg2 = request, arg3 = arg (user pointer or value)
+ *
+ * TIOCGWINSZ (0x5413): return {rows=25, cols=80, 0, 0}
+ * TIOCGPGRP  (0x540F): return foreground PID
+ * FIONREAD   (0x541B): for pipes, return bytes available; others return 0
+ * All others: return -ENOTTY
  */
 static uint64_t
-sys_ioctl(uint64_t fd, uint64_t req, uint64_t arg)
+sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
-    (void)fd; (void)req; (void)arg;
-    return (uint64_t)-(int64_t)25;  /* -ENOTTY */
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
+    vfs_file_t *f = &proc->fds[arg1];
+    if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    switch (arg2) {
+    case 0x5413UL: { /* TIOCGWINSZ — struct winsize: uint16 rows, cols, xpixel, ypixel */
+        uint16_t ws[4] = { 25, 80, 0, 0 };
+        if (!user_ptr_valid(arg3, sizeof(ws)))
+            return (uint64_t)-(int64_t)14; /* EFAULT */
+        copy_to_user((void *)(uintptr_t)arg3, ws, sizeof(ws));
+        return 0;
+    }
+    case 0x540FUL: { /* TIOCGPGRP — return foreground PID */
+        uint32_t pgid = kbd_get_foreground_pid();
+        if (!user_ptr_valid(arg3, sizeof(pgid)))
+            return (uint64_t)-(int64_t)14; /* EFAULT */
+        copy_to_user((void *)(uintptr_t)arg3, &pgid, sizeof(pgid));
+        return 0;
+    }
+    case 0x541BUL: { /* FIONREAD — bytes available in pipe */
+        int32_t avail = 0;
+        if (f->ops == &g_pipe_read_ops) {
+            pipe_t *p = (pipe_t *)f->priv;
+            avail = (int32_t)p->count;
+        }
+        if (!user_ptr_valid(arg3, sizeof(avail)))
+            return (uint64_t)-(int64_t)14; /* EFAULT */
+        copy_to_user((void *)(uintptr_t)arg3, &avail, sizeof(avail));
+        return 0;
+    }
+    default:
+        return (uint64_t)-(int64_t)25; /* ENOTTY */
+    }
 }
 
 /*
@@ -863,21 +1023,44 @@ sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot)
 
 /*
  * sys_fcntl — syscall 72
- * Handle the subset musl uses:
- *   F_GETFD (1) — return 0 (no flags set)
- *   F_SETFD (2) — accept FD_CLOEXEC flag; store nothing (no exec yet)
- *   F_GETFL (3) — return O_RDONLY (0)
- *   F_SETFL (4) — ignore flags; return 0
- * Anything else returns 0 (benign default).
+ *
+ * arg1 = fd, arg2 = cmd, arg3 = arg
+ *
+ * F_GETFL (3): return f->flags
+ * F_SETFL (4): store arg & O_NONBLOCK into f->flags (O_NONBLOCK=0x800)
+ * F_GETFD (1): return 0 (FD_CLOEXEC not set — exec-on-fork deferred)
+ * F_SETFD (2): accept silently, return 0
+ * F_DUPFD (0): find lowest fd >= arg, dup into it
+ * All others: return -EINVAL
  */
 static uint64_t
-sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
+sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
-    (void)fd; (void)arg;
-    /* All supported commands succeed silently. */
-    if (cmd == 1 || cmd == 2 || cmd == 3 || cmd == 4)
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
+    vfs_file_t *f = &proc->fds[arg1];
+    if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    switch (arg2) {
+    case 1: /* F_GETFD */ return 0;
+    case 2: /* F_SETFD */ return 0;
+    case 3: /* F_GETFL */ return (uint64_t)f->flags;
+    case 4: /* F_SETFL */
+        f->flags = (f->flags & ~0x800U) | ((uint32_t)arg3 & 0x800U);
         return 0;
-    return 0;  /* unknown cmds: succeed rather than EINVAL for now */
+    case 0: { /* F_DUPFD — find lowest free fd >= arg3 */
+        uint32_t new_fd;
+        for (new_fd = (uint32_t)arg3; new_fd < PROC_MAX_FDS; new_fd++) {
+            if (!proc->fds[new_fd].ops) break;
+        }
+        if (new_fd >= PROC_MAX_FDS) return (uint64_t)-(int64_t)24; /* EMFILE */
+        proc->fds[new_fd] = *f; /* struct copy */
+        if (f->ops->dup) f->ops->dup(f->priv);
+        return (uint64_t)new_fd;
+    }
+    default:
+        return (uint64_t)-(int64_t)22; /* EINVAL */
+    }
 }
 
 /*
@@ -1560,7 +1743,12 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  1: return sys_write(arg1, arg2, arg3);
     case  2: return sys_open(arg1, arg2, arg3);
     case  3: return sys_close(arg1);
+    case  4: return sys_stat(arg1, arg2);
+    case  5: return sys_fstat(arg1, arg2);
+    case  6: return sys_stat(arg1, arg2);   /* lstat = stat (no symlinks) */
     case  8: return sys_lseek(arg1, arg2, arg3);
+    case 21: return sys_access(arg1, arg2);
+    case 35: return sys_nanosleep(arg1, arg2);
     case 10: return sys_mprotect(arg1, arg2, arg3);
     case 16: return sys_ioctl(arg1, arg2, arg3);
     case 22: return sys_pipe2(arg1, 0); /* pipe(2) = pipe2(pipefd, 0) */
@@ -1584,6 +1772,10 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  79: return sys_getcwd(arg1, arg2);
     case  80: return sys_chdir(arg1);
     case 217: return sys_getdents64(arg1, arg2, arg3);
+    case 102: return sys_getuid();
+    case 104: return sys_getgid();
+    case 107: return sys_geteuid();
+    case 108: return sys_getegid();
     case 110: return sys_getppid();
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);
