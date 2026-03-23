@@ -112,7 +112,10 @@ PROG_BIN_SRCS = \
     kernel/uname_bin.c \
     kernel/clear_bin.c \
     kernel/true_bin.c \
-    kernel/false_bin.c
+    kernel/false_bin.c \
+    kernel/wc_bin.c \
+    kernel/grep_bin.c \
+    kernel/sort_bin.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -196,6 +199,15 @@ user/true/true.elf:
 user/false/false.elf:
 	$(MAKE) -C user/false
 
+user/wc/wc.elf:
+	$(MAKE) -C user/wc
+
+user/grep/grep.elf:
+	$(MAKE) -C user/grep
+
+user/sort/sort.elf:
+	$(MAKE) -C user/sort
+
 # ── Program binary C arrays ───────────────────────────────────────────────────
 kernel/shell_bin.c: user/shell/shell.elf
 	cd user/shell && xxd -i shell.elf > ../../kernel/shell_bin.c
@@ -230,6 +242,15 @@ kernel/false_bin.c: user/false/false.elf
 	cd user/false && xxd -i false.elf | \
 	  sed 's/unsigned char false_elf/unsigned char false_bin_elf/g; s/unsigned int false_elf_len/unsigned int false_bin_elf_len/g' \
 	  > ../../kernel/false_bin.c
+
+kernel/wc_bin.c: user/wc/wc.elf
+	cd user/wc && xxd -i wc.elf > ../../kernel/wc_bin.c
+
+kernel/grep_bin.c: user/grep/grep.elf
+	cd user/grep && xxd -i grep.elf > ../../kernel/grep_bin.c
+
+kernel/sort_bin.c: user/sort/sort.elf
+	cd user/sort && xxd -i sort.elf > ../../kernel/sort_bin.c
 
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
@@ -282,6 +303,7 @@ clean:
 	rm -f kernel/shell_bin.c kernel/ls_bin.c kernel/cat_bin.c kernel/echo_bin.c
 	rm -f kernel/pwd_bin.c kernel/uname_bin.c kernel/clear_bin.c
 	rm -f kernel/true_bin.c kernel/false_bin.c
+	rm -f kernel/wc_bin.c kernel/grep_bin.c kernel/sort_bin.c
 	rm -f .init_stamp_*
 	$(MAKE) -C user/init clean 2>/dev/null; true
 	$(MAKE) -C user/hello clean
@@ -294,4 +316,7 @@ clean:
 	$(MAKE) -C user/clear clean
 	$(MAKE) -C user/true clean
 	$(MAKE) -C user/false clean
+	$(MAKE) -C user/wc clean
+	$(MAKE) -C user/grep clean
+	$(MAKE) -C user/sort clean
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml

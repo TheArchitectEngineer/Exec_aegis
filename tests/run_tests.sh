@@ -68,3 +68,9 @@ python3 tests/test_pipe.py
 # BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
 # effect so any Python exit code != 0 will abort this script.
 python3 tests/test_signal.py
+
+# Phase 18 stat/utility smoke tests — boots the shell ISO and tests stat,
+# wc, grep via ls/pipe commands. Each test spawns its own QEMU instance.
+# BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
+# effect so any Python exit code != 0 will abort this script.
+python3 tests/test_stat.py

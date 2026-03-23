@@ -93,9 +93,8 @@ sys_writev(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
     if (cap_check(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0) {
+                  CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE) != 0)
         return (uint64_t)-(int64_t)ENOCAP;
-    }
 
     if (arg1 >= PROC_MAX_FDS || !proc->fds[arg1].ops ||
         !proc->fds[arg1].ops->write)
@@ -318,12 +317,18 @@ sys_brk(uint64_t arg1)
     arg1 = (arg1 + 4095UL) & ~4095UL;
 
     if (arg1 > proc->brk) {
-        /* Grow: map pages [proc->brk, arg1) into this process's PML4 */
+        /* Grow: map pages [proc->brk, arg1) into this process's PML4.
+         * Zero each page before mapping — Linux brk/sbrk guarantee that
+         * new heap pages are zeroed.  musl's malloc reads free-list headers
+         * from fresh pages without initialising them first; stale PMM data
+         * (e.g. DIR.buf_pos/buf_end != 0) causes readdir to skip the
+         * getdents64 refill path and crash on garbage dirent data. */
         uint64_t va;
         for (va = proc->brk; va < arg1; va += 4096UL) {
             uint64_t phys = pmm_alloc_page();
             if (!phys)
                 return proc->brk;  /* OOM — return current brk unchanged */
+            vmm_zero_page(phys);
             vmm_map_user_page(proc->pml4_phys, va, phys,
                               VMM_FLAG_PRESENT | VMM_FLAG_USER |
                               VMM_FLAG_WRITABLE);
