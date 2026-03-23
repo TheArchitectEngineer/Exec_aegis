@@ -84,3 +84,8 @@ python3 tests/test_nvme.py
 # into boot 2.  Requires make disk (build/disk.img) to exist.
 echo "--- test_ext2 ---"
 python3 tests/test_ext2.py
+
+# Phase 22 xHCI USB controller test — boots on q35 with qemu-xhci + usb-kbd,
+# verifies [XHCI] OK: in serial output and that the shell prompt appears.
+echo "--- test_xhci ---"
+python3 tests/test_xhci.py
