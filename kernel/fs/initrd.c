@@ -40,6 +40,16 @@ extern const unsigned char grep_elf[];
 extern const unsigned int  grep_elf_len;
 extern const unsigned char sort_elf[];
 extern const unsigned int  sort_elf_len;
+extern const unsigned char mkdir_elf[];
+extern const unsigned int  mkdir_elf_len;
+extern const unsigned char touch_elf[];
+extern const unsigned int  touch_elf_len;
+extern const unsigned char rm_elf[];
+extern const unsigned int  rm_elf_len;
+extern const unsigned char cp_elf[];
+extern const unsigned int  cp_elf_len;
+extern const unsigned char mv_elf[];
+extern const unsigned int  mv_elf_len;
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -65,13 +75,18 @@ static const initrd_entry_t s_files[] = {
     { "/bin/wc",    (const char *)wc_elf,        &wc_elf_len        },
     { "/bin/grep",  (const char *)grep_elf,      &grep_elf_len      },
     { "/bin/sort",  (const char *)sort_elf,      &sort_elf_len      },
+    { "/bin/mkdir", (const char *)mkdir_elf,     &mkdir_elf_len     },
+    { "/bin/touch", (const char *)touch_elf,     &touch_elf_len     },
+    { "/bin/rm",    (const char *)rm_elf,        &rm_elf_len        },
+    { "/bin/cp",    (const char *)cp_elf,        &cp_elf_len        },
+    { "/bin/mv",    (const char *)mv_elf,        &mv_elf_len        },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
 /* s_motd_size is a compile-time constant separate from the size_ptr scheme. */
 static const uint32_t s_motd_size = sizeof(s_motd) - 1;
 
-static const uint32_t s_nfiles = 13;
+static const uint32_t s_nfiles = 18;
 
 /* Helper: return file size for an entry. */
 static uint32_t

@@ -14,6 +14,7 @@
 #include "elf.h"
 #include "printk.h"
 #include "arch.h"
+#include "ext2.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -1738,6 +1739,85 @@ sys_dup2(uint64_t arg1, uint64_t arg2)
     return arg2;
 }
 
+/*
+ * copy_path_from_user — copy a null-terminated path string from user space.
+ *
+ * Uses the same byte-by-byte pattern as sys_open to avoid crossing unmapped
+ * pages near the top of the user stack.  Returns 0 on success, -14 (EFAULT)
+ * if any byte is in kernel space.
+ */
+static int
+copy_path_from_user(char *kpath, uint64_t user_ptr, uint32_t bufsz)
+{
+    uint32_t i;
+    for (i = 0; i < bufsz - 1; i++) {
+        if (!user_ptr_valid(user_ptr + i, 1))
+            return -14; /* EFAULT */
+        char c;
+        copy_from_user(&c, (const void *)(uintptr_t)(user_ptr + i), 1);
+        kpath[i] = c;
+        if (c == '\0') return 0;
+    }
+    kpath[bufsz - 1] = '\0';
+    return 0;
+}
+
+/*
+ * sys_mkdir — syscall 83
+ *
+ * arg1 = user pointer to null-terminated path string
+ * arg2 = mode (ignored for now)
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+static uint64_t
+sys_mkdir(uint64_t arg1, uint64_t arg2)
+{
+    char kpath[256];
+    (void)arg2; /* mode ignored for now */
+    if (copy_path_from_user(kpath, arg1, sizeof(kpath)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    int r = ext2_mkdir(kpath, 0755);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
+}
+
+/*
+ * sys_unlink — syscall 87
+ *
+ * arg1 = user pointer to null-terminated path string
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+static uint64_t
+sys_unlink(uint64_t arg1)
+{
+    char kpath[256];
+    if (copy_path_from_user(kpath, arg1, sizeof(kpath)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    int r = ext2_unlink(kpath);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
+}
+
+/*
+ * sys_rename — syscall 82
+ *
+ * arg1 = user pointer to null-terminated old path
+ * arg2 = user pointer to null-terminated new path
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+static uint64_t
+sys_rename(uint64_t arg1, uint64_t arg2)
+{
+    char kold[256], knew[256];
+    if (copy_path_from_user(kold, arg1, sizeof(kold)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    if (copy_path_from_user(knew, arg2, sizeof(knew)) != 0)
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    int r = ext2_rename(kold, knew);
+    return (r < 0) ? (uint64_t)(int64_t)r : 0;
+}
+
 uint64_t
 syscall_dispatch(syscall_frame_t *frame, uint64_t num,
                  uint64_t arg1, uint64_t arg2, uint64_t arg3,
@@ -1787,6 +1867,9 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 231: return sys_exit_group(arg1);
     case 273: return sys_set_robust_list(arg1, arg2);
     case 293: return sys_pipe2(arg1, arg2);
+    case  82: return sys_rename(arg1, arg2);
+    case  83: return sys_mkdir(arg1, arg2);
+    case  87: return sys_unlink(arg1);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }
