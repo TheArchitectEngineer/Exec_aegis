@@ -123,7 +123,12 @@ PROG_BIN_SRCS = \
     kernel/false_bin.c \
     kernel/wc_bin.c \
     kernel/grep_bin.c \
-    kernel/sort_bin.c
+    kernel/sort_bin.c \
+    kernel/mkdir_bin.c \
+    kernel/touch_bin.c \
+    kernel/rm_bin.c \
+    kernel/cp_bin.c \
+    kernel/mv_bin.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -217,6 +222,21 @@ user/grep/grep.elf:
 user/sort/sort.elf:
 	$(MAKE) -C user/sort
 
+user/mkdir/mkdir.elf:
+	$(MAKE) -C user/mkdir
+
+user/touch/touch.elf:
+	$(MAKE) -C user/touch
+
+user/rm/rm.elf:
+	$(MAKE) -C user/rm
+
+user/cp/cp.elf:
+	$(MAKE) -C user/cp
+
+user/mv/mv.elf:
+	$(MAKE) -C user/mv
+
 # ── Program binary C arrays ───────────────────────────────────────────────────
 kernel/shell_bin.c: user/shell/shell.elf
 	cd user/shell && xxd -i shell.elf > ../../kernel/shell_bin.c
@@ -260,6 +280,21 @@ kernel/grep_bin.c: user/grep/grep.elf
 
 kernel/sort_bin.c: user/sort/sort.elf
 	cd user/sort && xxd -i sort.elf > ../../kernel/sort_bin.c
+
+kernel/mkdir_bin.c: user/mkdir/mkdir.elf
+	cd user/mkdir && xxd -i mkdir.elf > ../../kernel/mkdir_bin.c
+
+kernel/touch_bin.c: user/touch/touch.elf
+	cd user/touch && xxd -i touch.elf > ../../kernel/touch_bin.c
+
+kernel/rm_bin.c: user/rm/rm.elf
+	cd user/rm && xxd -i rm.elf > ../../kernel/rm_bin.c
+
+kernel/cp_bin.c: user/cp/cp.elf
+	cd user/cp && xxd -i cp.elf > ../../kernel/cp_bin.c
+
+kernel/mv_bin.c: user/mv/mv.elf
+	cd user/mv && xxd -i mv.elf > ../../kernel/mv_bin.c
 
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
@@ -337,6 +372,8 @@ clean:
 	rm -f kernel/pwd_bin.c kernel/uname_bin.c kernel/clear_bin.c
 	rm -f kernel/true_bin.c kernel/false_bin.c
 	rm -f kernel/wc_bin.c kernel/grep_bin.c kernel/sort_bin.c
+	rm -f kernel/mkdir_bin.c kernel/touch_bin.c kernel/rm_bin.c
+	rm -f kernel/cp_bin.c kernel/mv_bin.c
 	rm -f .init_stamp_*
 	$(MAKE) -C user/init clean 2>/dev/null; true
 	$(MAKE) -C user/hello clean
@@ -352,4 +389,9 @@ clean:
 	$(MAKE) -C user/wc clean
 	$(MAKE) -C user/grep clean
 	$(MAKE) -C user/sort clean
+	$(MAKE) -C user/mkdir clean
+	$(MAKE) -C user/touch clean
+	$(MAKE) -C user/rm clean
+	$(MAKE) -C user/cp clean
+	$(MAKE) -C user/mv clean
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml
