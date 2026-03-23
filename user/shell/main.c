@@ -207,7 +207,7 @@ run_pipeline(cmd_t *cmds, int n)
             if (i < n - 1)
                 dup2(pipes[i][1], STDOUT_FILENO);
 
-            /* < stdin redirect (opens initrd file) */
+            /* < stdin redirect */
             if (cmds[i].stdin_file) {
                 int fd = open(cmds[i].stdin_file, O_RDONLY);
                 if (fd < 0) {
@@ -215,6 +215,19 @@ run_pipeline(cmd_t *cmds, int n)
                     _exit(1);
                 }
                 dup2(fd, STDIN_FILENO);
+                close(fd);
+            }
+
+            /* > stdout redirect — create/truncate the output file */
+            if (cmds[i].stdout_file && i == n - 1) {
+                int fd = open(cmds[i].stdout_file,
+                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) {
+                    fprintf(stderr, "%s: cannot open for writing\n",
+                            cmds[i].stdout_file);
+                    _exit(1);
+                }
+                dup2(fd, STDOUT_FILENO);
                 close(fd);
             }
 

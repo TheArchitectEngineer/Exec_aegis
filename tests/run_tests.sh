@@ -78,3 +78,9 @@ python3 tests/test_stat.py
 # Phase 20 NVMe driver smoke test — boots on q35 with NVMe disk,
 # verifies [NVME] OK: in serial output.
 python3 tests/test_nvme.py
+
+# Phase 21 ext2 persistence test — boots shell ISO twice with the same
+# NVMe disk image; writes /tmp/test.txt in boot 1 and verifies it persists
+# into boot 2.  Requires make disk (build/disk.img) to exist.
+echo "--- test_ext2 ---"
+python3 tests/test_ext2.py

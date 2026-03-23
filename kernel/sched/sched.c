@@ -4,6 +4,7 @@
 #include "printk.h"
 #include "vmm.h"
 #include "proc.h"
+#include "ext2.h"
 #include <stddef.h>
 
 /* Compile-time guard: ctx_switch.asm assumes rsp is at offset 0 of TCB.
@@ -171,6 +172,7 @@ sched_exit(void)
             t = t->next;
         }
         if (!live_users) {
+            ext2_sync();    /* flush dirty blocks to NVMe before exit */
             printk("[AEGIS] System halted.\n");
             arch_request_shutdown();
         }
