@@ -129,43 +129,58 @@ void pcie_init(void)
 
     /* Map the ECAM MMIO range into kernel VA.
      * QEMU q35 ECAM base is 0xB0000000 — outside the kernel's higher-half
-     * window. Compute the number of 4KB pages needed for the full bus range
-     * and map them via the KVA bump allocator + vmm_map_page. */
+     * window. Cap at 8 buses (2048 pages = 8MB) to stay within the PMM
+     * budget of 128MB.  All practical devices (NVMe, AHCI, etc.) sit on
+     * bus 0 in QEMU; 8 buses is generous. A server with many PCIe bridges
+     * may need more — deferred to a future phase with a proper KVA region. */
+#define PCIE_MAX_SCAN_BUSES 8u
     {
         uint32_t  n_buses  = (uint32_t)(g_mcfg_end_bus - g_mcfg_start_bus + 1);
-        uint32_t  n_pages  = n_buses * 256;  /* 32 devs × 8 fns × 4KB = 256 pages/bus */
+        uint32_t  scan_buses = (n_buses < PCIE_MAX_SCAN_BUSES)
+                               ? n_buses : PCIE_MAX_SCAN_BUSES;
+        uint32_t  n_pages  = scan_buses * 256u; /* 32 devs × 8 fns × 4KB = 256 pages/bus */
         uintptr_t va_base  = (uintptr_t)kva_alloc_pages(n_pages);
         uint32_t  i;
         for (i = 0; i < n_pages; i++) {
             uint64_t pa = g_mcfg_base + (uint64_t)i * 4096;
+            uintptr_t va = va_base + (uintptr_t)i * 4096;
+            /* kva_alloc_pages mapped each page to a PMM frame; unmap first
+             * so vmm_map_page does not panic on a double-map.
+             * SAFETY: va is a kva-allocated page that is present in the PT
+             * (kva_alloc_pages guarantees this); vmm_unmap_page succeeds. */
+            vmm_unmap_page(va);
             /* SAFETY: ECAM MMIO — map as present+write+PCD+PWT (no-cache).
              * PTE flags 0x1B = Present(1)|Write(2)|PWT(8)|PCD(16). */
-            vmm_map_page(va_base + (uintptr_t)i * 4096, pa, 0x1B);
+            vmm_map_page(va, pa, 0x1B);
         }
         s_ecam_base = (volatile uint8_t *)va_base;
-    }
 
-    {
-        uint8_t bus = g_mcfg_start_bus;
-        for (;;) {
-            uint8_t dev;
-            for (dev = 0; dev < 32; dev++) {
-                uint8_t fn;
-                uint16_t vendor0 = pcie_read16(bus, dev, 0, 0x00);
-                if (vendor0 == 0xFFFF)
-                    continue;   /* no device at dev:fn0 — skip all fns */
+        {
+            uint32_t bus_count = 0;
+            uint8_t  bus = g_mcfg_start_bus;
+            for (;;) {
+                uint8_t dev;
+                if (bus_count >= scan_buses)
+                    break;
+                for (dev = 0; dev < 32; dev++) {
+                    uint8_t fn;
+                    uint16_t vendor0 = pcie_read16(bus, dev, 0, 0x00);
+                    if (vendor0 == 0xFFFF)
+                        continue;   /* no device at dev:fn0 — skip all fns */
 
-                enumerate_function(bus, dev, 0);
+                    enumerate_function(bus, dev, 0);
 
-                /* Check multi-function flag in header type byte */
-                if (pcie_read8(bus, dev, 0, 0x0E) & 0x80) {
-                    for (fn = 1; fn < 8; fn++)
-                        enumerate_function(bus, dev, fn);
+                    /* Check multi-function flag in header type byte */
+                    if (pcie_read8(bus, dev, 0, 0x0E) & 0x80) {
+                        for (fn = 1; fn < 8; fn++)
+                            enumerate_function(bus, dev, fn);
+                    }
                 }
+                bus_count++;
+                if (bus == g_mcfg_end_bus)
+                    break;
+                bus++;
             }
-            if (bus == g_mcfg_end_bus)
-                break;
-            bus++;
         }
     }
 

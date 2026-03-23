@@ -74,3 +74,7 @@ python3 tests/test_signal.py
 # BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
 # effect so any Python exit code != 0 will abort this script.
 python3 tests/test_stat.py
+
+# Phase 20 NVMe driver smoke test — boots on q35 with NVMe disk,
+# verifies [NVME] OK: in serial output.
+python3 tests/test_nvme.py

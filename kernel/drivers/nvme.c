@@ -238,12 +238,16 @@ nvme_init(void)
         uint32_t  bar0_pages = 4u;
         uintptr_t bar0_va    = (uintptr_t)kva_alloc_pages(bar0_pages);
         for (i = 0; i < bar0_pages; i++) {
+            uintptr_t va = bar0_va + (uintptr_t)i * 4096u;
+            /* kva_alloc_pages mapped each page to a PMM frame; unmap first
+             * so vmm_map_page does not panic on a double-map.
+             * SAFETY: va is a kva-allocated page that is present in the PT
+             * (kva_alloc_pages guarantees this); vmm_unmap_page succeeds. */
+            vmm_unmap_page(va);
             /* SAFETY: BAR0 is MMIO — map uncached (Present|Write|PWT|PCD = 0x1B).
-             * vmm_map_page overwrites the kva-allocated PTE with the MMIO
-             * physical address; the old PMM frame is leaked (see above). */
-            vmm_map_page(bar0_va + (uintptr_t)i * 4096u,
-                         bar0_phys + (uint64_t)i * 4096u,
-                         0x1Bu);
+             * vmm_map_page installs the MMIO physical address at this VA;
+             * the old PMM frame is leaked (see above). */
+            vmm_map_page(va, bar0_phys + (uint64_t)i * 4096u, 0x1Bu);
         }
         /* SAFETY: bar0_va is a kernel VA mapped to NVMe BAR0 MMIO registers;
          * volatile cast prevents the compiler caching register reads/writes. */
