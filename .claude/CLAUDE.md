@@ -398,6 +398,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | PCIe enumeration + ACPI (Phase 19) | ✅ Done | MCFG+MADT on q35; graceful skip on -machine pc; kva_alloc_pages ECAM mapping; make test GREEN |
 | NVMe driver + blkdev (Phase 20) | ✅ Done | nvme_init on q35; blkdev_register; alloc_queue_page kva window; sfence doorbell; ECAM capped at 8 buses; make test GREEN; test_nvme.py PASS |
 | ext2 read-write filesystem (Phase 21) | ✅ Done | ext2 mount on nvme0; 16-slot LRU block cache; read/write/create/unlink/mkdir/rename; sys_mkdir(83)/unlink(87)/rename(82); mkdir/touch/rm/cp/mv user commands; make test GREEN; test_ext2.py PASS |
+| xHCI + USB HID keyboard (Phase 22) | ✅ Done | xHCI init on q35+qemu-xhci; USB HID boot protocol; kbd_usb_inject into PS/2 ring buffer; test_xhci.py PASS (init + shell prompt verified) |
 
 ### Phase 1 deviations from original spec
 
@@ -694,3 +695,21 @@ them would corrupt every other process.
 **ext2_vfs_dup_fn is a no-op.** Closing either dup'd fd frees the shared pool slot; subsequent access via the remaining fd will use a freed priv pointer (use-after-free). Safe only when ext2 fds are never dup'd, which holds for Phase 21 shell workloads.
 
 *Last updated: 2026-03-23 — Phase 21 complete, test_ext2.py PASS. ext2 read-write filesystem on nvme0; 16-slot LRU cache; path walk; create/write/unlink/mkdir/rename; 5 user commands; ext2_sync on sched_exit; SMAP-safe write via copy_from_user bounce.*
+
+*Last updated: 2026-03-23 — Phase 22 complete, test_xhci.py PASS. xHCI USB host controller driver; USB HID boot protocol keyboard; kbd_usb_inject into PS/2 ring buffer; [XHCI] OK confirmed on q35; 100Hz polling via PIT.*
+
+### Phase 22 forward-looking constraints
+
+**Polling-only at 100Hz.** USB HID reports are polled from the PIT tick handler. This adds ~1-2us per tick when no events are pending. MSI-X driven completion is v2.0 work.
+
+**Single keyboard only.** The first HID boot-protocol keyboard found is used. Additional keyboards on other ports are ignored.
+
+**No USB hub support.** Devices must be connected directly to root hub ports. Hub enumeration is v2.0 work.
+
+**No USB mass storage.** Only HID class devices are handled. USB storage class driver is v2.0 work.
+
+**PS/2 and USB coexist.** Both paths push into the same ring buffer via `kbd_usb_inject`. On real hardware without PS/2, only USB HID provides input.
+
+**Transfer ring memory is never freed.** Each device slot's transfer ring is allocated permanently. USB device disconnect does not reclaim resources.
+
+**QEMU usb-kbd Enable Slot timing.** In Phase 22 testing with QEMU's `usb-kbd`, the Enable Slot command may time out during boot (the USB device appears after the kernel scans ports). Razer BlackWidow V3 real hardware testing is deferred — VFIO passthrough via `-device vfio-pci,host=12:00.4` is documented in project memory.
