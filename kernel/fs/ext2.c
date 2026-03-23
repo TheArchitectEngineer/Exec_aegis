@@ -82,34 +82,6 @@ static int cache_evict(void)
     return best;
 }
 
-/* cache_read_block — read block_num into data_out (caller-supplied buf) */
-static int cache_read_block(uint32_t block_num, uint8_t *data_out)
-{
-    int idx = cache_find(block_num);
-    uint32_t i;
-
-    if (idx < 0) {
-        idx = cache_evict();
-        s_cache[idx].block_num = block_num;
-        s_cache[idx].dirty = 0;
-        s_cache_age++;
-        s_cache[idx].age = s_cache_age;
-
-        uint64_t lba = (uint64_t)block_num * (s_block_size / 512);
-        int ret = s_dev->read(s_dev, lba, s_block_size / 512,
-                              s_cache[idx].data);
-        if (ret < 0)
-            return -1;
-    } else {
-        s_cache_age++;
-        s_cache[idx].age = s_cache_age;
-    }
-
-    for (i = 0; i < s_block_size; i++)
-        data_out[i] = s_cache[idx].data[i];
-
-    return 0;
-}
 
 /* cache_mark_dirty — mark the cached slot for block_num dirty */
 static void cache_mark_dirty(uint32_t block_num)
@@ -193,8 +165,8 @@ int ext2_mount(const char *devname)
      * For larger blocks:    superblock is in block 0, BGD at block 1. */
     uint32_t bgd_block = (s_sb.s_first_data_block == 1) ? 2 : 1;
 
-    uint8_t bgd_buf[4096];
-    if (cache_read_block(bgd_block, bgd_buf) < 0)
+    uint8_t *bgd_buf = cache_get_slot(bgd_block);
+    if (!bgd_buf)
         return -1;
 
     uint32_t bgd_bytes = s_num_groups * sizeof(ext2_bgd_t);
