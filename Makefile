@@ -101,7 +101,8 @@ FS_SRCS = \
     kernel/fs/console.c \
     kernel/fs/kbd_vfs.c \
     kernel/fs/pipe.c \
-    kernel/fs/blkdev.c
+    kernel/fs/blkdev.c \
+    kernel/fs/ext2.c
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
