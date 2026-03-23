@@ -115,7 +115,7 @@ static int header_valid(const uint8_t *sector_buf, uint64_t expected_lba)
 
     /* CRC32 over first header_size bytes with header_crc32 field zeroed.
      * header_crc32 is at byte offset 16 (signature[8]+revision[4]+header_size[4]). */
-    uint8_t copy[512];
+    static uint8_t copy[512];
     __builtin_memcpy(copy, sector_buf, h->header_size);
     copy[16] = copy[17] = copy[18] = copy[19] = 0;   /* zero header_crc32 */
     if (crc32_compute(copy, h->header_size) != h->header_crc32) return 0;
