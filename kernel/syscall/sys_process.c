@@ -572,7 +572,19 @@ sys_execve(syscall_frame_t *frame,
     }
     } /* table_qwords/table_bytes scope */
 
-    /* 9. Redirect SYSRET to new ELF entry point */
+    /* 9. Close all O_CLOEXEC file descriptors before loading new image */
+    {
+        int cfd;
+        for (cfd = 0; cfd < PROC_MAX_FDS; cfd++) {
+            if (proc->fds[cfd].ops &&
+                (proc->fds[cfd].flags & VFS_FD_CLOEXEC)) {
+                proc->fds[cfd].ops->close(proc->fds[cfd].priv);
+                proc->fds[cfd].ops = (const vfs_ops_t *)0;
+            }
+        }
+    }
+
+    /* 10. Redirect SYSRET to new ELF entry point */
     frame->rip      = er.entry;
     frame->user_rsp = sp_va;
     /* ret = 0 (success) */

@@ -18,7 +18,7 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
                   CAP_KIND_VFS_OPEN, CAP_RIGHTS_READ) != 0)
         return (uint64_t)-(int64_t)ENOCAP;
 
-    (void)arg2; (void)arg3;   /* flags and mode ignored in Phase 10 */
+    (void)arg3;   /* mode ignored */
     if (!user_ptr_valid(arg1, 1))
         return (uint64_t)-14;  /* EFAULT */
     /* Copy byte-by-byte until null terminator — never read past the string.
@@ -50,6 +50,9 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         return (uint64_t)(int64_t)r;
     /* Store open flags in the fd slot for F_GETFL */
     proc->fds[fd].flags = (uint32_t)arg2;
+    /* Propagate O_CLOEXEC from open flags to fd flags */
+    if (arg2 & 0x80000U)  /* O_CLOEXEC = 0x80000 on Linux x86-64 */
+        proc->fds[fd].flags |= VFS_FD_CLOEXEC;
     return fd;
 }
 
@@ -442,7 +445,7 @@ uint64_t
 sys_pipe2(uint64_t arg1, uint64_t arg2)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    (void)arg2;   /* flags ignored */
+    uint32_t pipe_flags = (uint32_t)arg2;
 
     if (!user_ptr_valid(arg1, 2 * sizeof(int)))
         return (uint64_t)-14;   /* EFAULT */
@@ -479,6 +482,12 @@ sys_pipe2(uint64_t arg1, uint64_t arg2)
     proc->fds[wfd].offset = 0;
     proc->fds[wfd].size   = 0;
 
+    /* Propagate O_CLOEXEC to both pipe ends */
+    if (pipe_flags & 0x80000U) {  /* O_CLOEXEC */
+        proc->fds[rfd].flags |= VFS_FD_CLOEXEC;
+        proc->fds[wfd].flags |= VFS_FD_CLOEXEC;
+    }
+
     /* Write [rfd, wfd] to user pipefd array */
     int out[2] = { rfd, wfd };
     copy_to_user((void *)(uintptr_t)arg1, out, sizeof(out));
@@ -511,6 +520,7 @@ sys_dup(uint64_t arg1)
 
     /* Copy fd struct by value, then bump refcount via dup hook. */
     proc->fds[newfd] = proc->fds[arg1];
+    proc->fds[newfd].flags &= ~VFS_FD_CLOEXEC;  /* POSIX: dup clears FD_CLOEXEC */
     if (proc->fds[newfd].ops->dup)
         proc->fds[newfd].ops->dup(proc->fds[newfd].priv);
 
@@ -544,6 +554,7 @@ sys_dup2(uint64_t arg1, uint64_t arg2)
 
     /* Copy fd struct by value, then bump refcount via dup hook. */
     proc->fds[arg2] = proc->fds[arg1];
+    proc->fds[arg2].flags &= ~VFS_FD_CLOEXEC;  /* POSIX: dup2 clears FD_CLOEXEC */
     if (proc->fds[arg2].ops->dup)
         proc->fds[arg2].ops->dup(proc->fds[arg2].priv);
 
