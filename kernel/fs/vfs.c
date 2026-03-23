@@ -90,9 +90,10 @@ ext2_vfs_close_fn(void *priv)
 static void
 ext2_vfs_dup_fn(void *priv)
 {
-    /* dup shares the same priv pointer.  The first close frees the pool
-     * slot; any further access via the dup'd fd is undefined.
-     * Acceptable for Phase 21 scope: no concurrent dup+write on ext2 fds. */
+    /* dup shares the same priv pointer. Closing either fd frees the shared
+     * pool slot; subsequent access via the remaining fd will use a freed priv
+     * pointer (use-after-free). Safe only when ext2 fds are never dup'd, which
+     * holds for Phase 21 shell workloads. */
     (void)priv;
 }
 
