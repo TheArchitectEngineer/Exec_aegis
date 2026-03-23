@@ -24,6 +24,10 @@ int kbd_poll(char *out);
  * Call with pid=0 to clear (no foreground process). */
 void kbd_set_foreground_pid(uint32_t pid);
 
+/* Return the current foreground PID (set by kbd_set_foreground_pid).
+ * Returns 0 if no foreground process. */
+uint32_t kbd_get_foreground_pid(void);
+
 /* Like kbd_read() but returns '\0' and sets *interrupted=1 if a signal
  * is pending for the current process. Returns the character otherwise. */
 char kbd_read_interruptible(int *interrupted);
