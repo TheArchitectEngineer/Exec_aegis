@@ -76,3 +76,38 @@ arch_smap_init(void)
     arch_smap_enabled = 1;
     printk("[SMAP] OK: supervisor access prevention active\n");
 }
+
+static int
+cpuid_smep_supported(void)
+{
+    uint32_t eax, ebx, ecx, edx;
+    /* CPUID leaf 7, subleaf 0, EBX bit 7 = SMEP.
+     * cpuid overwrites all four registers; declare them all as outputs so
+     * the compiler does not assume EAX/ECX retain their input values.
+     * "0"(7) places leaf 7 in EAX (same register as output operand 0);
+     * "2"(0) places subleaf 0 in ECX (same register as output operand 2). */
+    __asm__ volatile (
+        "cpuid"
+        : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+        : "0"(7), "2"(0)
+    );
+    (void)eax; (void)ecx; (void)edx;
+    return (ebx >> 7) & 1;   /* bit 7 = SMEP */
+}
+
+void
+arch_smep_init(void)
+{
+    if (!cpuid_smep_supported()) {
+        printk("[SMEP] WARN: not supported by CPU\n");
+        return;
+    }
+    /* Set CR4.SMEP (bit 20 = 0x100000) */
+    __asm__ volatile (
+        "mov %%cr4, %%rax\n"
+        "or $0x100000, %%rax\n"
+        "mov %%rax, %%cr4\n"
+        : : : "rax"
+    );
+    printk("[SMEP] OK: supervisor mode execution prevention active\n");
+}
