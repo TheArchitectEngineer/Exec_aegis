@@ -180,6 +180,9 @@ int ext2_mount(const char *devname)
         return -1;
 
     s_block_size = 1024u << s_sb.s_log_block_size;
+    if (s_sb.s_rev_level >= 1 && (s_sb.s_inode_size < 128 || s_sb.s_inode_size > 4096)) {
+        return -1;
+    }
     s_num_groups = (s_sb.s_blocks_count + s_sb.s_blocks_per_group - 1)
                    / s_sb.s_blocks_per_group;
     if (s_num_groups > 32)
@@ -214,6 +217,9 @@ static int ext2_read_inode(uint32_t ino, ext2_inode_t *out)
 {
     uint32_t group       = (ino - 1) / s_sb.s_inodes_per_group;
     uint32_t index       = (ino - 1) % s_sb.s_inodes_per_group;
+    if (group >= s_num_groups || group >= 32) {
+        return -1;
+    }
     uint32_t inode_size  = (s_sb.s_rev_level >= 1)
                            ? (uint32_t)s_sb.s_inode_size : 128u;
     uint32_t inode_table_block = s_bgd[group].bg_inode_table;
@@ -247,6 +253,9 @@ ext2_write_inode(uint32_t ino, const ext2_inode_t *inode)
 {
     uint32_t group       = (ino - 1) / s_sb.s_inodes_per_group;
     uint32_t index       = (ino - 1) % s_sb.s_inodes_per_group;
+    if (group >= s_num_groups || group >= 32) {
+        return -1;
+    }
     uint32_t inode_size  = (s_sb.s_rev_level >= 1)
                            ? (uint32_t)s_sb.s_inode_size : 128u;
     uint32_t inode_table_block = s_bgd[group].bg_inode_table;
@@ -361,10 +370,14 @@ int ext2_open(const char *path, uint32_t *inode_out)
             while (block_pos < s_block_size) {
                 ext2_dirent_t *de =
                     (ext2_dirent_t *)(data + block_pos);
-                if (de->rec_len == 0)
+                if (de->rec_len < 8 || block_pos + de->rec_len > s_block_size)
                     break;
-                if (de->inode != 0 &&
-                    de->name_len == (uint8_t)clen) {
+                if (de->inode == 0) {
+                    block_pos += de->rec_len;
+                    pos += de->rec_len;
+                    continue;
+                }
+                if (de->name_len == (uint8_t)clen) {
                     /* manual name compare */
                     uint32_t k;
                     int match = 1;
