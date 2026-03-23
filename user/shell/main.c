@@ -4,6 +4,20 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>   /* for SIGCHLD, struct sigaction, sigaction() */
+
+static long
+sys_setfg(long pid)
+{
+    long ret;
+    __asm__ volatile(
+        "syscall"
+        : "=a"(ret)
+        : "0"(360L), "D"(pid)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
 
 #define MAX_PIPELINE 6    /* max pipeline stages; (PROC_MAX_FDS-3)/2 = 6 */
 #define MAX_ARGV     16   /* max args per command */
@@ -232,10 +246,18 @@ run_pipeline(cmd_t *cmds, int n)
         close(pipes[j][1]);
     }
 
+    /* Register the last stage as foreground process so Ctrl-C sends SIGINT to it.
+     * Use pids[n-1] (last stage) for single-command and for the terminal stage
+     * of a pipeline (the stage the user interacts with). */
+    sys_setfg((long)pids[n - 1]);
+
     /* Wait for all children in order */
     int status;
     for (i = 0; i < n; i++)
         waitpid(pids[i], &status, 0);
+
+    /* Clear foreground process after all children exit */
+    sys_setfg(0);
 }
 
 int
@@ -245,6 +267,16 @@ main(void)
     cmd_t cmds[MAX_PIPELINE];
 
     printf("[SHELL] Aegis shell ready\n");
+
+    /* Prevent SIGCHLD from terminating the shell.
+     * signal_deliver already treats SIGCHLD SIG_DFL as ignore, but
+     * install SIG_IGN explicitly as a defence-in-depth measure. */
+    {
+        struct sigaction sa_chld;
+        __builtin_memset(&sa_chld, 0, sizeof(sa_chld));
+        sa_chld.sa_handler = SIG_IGN;
+        sigaction(SIGCHLD, &sa_chld, NULL);
+    }
 
     for (;;) {
         write(1, "# ", 2);
