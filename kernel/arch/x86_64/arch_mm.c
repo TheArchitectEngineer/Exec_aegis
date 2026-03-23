@@ -34,20 +34,6 @@ typedef struct {
     uint32_t reserved;
 } mb2_mmap_entry_t;
 
-/* Multiboot2 ACPI old tag (type 14) — contains RSDP v1 inline */
-typedef struct {
-    uint32_t type;    /* = 14 */
-    uint32_t size;
-    /* RSDP follows immediately: 20 bytes (v1) */
-} mb2_acpi_old_tag_t;
-
-/* Multiboot2 ACPI new tag (type 15) — contains RSDP v2 inline */
-typedef struct {
-    uint32_t type;    /* = 15 */
-    uint32_t size;
-    /* RSDP follows immediately: 36 bytes (v2) */
-} mb2_acpi_new_tag_t;
-
 #define MB2_TAG_MMAP   6
 #define MB2_TAG_ACPI_OLD 14   /* ACPI 1.0 RSDP (32-bit, RSDT) */
 #define MB2_TAG_ACPI_NEW 15   /* ACPI 2.0+ RSDP (64-bit, XSDT) */
@@ -60,7 +46,8 @@ typedef struct {
 
 static aegis_mem_region_t regions[MAX_REGIONS];
 static uint32_t           region_count = 0;
-static uint64_t s_rsdp_phys = 0;
+static uint64_t s_rsdp_v1_phys = 0;   /* ACPI 1.0 RSDP (type-14 tag) */
+static uint64_t s_rsdp_v2_phys = 0;   /* ACPI 2.0+ RSDP (type-15 tag) */
 
 void arch_mm_init(void *mb_info)
 {
@@ -93,14 +80,18 @@ void arch_mm_init(void *mb_info)
             }
         }
 
-        if (tag->type == MB2_TAG_ACPI_NEW && s_rsdp_phys == 0) {
-            /* ACPI 2.0+ RSDP: skip the 8-byte tag header, RSDP starts there.
-             * We store the physical address of the RSDP structure itself. */
-            s_rsdp_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_acpi_new_tag_t));
+        if (tag->type == MB2_TAG_ACPI_NEW && s_rsdp_v2_phys == 0) {
+            /* SAFETY: multiboot2 tag stream is identity-mapped (VA==PA) at this
+             * point in boot. s_rsdp_v2_phys holds the PA of the inline RSDP v2.
+             * Valid until identity map teardown (Phase 7 — already done, but
+             * arch_mm_init runs before that; the value is consumed by acpi_init
+             * which runs in the same boot phase while the physical address
+             * remains accessible via the higher-half mapping). */
+            s_rsdp_v2_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_tag_t));
         }
-        if (tag->type == MB2_TAG_ACPI_OLD && s_rsdp_phys == 0) {
-            /* ACPI 1.0 RSDP fallback — only if no v2 tag found. */
-            s_rsdp_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_acpi_old_tag_t));
+        if (tag->type == MB2_TAG_ACPI_OLD && s_rsdp_v1_phys == 0) {
+            /* SAFETY: same identity-map guarantee as ACPI_NEW above. */
+            s_rsdp_v1_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_tag_t));
         }
 
         /* Tags are 8-byte aligned */
@@ -140,5 +131,6 @@ const aegis_mem_region_t *arch_mm_get_reserved_regions(void)
 
 uint64_t arch_get_rsdp_phys(void)
 {
-    return s_rsdp_phys;
+    /* Prefer ACPI 2.0+ (XSDT, 64-bit pointers); fall back to 1.0 (RSDT). */
+    return (s_rsdp_v2_phys != 0) ? s_rsdp_v2_phys : s_rsdp_v1_phys;
 }
