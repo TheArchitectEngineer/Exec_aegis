@@ -394,6 +394,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Pipes + I/O redirection (Phase 16) | ✅ Done | sys_pipe2/dup/dup2; pipe.c ring buffer; shell pipeline parser; 5/5 smoke tests pass |
 | Signals (Phase 17) | ✅ Done | sigaction/sigprocmask/sigreturn/kill/setfg; Ctrl-C kills foreground; iretq+sysret delivery paths; 1/1 smoke test pass |
 | stat/getdents64/utilities (Phase 18) | ✅ Done | sys_stat/fstat/lstat/access/nanosleep; getdents64; wc/grep/sort binaries; syscall_entry.asm rdi/rsi/rdx preservation; 4/4 smoke tests pass |
+| PCIe enumeration + ACPI (Phase 19) | ✅ Done | MCFG+MADT on q35; graceful skip on -machine pc; kva_alloc_pages ECAM mapping; make test GREEN |
 
 ### Phase 1 deviations from original spec
 
@@ -644,3 +645,15 @@ them would corrupt every other process.
 **No `O_CLOEXEC` on stat-related opens.** File descriptors used internally by stat (via sys_open) are not automatically closed on exec. Deferred alongside full O_CLOEXEC support.
 
 *Last updated: 2026-03-22 — Phase 17 complete, test_signal.py 1/1 GREEN. sigaction/sigprocmask/sigreturn/kill/setfg; iretq and sysret signal delivery paths; Ctrl-C kills foreground process via kbd_handler→signal_send_pid→signal_deliver. Three scheduler/CR3 bugs fixed: sched_block now leaves tasks in run queue so sched_exit can find blocked parents; CR3 restored to user PML4 after ctx_switch returns in sched_block/sched_yield_to_next; signal_deliver temporarily switches to user PML4 for copy_to_user.*
+
+### Phase 19 forward-looking constraints
+
+**ACPI table access is bounded to the first 4MB.** `acpi.c` uses `phys_accessible()` (4MB limit) to guard RSDP/RSDT/XSDT access. On QEMU q35, ACPI tables may be placed above 4MB. A future phase must replace `phys_accessible()` with a `vmm_map_page`-based accessor so real hardware ACPI tables are reachable.
+
+**ECAM MMIO mapped with PWT+PCD flags (no-cache).** The PCIe config space MMIO is mapped via `kva_alloc_pages + vmm_map_page` with flags `0x1B` (Present|Write|PWT|PCD). This is correct for config space registers. BAR memory resources have their own cacheability requirements and must be mapped separately per device.
+
+**`pcie_find_device()` returns the first match only.** If a system has multiple devices of the same class (e.g. two NVMe controllers), only the first is returned. Phase 20 iterates `pcie_get_devices()` directly for the NVMe driver — this is fine for Phase 20 scope.
+
+**MADT is located but not parsed.** `g_madt_found` is set to 1 but MADT entries (LAPIC, IOAPIC, interrupt source override) are not parsed. SMP and APIC-based interrupt routing require MADT parsing — Phase 22+ work.
+
+*Last updated: 2026-03-23 — Phase 19 complete, make test GREEN. ACPI MCFG+MADT parsing; PCIe ECAM enumeration on q35; graceful fallback on -machine pc.*
