@@ -17,7 +17,10 @@ blkdev_t *blkdev_get(const char *name)
 {
     int i;
     for (i = 0; i < s_count; i++) {
-        if (__builtin_strcmp(s_devices[i]->name, name) == 0)
+        const char *a = s_devices[i]->name;
+        const char *b = name;
+        while (*a && *a == *b) { a++; b++; }
+        if (*a == *b)
             return s_devices[i];
     }
     return NULL;
