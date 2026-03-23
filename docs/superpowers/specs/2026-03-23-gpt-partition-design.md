@@ -72,9 +72,13 @@ typedef struct __attribute__((packed)) {
 } gpt_header_t;
 ```
 
-Validation: check `signature`, check `header_size >= 92`, compute CRC32 of the
-header (with `header_crc32` zeroed during computation) and compare. If invalid,
-try backup header at the last LBA. If both fail, emit `[GPT] WARN:` and return.
+Validation: check `signature`, check `92 <= header_size <= 512` (the sector read
+buffer is 512 bytes; a `header_size` larger than that would make the CRC read past
+the buffer end), check `my_lba` equals the LBA from which the header was read (1
+for primary, `block_count - 1` for backup), then compute CRC32 over the first
+`hdr.header_size` bytes of the sector buffer (with the `header_crc32` field zeroed
+in the copy before computing) and compare. If invalid, try backup header at the
+last LBA. If both fail, emit `[GPT] WARN:` and return.
 
 ### GPT Partition Entry (128 bytes each)
 
@@ -90,6 +94,9 @@ typedef struct __attribute__((packed)) {
 ```
 
 An entry is valid if `type_guid` is not all-zeros and `start_lba < end_lba`.
+(Note: the UEFI spec allows `start_lba == end_lba` for single-sector partitions;
+this implementation uses strict `<` as a simplification — both Phase 23 partitions
+are large and this case does not arise.)
 
 ### CRC32 algorithm
 
@@ -182,17 +189,28 @@ gpt_scan(devname):
     parse into hdr
     if !header_valid(&hdr, dev->block_count - 1): WARN + return 0
 
+  // Validate entry table parameters BEFORE reading the array or calling crc32.
+  // Must come here: if num_partition_entries > 128, reading 4 × 8-sector chunks
+  // would cover more data than s_full_entries holds (16 KB = 128 × 128 exactly),
+  // and calling crc32(s_full_entries, num_entries * entry_size) with out-of-range
+  // values would overread the static buffer. Guard first.
+  if hdr.num_partition_entries > 128 || hdr.partition_entry_size != 128:
+    WARN "unsupported GPT layout" + return 0
+
   // Read partition entry array in 4096-byte (8-sector) chunks to stay within
   // the NVMe driver's per-call transfer limit (count * 512 <= 4096).
   // The 32-sector (16 KB) array is processed as 4 chunks of 8 sectors each.
-  // s_entry_buf is STATIC — NOT a local variable. 16 KB on the kernel stack
-  // would overflow the 4 KB stack immediately.
+  // Use hdr.partition_entry_lba (not a hardcoded 2) so the backup header's
+  // entry array is read correctly when falling back to the backup.
+  // s_entry_buf and s_full_entries are STATIC — NOT local variables. 16 KB on
+  // the kernel stack would overflow the 4 KB stack immediately.
   static uint8_t s_entry_buf[4096]   // holds 4096 / 128 = 32 entries at a time
   static uint8_t s_full_entries[128 * 128]  // 16 KB static buffer for full array
   for chunk = 0; chunk < 4; chunk++:
-    dev->read(dev, 2 + chunk * 8, 8, s_entry_buf)
+    dev->read(dev, hdr.partition_entry_lba + chunk * 8, 8, s_entry_buf)
     memcpy(s_full_entries + chunk * 4096, s_entry_buf, 4096)
-  validate crc32(s_full_entries, num_entries * entry_size) == hdr.partition_array_crc32
+  // 128 * 128 is safe: we verified the layout above
+  validate crc32(s_full_entries, 128 * 128) == hdr.partition_array_crc32
 
   // part_num starts at 1 so the first partition is named "nvme0p1"
   int part_num = 1
@@ -202,7 +220,15 @@ gpt_scan(devname):
     set blkdev.block_count = entry.end_lba - entry.start_lba + 1
     set blkdev.block_size = dev->block_size
     set blkdev.lba_offset = 0          // partition devices are always zero-based
-    snprintf name: devname + "p" + part_num   // "nvme0p1", "nvme0p2"
+
+    // Build name manually — the kernel has no snprintf.
+    // Copy devname prefix, append 'p', append ASCII digit, null-terminate.
+    // Supports single-digit part numbers (1–7, matching GPT_MAX_PARTS).
+    copy devname chars into blkdev.name up to 13 chars
+    append 'p'
+    append '0' + part_num    // e.g. part_num=1 → '1'
+    null-terminate
+
     set blkdev.read = gpt_part_read, blkdev.write = gpt_part_write
     blkdev_register(...)
     part_num++
@@ -238,6 +264,10 @@ consistent: callers always use LBAs starting from 0 relative to the device.
 **Static allocation:** `gpt_part_priv_t` and the partition `blkdev_t` structs are
 allocated from a static pool of size `GPT_MAX_PARTS = 7` (leaves one blkdev slot
 for the parent). No `kva_alloc_pages` needed — these are small fixed-size structs.
+Both `s_devs[]` and `s_parts[]` MUST be `static` (or global) — `blkdev_register`
+stores a raw pointer to the `blkdev_t`, not a copy. If these were local variables
+they would become dangling pointers the moment `gpt_scan()` returned, causing a
+use-after-return fault on the first `blkdev_get("nvme0p1")` call.
 
 **Stack budget warning:** The partition entry array is 128 × 128 = 16,384 bytes.
 This MUST NOT be declared as a local variable — it would immediately overflow the
@@ -272,10 +302,23 @@ The exact wording must match `gpt_scan()`'s `printk` call.
 SGDISK = sgdisk
 DISK   = $(BUILD)/disk.img
 DISK_SIZE_MB = 64
+# nvme0p1: LBA 34–122879 = 122846 sectors = ~60 MB
+P1_SECTORS = 122846
+
+# All user ELFs that must exist before the disk image can be populated.
+# debugfs silently skips `write` commands whose source file is missing,
+# producing a disk with an empty /bin and no build error.
+DISK_USER_BINS = \
+    user/shell/shell.elf user/ls/ls.elf user/cat/cat.elf \
+    user/echo/echo.elf user/pwd/pwd.elf user/uname/uname.elf \
+    user/clear/clear.elf user/true/true.elf user/false/false.elf \
+    user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
+    user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
+    user/mkdir/mkdir.elf user/touch/touch.elf
 
 disk: $(DISK)
 
-$(DISK):
+$(DISK): $(DISK_USER_BINS)
 	@mkdir -p $(BUILD)
 	# Create 64 MB zero image
 	dd if=/dev/zero of=$(DISK) bs=1M count=$(DISK_SIZE_MB) 2>/dev/null
@@ -284,26 +327,48 @@ $(DISK):
 	    --new=1:34:122879   --typecode=1:8300 --change-name=1:aegis-root \
 	    --new=2:122880:0    --typecode=2:8200 --change-name=2:aegis-swap \
 	    $(DISK)
-	# Format partition 1 as ext2.
-	# -E offset= gives the byte offset of partition start (LBA 34 × 512 bytes).
-	# No size argument: mke2fs auto-detects partition size from the image minus offset.
-	mke2fs -t ext2 -F -L aegis-root \
-	    -E offset=$$((34 * 512)) $(DISK)
-	# Populate the filesystem
-	echo "mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home" \
-	    | debugfs -w -o offset=$$((34 * 512)) $(DISK)
+	# Build a standalone ext2 image for partition 1, then splice it in.
+	# debugfs does not support an offset flag; we cannot point it directly at a
+	# byte offset within the GPT disk image. Instead:
+	#   1. Create a raw ext2 image of exactly P1_SECTORS sectors.
+	#   2. Populate it with standard debugfs (no offset needed).
+	#   3. dd it into the GPT disk starting at LBA 34 (sector 34).
+	dd if=/dev/zero of=/tmp/aegis-p1.img bs=512 count=$(P1_SECTORS) 2>/dev/null
+	mke2fs -t ext2 -F -L aegis-root /tmp/aegis-p1.img
+	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
+	    | debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
-	echo "write user/shell/shell.elf /bin/sh\nwrite /tmp/aegis-motd /etc/motd" \
-	    | debugfs -w -o offset=$$((34 * 512)) $(DISK)
+	# Copy shell and all companion binaries into /bin.
+	# Adjust the list to match the binaries built by the Makefile at implementation time.
+	printf 'write user/shell/shell.elf /bin/sh\n\
+write user/ls/ls.elf /bin/ls\n\
+write user/cat/cat.elf /bin/cat\n\
+write user/echo/echo.elf /bin/echo\n\
+write user/pwd/pwd.elf /bin/pwd\n\
+write user/uname/uname.elf /bin/uname\n\
+write user/clear/clear.elf /bin/clear\n\
+write user/true/true.elf /bin/true\n\
+write user/false/false.elf /bin/false\n\
+write user/wc/wc.elf /bin/wc\n\
+write user/grep/grep.elf /bin/grep\n\
+write user/sort/sort.elf /bin/sort\n\
+write user/mv/mv.elf /bin/mv\n\
+write user/cp/cp.elf /bin/cp\n\
+write user/rm/rm.elf /bin/rm\n\
+write user/mkdir/mkdir.elf /bin/mkdir\n\
+write user/touch/touch.elf /bin/touch\n\
+write /tmp/aegis-motd /etc/motd\n' \
+	    | debugfs -w /tmp/aegis-p1.img
+	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=34 conv=notrunc 2>/dev/null
+	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"
 ```
 
-Note: `mke2fs -E offset=N` formats a partition within a whole-disk image without
-loopback devices or root privileges. Without a size argument, `mke2fs` uses the
-total image size minus the offset — it formats everything from LBA 34 to end of
-image, which slightly overlaps `nvme0p2` but is harmless since the ext2
-superblock check at mount time limits reads to the partition's actual `block_count`.
-`debugfs -w -o offset=N` accesses the filesystem at the same byte offset.
+Note: `mke2fs -E offset=N` can format a partition within a whole-disk image, but
+`debugfs` has no equivalent offset option. The temp-image approach avoids all
+loopback devices and root privileges: create a plain ext2 image at the exact
+partition size, populate it normally, then splice it into the GPT disk with
+`dd seek=34 conv=notrunc`.
 
 ---
 
@@ -311,7 +376,7 @@ superblock check at mount time limits reads to the partition's actual `block_cou
 
 | Condition | Response |
 |-----------|----------|
-| `blkdev_get(devname)` returns NULL | `[GPT] WARN: device not found` + return 0 |
+| `blkdev_get(devname)` returns NULL | **silent return 0** — consistent with how `nvme_init`, `pcie_init`, and `xhci_init` all handle absent hardware. No `printk` here because `make test` runs on `-machine pc` (no NVMe), so any `[GPT]` line emitted in the absent-hardware path would appear in captured serial output and break the boot oracle diff. |
 | LBA 1 read fails | `[GPT] WARN: cannot read GPT header` + return 0 |
 | Primary header signature/CRC invalid | Try backup header; if backup also invalid: WARN + return 0 |
 | Partition array CRC invalid | `[GPT] WARN: partition array CRC mismatch` + return 0 |
@@ -328,16 +393,22 @@ own error if `nvme0p1` was never registered.
 
 ### `make test` (boot oracle)
 
-Add `[GPT] OK: 2 partition(s) found on nvme0` to `tests/expected/boot.txt`
-between the `[NVME]` and `[EXT2]` lines.
+**Do NOT add a `[GPT]` line to `tests/expected/boot.txt`.** `make test` runs on
+`-machine pc` (no NVMe controller). `gpt_scan("nvme0")` will find no blkdev and
+return silently — no output emitted. Adding a `[GPT] OK:` line to `boot.txt`
+would make `make test` fail permanently on the `-machine pc` baseline.
+
+The `[GPT] OK:` line is verified in `test_gpt.py` only, where the q35 machine
+with the GPT disk image is booted.
 
 ### `test_gpt.py` (new test script)
 
 ```python
-# Boot QEMU with the GPT-partitioned disk image and verify:
-# 1. [GPT] OK: 2 partition(s) found on nvme0 appears in serial output
-# 2. Shell prompt appears (ext2 mount on nvme0p1 succeeded)
-# 3. Basic shell commands work (ls, cat /etc/motd)
+# Boot QEMU (q35 + disk.img) and verify:
+# 1. [GPT] OK: 2 partition(s) found on nvme0 in serial output
+# 2. [EXT2] OK: line contains "nvme0p1" (confirms partition routing, not whole disk)
+# 3. Shell prompt appears (ext2 mount on nvme0p1 succeeded end-to-end)
+# 4. Basic shell commands work: ls /bin shows expected binaries, cat /etc/motd works
 ```
 
 Wire `test_gpt.py` into `tests/run_tests.sh`.
