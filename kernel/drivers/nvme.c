@@ -50,6 +50,12 @@ static uint32_t              s_iosq_tail = 0;
 static uint32_t              s_iocq_head = 0;
 static uint8_t               s_iocq_phase = 1;
 
+/* Single-page bounce buffer for read/write I/O.
+ * Allocated once in nvme_init; reused for all synchronous I/O.
+ * Phase 20: synchronous only — no concurrent I/O. */
+static void    *s_iobuf     = NULL;
+static uint64_t s_iobuf_phys = 0;
+
 /* -------------------------------------------------------------------------
  * Helpers
  * ---------------------------------------------------------------------- */
@@ -341,6 +347,9 @@ nvme_init(void)
             }
         }
 
+        /* Allocate bounce buffer for synchronous read/write I/O */
+        s_iobuf = alloc_queue_page(&s_iobuf_phys);
+
         /* Step 9: Register blkdev */
         {
             static blkdev_t s_nvme0;
@@ -366,13 +375,12 @@ nvme_init(void)
  * ---------------------------------------------------------------------- */
 
 /* nvme_blkdev_read — read `count` 512-byte sectors from LBA into buf.
- * Uses a bounce buffer allocated from kva (never freed — Phase 20 limitation).
+ * Uses a shared bounce buffer allocated in nvme_init().
  * Only supports transfers that fit in one 4KB page (count * 512 <= 4096). */
 static int
 nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
 {
     uint32_t   bytes = count * 512u;   /* assume 512-byte sectors */
-    uint64_t   buf_phys;
     void      *tmp;
     nvme_sqe_t *sqe;
     int         rc;
@@ -381,8 +389,9 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
     if (bytes > 4096u)
         return -1;   /* multi-page transfers not supported in Phase 20 */
 
-    /* Bounce buffer: kva-allocated page (never freed — Phase 20 limitation) */
-    tmp = alloc_queue_page(&buf_phys);
+    /* Bounce buffer: shared single page allocated in nvme_init() */
+    tmp = s_iobuf;
+    uint64_t buf_phys = s_iobuf_phys;
 
     sqe = &s_iosq[s_iosq_tail];
     __builtin_memset(sqe, 0, sizeof(*sqe));
@@ -411,14 +420,13 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
 }
 
 /* nvme_blkdev_write — write `count` 512-byte sectors from buf to LBA.
- * Uses a bounce buffer allocated from kva (never freed — Phase 20 limitation).
+ * Uses a shared bounce buffer allocated in nvme_init().
  * Only supports transfers that fit in one 4KB page (count * 512 <= 4096). */
 static int
 nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
                   const void *buf)
 {
     uint32_t   bytes = count * 512u;
-    uint64_t   buf_phys;
     void      *tmp;
     nvme_sqe_t *sqe;
 
@@ -426,8 +434,9 @@ nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
     if (bytes > 4096u)
         return -1;
 
-    /* Bounce buffer: kva-allocated page (never freed — Phase 20 limitation) */
-    tmp = alloc_queue_page(&buf_phys);
+    /* Bounce buffer: shared single page allocated in nvme_init() */
+    tmp = s_iobuf;
+    uint64_t buf_phys = s_iobuf_phys;
     __builtin_memcpy(tmp, buf, bytes);
 
     sqe = &s_iosq[s_iosq_tail];
