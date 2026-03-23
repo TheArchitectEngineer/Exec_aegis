@@ -579,7 +579,7 @@ sys_execve(syscall_frame_t *frame,
             if (proc->fds[cfd].ops &&
                 (proc->fds[cfd].flags & VFS_FD_CLOEXEC)) {
                 proc->fds[cfd].ops->close(proc->fds[cfd].priv);
-                proc->fds[cfd].ops = (const vfs_ops_t *)0;
+                __builtin_memset(&proc->fds[cfd], 0, sizeof(vfs_file_t));
             }
         }
     }

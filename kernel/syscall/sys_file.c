@@ -350,8 +350,8 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
  *
  * F_GETFL (3): return f->flags
  * F_SETFL (4): store arg & O_NONBLOCK into f->flags (O_NONBLOCK=0x800)
- * F_GETFD (1): return 0 (FD_CLOEXEC not set — exec-on-fork deferred)
- * F_SETFD (2): accept silently, return 0
+ * F_GETFD (1): return FD_CLOEXEC (1) if set, 0 otherwise
+ * F_SETFD (2): set or clear FD_CLOEXEC based on arg3 bit 0
  * F_DUPFD (0): find lowest fd >= arg, dup into it
  * All others: return -EINVAL
  */
@@ -364,8 +364,14 @@ sys_fcntl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
 
     switch (arg2) {
-    case 1: /* F_GETFD */ return 0;
-    case 2: /* F_SETFD */ return 0;
+    case 1: /* F_GETFD — return FD_CLOEXEC (1) if set, 0 otherwise */
+        return (proc->fds[arg1].flags & VFS_FD_CLOEXEC) ? 1 : 0;
+    case 2: /* F_SETFD — set or clear FD_CLOEXEC based on arg3 bit 0 (FD_CLOEXEC=1) */
+        if (arg3 & 1)
+            proc->fds[arg1].flags |= VFS_FD_CLOEXEC;
+        else
+            proc->fds[arg1].flags &= ~VFS_FD_CLOEXEC;
+        return 0;
     case 3: /* F_GETFL */ return (uint64_t)f->flags;
     case 4: /* F_SETFL */
         f->flags = (f->flags & ~0x800U) | ((uint32_t)arg3 & 0x800U);
@@ -475,12 +481,14 @@ sys_pipe2(uint64_t arg1, uint64_t arg2)
     proc->fds[rfd].priv   = p;
     proc->fds[rfd].offset = 0;
     proc->fds[rfd].size   = 0;
+    proc->fds[rfd].flags  = 0;
 
     /* Install write end */
     proc->fds[wfd].ops    = &g_pipe_write_ops;
     proc->fds[wfd].priv   = p;
     proc->fds[wfd].offset = 0;
     proc->fds[wfd].size   = 0;
+    proc->fds[wfd].flags  = 0;
 
     /* Propagate O_CLOEXEC to both pipe ends */
     if (pipe_flags & 0x80000U) {  /* O_CLOEXEC */
