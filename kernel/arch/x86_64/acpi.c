@@ -2,10 +2,16 @@
  *
  * Phase 19 scope: locate MCFG to get PCIe ECAM base, locate MADT for
  * future interrupt routing. No AML interpreter. No power management.
+ *
+ * Phase 20 fix: phys_to_virt() now uses kva_alloc_pages + vmm_map_page
+ * to access ACPI tables at any physical address, not just the first 4MB.
+ * kva_init() runs before acpi_init() so this is safe.
  */
 #include "acpi.h"
 #include "arch.h"
 #include "printk.h"
+#include "vmm.h"
+#include "kva.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -14,46 +20,111 @@ uint8_t  g_mcfg_start_bus = 0;
 uint8_t  g_mcfg_end_bus   = 0;
 int      g_madt_found     = 0;
 
-/* Accessible physical range: identity map covers [0..4MB) only.
- * ACPI tables on QEMU -machine pc land in high RAM (~128MB), outside
- * this window. A future phase may extend this via vmm_map_page. */
-#define ACPI_PHYS_MAX 0x400000UL
+/* -----------------------------------------------------------------------
+ * Single-page KVA window for temporary ACPI table access.
+ *
+ * We allocate one 4KB KVA page once and remap it for each physical page
+ * we need to read.  This avoids allocating a new KVA page for every table
+ * access while keeping the code simple (no multi-page spanning).
+ *
+ * The window is only valid during acpi_init(); after that it is abandoned
+ * (KVA is a bump allocator — no free path).
+ * ----------------------------------------------------------------------- */
+static void    *s_win_va  = NULL;   /* KVA of the window page */
+static uint64_t s_win_phys = (uint64_t)-1; /* currently mapped phys page */
 
-/* Map a physical address to a kernel-accessible virtual address.
- * SAFETY: the identity map [0..4MB) is still active at acpi_init() time
- * (vmm_teardown_identity() runs later). Addresses >= 4MB are not mapped;
- * phys_accessible() must be checked before calling phys_to_virt(). */
-static int phys_accessible(uint64_t phys)
+/* Map phys page (aligned) into the window; invalidate TLB.
+ *
+ * kva_alloc_pages maps the window VA to a PMM frame initially.  Before we
+ * can install our own physical page we must clear that existing PTE, because
+ * vmm_map_page panics on double-map.  This applies both to the initial PMM
+ * frame (first call) and any subsequent remap (later calls).
+ * SAFETY: s_win_va is always mapped after kva_alloc_pages (first call) or
+ * after a previous vmm_map_page call (subsequent); vmm_unmap_page succeeds. */
+static void
+win_map(uint64_t phys_page)
 {
-    return phys < ACPI_PHYS_MAX;
+    if (s_win_phys == phys_page)
+        return;     /* already mapped — nothing to do */
+    /* Clear the existing PTE (initial PMM frame or previous physical page). */
+    vmm_unmap_page((uint64_t)(uintptr_t)s_win_va);
+    /* SAFETY: PTE is now absent; vmm_map_page installs phys_page safely.
+     * Flags 0x03 = Present|Write (kernel-only, cached). */
+    vmm_map_page((uint64_t)(uintptr_t)s_win_va, phys_page, 0x03);
+    s_win_phys = phys_page;
 }
 
-static void *phys_to_virt(uint64_t phys)
+/* Read a byte from any physical address using the window. */
+static uint8_t
+phys_read8(uint64_t phys)
 {
-    return (void *)(uintptr_t)phys;
+    uint64_t page   = phys & ~(uint64_t)0xFFF;
+    uint64_t offset = phys &  (uint64_t)0xFFF;
+    win_map(page);
+    /* SAFETY: s_win_va is mapped to page via win_map(); offset is within
+     * the page (< 4096); the cast to uint8_t* and dereference is safe. */
+    return ((const uint8_t *)s_win_va)[offset];
 }
 
-static int acpi_checksum(const void *data, uint32_t len)
+/* Read a 4-byte little-endian uint32 from any physical address. */
+static uint32_t
+phys_read32(uint64_t phys)
 {
-    const uint8_t *p = (const uint8_t *)data;
+    uint32_t v = 0;
+    uint32_t i;
+    for (i = 0; i < 4; i++)
+        v |= ((uint32_t)phys_read8(phys + i)) << (i * 8);
+    return v;
+}
+
+/* Read an 8-byte little-endian uint64 from any physical address. */
+static uint64_t
+phys_read64(uint64_t phys)
+{
+    uint64_t v = 0;
+    uint32_t i;
+    for (i = 0; i < 8; i++)
+        v |= ((uint64_t)phys_read8(phys + i)) << (i * 8);
+    return v;
+}
+
+/* Read `len` bytes from physical address phys into dst. */
+static void
+phys_read_bytes(uint64_t phys, void *dst, uint32_t len)
+{
+    uint8_t *d = (uint8_t *)dst;
+    uint32_t i;
+    for (i = 0; i < len; i++)
+        d[i] = phys_read8(phys + i);
+}
+
+static int acpi_checksum_phys(uint64_t phys, uint32_t len)
+{
     uint8_t sum = 0;
     uint32_t i;
     for (i = 0; i < len; i++)
-        sum += p[i];
+        sum += phys_read8(phys + i);
     return sum == 0;
 }
 
-static void parse_mcfg(const acpi_sdt_header_t *hdr)
+static void parse_mcfg(uint64_t hdr_phys)
 {
-    const uint8_t *p   = (const uint8_t *)hdr + sizeof(acpi_mcfg_t);
-    const uint8_t *end = (const uint8_t *)hdr + hdr->length;
+    uint32_t length = phys_read32(hdr_phys + 4);
+    /* MCFG header is acpi_sdt_header_t (36 bytes) + 8-byte reserved = 44
+     * bytes before the first allocation entry. */
+    uint64_t p   = hdr_phys + sizeof(acpi_mcfg_t);
+    uint64_t end = hdr_phys + length;
 
     while (p + sizeof(acpi_mcfg_alloc_t) <= end) {
-        const acpi_mcfg_alloc_t *alloc = (const acpi_mcfg_alloc_t *)p;
-        if (alloc->segment == 0 && g_mcfg_base == 0) {
-            g_mcfg_base      = alloc->base_address;
-            g_mcfg_start_bus = alloc->start_bus;
-            g_mcfg_end_bus   = alloc->end_bus;
+        uint64_t base    = phys_read64(p + 0);
+        uint16_t segment = (uint16_t)phys_read32(p + 8);   /* only 16 bits */
+        uint8_t  sbus    = phys_read8(p + 10);
+        uint8_t  ebus    = phys_read8(p + 11);
+
+        if (segment == 0 && g_mcfg_base == 0) {
+            g_mcfg_base      = base;
+            g_mcfg_start_bus = sbus;
+            g_mcfg_end_bus   = ebus;
         }
         p += sizeof(acpi_mcfg_alloc_t);
     }
@@ -61,19 +132,26 @@ static void parse_mcfg(const acpi_sdt_header_t *hdr)
 
 static void scan_table(uint64_t phys)
 {
-    const acpi_sdt_header_t *hdr;
+    char sig[4];
+    uint32_t length;
 
-    if (!phys_accessible(phys))
-        return;     /* table outside identity-mapped window — skip */
-
-    hdr = (const acpi_sdt_header_t *)phys_to_virt(phys);
-
-    if (!acpi_checksum(hdr, hdr->length))
+    if (phys == 0)
         return;
 
-    if (__builtin_memcmp(hdr->signature, "MCFG", 4) == 0)
-        parse_mcfg(hdr);
-    else if (__builtin_memcmp(hdr->signature, "APIC", 4) == 0)
+    /* Read signature (4 bytes) */
+    phys_read_bytes(phys, sig, 4);
+
+    /* Read length field at offset 4 */
+    length = phys_read32(phys + 4);
+    if (length < 36 || length > 65536)
+        return;   /* sanity check */
+
+    if (!acpi_checksum_phys(phys, length))
+        return;
+
+    if (__builtin_memcmp(sig, "MCFG", 4) == 0)
+        parse_mcfg(phys);
+    else if (__builtin_memcmp(sig, "APIC", 4) == 0)
         g_madt_found = 1;
 }
 
@@ -81,48 +159,81 @@ void acpi_init(void)
 {
     uint64_t rsdp_phys = arch_get_rsdp_phys();
 
-    /* No RSDP found in multiboot2 tags — legacy machine. */
-    if (rsdp_phys == 0 || !phys_accessible(rsdp_phys)) {
+    if (rsdp_phys == 0) {
         printk("[ACPI] OK: MADT parsed, no MCFG (legacy machine)\n");
         return;
     }
 
-    {
-        const acpi_rsdp_t *rsdp =
-            (const acpi_rsdp_t *)phys_to_virt(rsdp_phys);
+    /* Allocate a single KVA window page used for all physical reads.
+     * SAFETY: kva_alloc_pages(1) returns a valid kernel VA backed by a PMM
+     * page; we immediately remap it via vmm_map_page for each physical page
+     * we need to access.  The page is abandoned after acpi_init returns
+     * (bump allocator — no free path).  This is one leaked PMM frame; at
+     * one-time ACPI init cost this is acceptable. */
+    s_win_va   = kva_alloc_pages(1);
+    s_win_phys = (uint64_t)-1;
 
-        if (__builtin_memcmp(rsdp->signature, "RSD PTR ", 8) != 0) {
+    {
+        char rsdp_sig[8];
+        uint8_t  rsdp_rev;
+        uint32_t xsdt_lo, xsdt_hi;
+        uint64_t xsdt_phys;
+        uint32_t rsdt_phys32;
+
+        phys_read_bytes(rsdp_phys, rsdp_sig, 8);
+        if (__builtin_memcmp(rsdp_sig, "RSD PTR ", 8) != 0) {
             printk("[ACPI] FAIL: invalid RSDP signature\n");
             return;
         }
 
-        if (rsdp->revision >= 2 && rsdp->xsdt_address != 0) {
-            /* ACPI 2.0+: use XSDT with 64-bit table pointers */
-            uint64_t xsdt_phys = rsdp->xsdt_address;
-            if (phys_accessible(xsdt_phys)) {
-                const acpi_sdt_header_t *xsdt =
-                    (const acpi_sdt_header_t *)phys_to_virt(xsdt_phys);
-                uint32_t count =
-                    (xsdt->length - sizeof(acpi_sdt_header_t)) / 8;
-                const uint64_t *entries = (const uint64_t *)(
-                    (const uint8_t *)xsdt + sizeof(acpi_sdt_header_t));
-                uint32_t i;
-                for (i = 0; i < count; i++)
-                    scan_table(entries[i]);
+        rsdp_rev = phys_read8(rsdp_phys + 15);   /* revision field */
+
+        if (rsdp_rev >= 2) {
+            /* ACPI 2.0+: XSDT address at offset 24 (8 bytes) */
+            xsdt_lo  = phys_read32(rsdp_phys + 24);
+            xsdt_hi  = phys_read32(rsdp_phys + 28);
+            xsdt_phys = ((uint64_t)xsdt_hi << 32) | xsdt_lo;
+
+            if (xsdt_phys != 0) {
+                uint32_t xsdt_len = phys_read32(xsdt_phys + 4);
+                uint32_t count    = 0;
+                uint64_t ep;
+
+                if (xsdt_len >= 36)
+                    count = (xsdt_len - 36) / 8;
+
+                ep = xsdt_phys + 36;   /* entries start after SDT header */
+                {
+                    uint32_t i;
+                    for (i = 0; i < count; i++) {
+                        uint64_t entry = phys_read64(ep);
+                        scan_table(entry);
+                        ep += 8;
+                    }
+                }
             }
         } else {
-            /* ACPI 1.0: use RSDT with 32-bit table pointers */
-            uint64_t rsdt_phys = (uint64_t)rsdp->rsdt_address;
-            if (phys_accessible(rsdt_phys)) {
-                const acpi_sdt_header_t *rsdt =
-                    (const acpi_sdt_header_t *)phys_to_virt(rsdt_phys);
-                uint32_t count =
-                    (rsdt->length - sizeof(acpi_sdt_header_t)) / 4;
-                const uint32_t *entries = (const uint32_t *)(
-                    (const uint8_t *)rsdt + sizeof(acpi_sdt_header_t));
-                uint32_t i;
-                for (i = 0; i < count; i++)
-                    scan_table((uint64_t)entries[i]);
+            /* ACPI 1.0: RSDT address at offset 16 (4 bytes) */
+            rsdt_phys32 = phys_read32(rsdp_phys + 16);
+
+            if (rsdt_phys32 != 0) {
+                uint64_t rsdt_phys = (uint64_t)rsdt_phys32;
+                uint32_t rsdt_len  = phys_read32(rsdt_phys + 4);
+                uint32_t count     = 0;
+                uint64_t ep;
+
+                if (rsdt_len >= 36)
+                    count = (rsdt_len - 36) / 4;
+
+                ep = rsdt_phys + 36;
+                {
+                    uint32_t i;
+                    for (i = 0; i < count; i++) {
+                        uint64_t entry = (uint64_t)phys_read32(ep);
+                        scan_table(entry);
+                        ep += 4;
+                    }
+                }
             }
         }
     }
