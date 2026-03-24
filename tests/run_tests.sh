@@ -94,3 +94,8 @@ python3 tests/test_xhci.py
 # NVMe disk image; verifies [GPT] OK, [EXT2] nvme0p1, shell prompt, /bin, /etc/motd.
 echo "--- test_gpt ---"
 python3 tests/test_gpt.py
+
+# Phase 24 virtio-net driver test — boots on q35 with virtio-net-pci
+# (modern transport, SLIRP user networking); verifies [NET] OK in serial output.
+echo "--- test_virtio_net ---"
+python3 tests/test_virtio_net.py
