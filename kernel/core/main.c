@@ -15,6 +15,7 @@
 #include "../fs/gpt.h"
 #include "../drivers/xhci.h"
 #include "../drivers/virtio_net.h"
+#include "../drivers/fb.h"
 #include "../net/ip.h"
 #include <stdint.h>
 
@@ -51,6 +52,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */
     kva_init();             /* kernel virtual allocator — [KVA] OK           */
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
+    fb_init();              /* linear framebuffer — [FB] OK or silent        */
     cap_init();             /* capability stub — [CAP] OK                    */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */
     pic_init();             /* remap 8259A — [PIC] OK                        */
