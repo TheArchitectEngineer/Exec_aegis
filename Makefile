@@ -28,7 +28,10 @@ CFLAGS = \
     -Ikernel/proc \
     -Ikernel/syscall \
     -Ikernel/elf \
-    -Ikernel/fs
+    -Ikernel/fs \
+    -Ikernel/signal \
+    -Ikernel/drivers \
+    -Ikernel/net
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -66,11 +69,14 @@ ARCH_SRCS = \
     kernel/arch/x86_64/gdt.c \
     kernel/arch/x86_64/tss.c \
     kernel/arch/x86_64/arch_syscall.c \
-    kernel/arch/x86_64/arch_smap.c
+    kernel/arch/x86_64/arch_smap.c \
+    kernel/arch/x86_64/acpi.c \
+    kernel/arch/x86_64/pcie.c
 
 CORE_SRCS = \
     kernel/core/main.c \
-    kernel/core/printk.c
+    kernel/core/printk.c \
+    kernel/signal/signal.c
 
 MM_SRCS = \
     kernel/mm/pmm.c \
@@ -87,15 +93,38 @@ ARCH_ASMS = \
 
 SCHED_SRCS = kernel/sched/sched.c
 
+DRIVER_SRCS = \
+    kernel/drivers/nvme.c \
+    kernel/drivers/xhci.c \
+    kernel/drivers/usb_hid.c \
+    kernel/drivers/virtio_net.c
+
+NET_SRCS = \
+    kernel/net/netdev.c \
+    kernel/net/eth.c \
+    kernel/net/ip.c \
+    kernel/net/udp.c \
+    kernel/net/tcp.c
+
 FS_SRCS = \
     kernel/fs/vfs.c \
     kernel/fs/initrd.c \
     kernel/fs/console.c \
     kernel/fs/kbd_vfs.c \
-    kernel/fs/pipe.c
+    kernel/fs/pipe.c \
+    kernel/fs/blkdev.c \
+    kernel/fs/gpt.c \
+    kernel/fs/ext2.c \
+    kernel/fs/ext2_cache.c \
+    kernel/fs/ext2_dir.c
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
+    kernel/syscall/sys_io.c \
+    kernel/syscall/sys_memory.c \
+    kernel/syscall/sys_process.c \
+    kernel/syscall/sys_file.c \
+    kernel/syscall/sys_signal.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
     $(INIT_BIN_C)
@@ -110,7 +139,15 @@ PROG_BIN_SRCS = \
     kernel/uname_bin.c \
     kernel/clear_bin.c \
     kernel/true_bin.c \
-    kernel/false_bin.c
+    kernel/false_bin.c \
+    kernel/wc_bin.c \
+    kernel/grep_bin.c \
+    kernel/sort_bin.c \
+    kernel/mkdir_bin.c \
+    kernel/touch_bin.c \
+    kernel/rm_bin.c \
+    kernel/cp_bin.c \
+    kernel/mv_bin.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -120,13 +157,15 @@ BOOT_OBJ       = $(BUILD)/arch/x86_64/boot.o
 ARCH_ASM_OBJS  = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
 SCHED_OBJS     = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
 FS_OBJS        = $(patsubst kernel/%.c,$(BUILD)/%.o,$(FS_SRCS))
+DRIVER_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(DRIVER_SRCS))
+NET_OBJS       = $(patsubst kernel/%.c,$(BUILD)/%.o,$(NET_SRCS))
 USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 PROG_BIN_OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(PROG_BIN_SRCS))
 
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
-           $(SCHED_OBJS) $(FS_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
+           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
 
-.PHONY: all iso run shell test clean
+.PHONY: all iso disk run shell test clean
 
 all: $(BUILD)/aegis.elf
 
@@ -194,6 +233,30 @@ user/true/true.elf:
 user/false/false.elf:
 	$(MAKE) -C user/false
 
+user/wc/wc.elf:
+	$(MAKE) -C user/wc
+
+user/grep/grep.elf:
+	$(MAKE) -C user/grep
+
+user/sort/sort.elf:
+	$(MAKE) -C user/sort
+
+user/mkdir/mkdir.elf:
+	$(MAKE) -C user/mkdir
+
+user/touch/touch.elf:
+	$(MAKE) -C user/touch
+
+user/rm/rm.elf:
+	$(MAKE) -C user/rm
+
+user/cp/cp.elf:
+	$(MAKE) -C user/cp
+
+user/mv/mv.elf:
+	$(MAKE) -C user/mv
+
 # ── Program binary C arrays ───────────────────────────────────────────────────
 kernel/shell_bin.c: user/shell/shell.elf
 	cd user/shell && xxd -i shell.elf > ../../kernel/shell_bin.c
@@ -229,6 +292,30 @@ kernel/false_bin.c: user/false/false.elf
 	  sed 's/unsigned char false_elf/unsigned char false_bin_elf/g; s/unsigned int false_elf_len/unsigned int false_bin_elf_len/g' \
 	  > ../../kernel/false_bin.c
 
+kernel/wc_bin.c: user/wc/wc.elf
+	cd user/wc && xxd -i wc.elf > ../../kernel/wc_bin.c
+
+kernel/grep_bin.c: user/grep/grep.elf
+	cd user/grep && xxd -i grep.elf > ../../kernel/grep_bin.c
+
+kernel/sort_bin.c: user/sort/sort.elf
+	cd user/sort && xxd -i sort.elf > ../../kernel/sort_bin.c
+
+kernel/mkdir_bin.c: user/mkdir/mkdir.elf
+	cd user/mkdir && xxd -i mkdir.elf > ../../kernel/mkdir_bin.c
+
+kernel/touch_bin.c: user/touch/touch.elf
+	cd user/touch && xxd -i touch.elf > ../../kernel/touch_bin.c
+
+kernel/rm_bin.c: user/rm/rm.elf
+	cd user/rm && xxd -i rm.elf > ../../kernel/rm_bin.c
+
+kernel/cp_bin.c: user/cp/cp.elf
+	cd user/cp && xxd -i cp.elf > ../../kernel/cp_bin.c
+
+kernel/mv_bin.c: user/mv/mv.elf
+	cd user/mv && xxd -i mv.elf > ../../kernel/mv_bin.c
+
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
@@ -242,10 +329,55 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
 # ── Run targets ───────────────────────────────────────────────────────────────
 iso: $(BUILD)/aegis.iso
 
+DISK = $(BUILD)/disk.img
+SGDISK     = /usr/sbin/sgdisk
+# nvme0p1: sgdisk aligns start to LBA 2048, end 122879 = 120832 sectors = ~59 MB
+P1_SECTORS = 120832
+
+# All user ELFs required before disk can be populated.
+# debugfs silently skips `write` commands whose source file is missing,
+# producing a disk with an empty /bin and no build error — so we list
+# them all as prerequisites here.
+DISK_USER_BINS = \
+	user/shell/shell.elf user/ls/ls.elf user/cat/cat.elf \
+	user/echo/echo.elf user/pwd/pwd.elf user/uname/uname.elf \
+	user/clear/clear.elf user/true/true.elf user/false/false.elf \
+	user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
+	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
+	user/mkdir/mkdir.elf user/touch/touch.elf
+
+disk: $(DISK)
+
+$(DISK): $(DISK_USER_BINS)
+	@mkdir -p $(BUILD)
+	dd if=/dev/zero of=$(DISK) bs=1M count=64 2>/dev/null
+	$(SGDISK) \
+	    --new=1:34:122879   --typecode=1:8300 --change-name=1:aegis-root \
+	    --new=2:122880:0    --typecode=2:8200 --change-name=2:aegis-swap \
+	    $(DISK)
+	dd if=/dev/zero of=/tmp/aegis-p1.img bs=512 count=$(P1_SECTORS) 2>/dev/null
+	/sbin/mke2fs -t ext2 -F -L aegis-root /tmp/aegis-p1.img
+	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite /tmp/aegis-motd /etc/motd\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
+	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
+	@echo "Disk image created: $(DISK)"
+
+comma := ,
+NVME_FLAGS = $(if $(wildcard $(DISK)),\
+    -drive file=$(DISK)$(comma)if=none$(comma)id=nvme0 \
+    -device nvme$(comma)drive=nvme0$(comma)serial=aegis0,)
+
 run: iso
 	qemu-system-x86_64 \
+	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial stdio -vga std -no-reboot -m 128M \
+	    $(NVME_FLAGS) \
+	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 shell:
@@ -280,6 +412,9 @@ clean:
 	rm -f kernel/shell_bin.c kernel/ls_bin.c kernel/cat_bin.c kernel/echo_bin.c
 	rm -f kernel/pwd_bin.c kernel/uname_bin.c kernel/clear_bin.c
 	rm -f kernel/true_bin.c kernel/false_bin.c
+	rm -f kernel/wc_bin.c kernel/grep_bin.c kernel/sort_bin.c
+	rm -f kernel/mkdir_bin.c kernel/touch_bin.c kernel/rm_bin.c
+	rm -f kernel/cp_bin.c kernel/mv_bin.c
 	rm -f .init_stamp_*
 	$(MAKE) -C user/init clean 2>/dev/null; true
 	$(MAKE) -C user/hello clean
@@ -292,4 +427,12 @@ clean:
 	$(MAKE) -C user/clear clean
 	$(MAKE) -C user/true clean
 	$(MAKE) -C user/false clean
+	$(MAKE) -C user/wc clean
+	$(MAKE) -C user/grep clean
+	$(MAKE) -C user/sort clean
+	$(MAKE) -C user/mkdir clean
+	$(MAKE) -C user/touch clean
+	$(MAKE) -C user/rm clean
+	$(MAKE) -C user/cp clean
+	$(MAKE) -C user/mv clean
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml

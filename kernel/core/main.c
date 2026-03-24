@@ -8,6 +8,14 @@
 #include "../proc/proc.h"
 #include "vfs.h"
 #include "console.h"
+#include "acpi.h"
+#include "pcie.h"
+#include "nvme.h"
+#include "../fs/ext2.h"
+#include "../fs/gpt.h"
+#include "../drivers/xhci.h"
+#include "../drivers/virtio_net.h"
+#include "../net/ip.h"
 #include <stdint.h>
 
 /*
@@ -52,9 +60,18 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_tss_init();        /* TSS RSP0 for ring-3 → ring-0 transitions      */
     arch_syscall_init();    /* enable SYSCALL/SYSRET MSRs — [SYSCALL] OK     */
     arch_smap_init();       /* SMAP detect + enable — [SMAP] OK/WARN         */
+    arch_smep_init();       /* SMEP detect + enable — [SMEP] OK/WARN         */
     arch_sse_init();        /* enable SSE for user mode (CR0/CR4 bits)       */
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
+    acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
+    pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
+    nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
+    gpt_scan("nvme0");      /* GPT partitions — [GPT] OK or silent (no NVMe) */
+    ext2_mount("nvme0p1");  /* mount partition 1 — [EXT2] OK or silent (-1)  */
+    xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
+    virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
+    net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */

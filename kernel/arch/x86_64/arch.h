@@ -79,6 +79,10 @@ const aegis_mem_region_t  *arch_mm_get_regions(void);
 uint32_t                   arch_mm_reserved_region_count(void);
 const aegis_mem_region_t  *arch_mm_get_reserved_regions(void);
 
+/* ACPI RSDP physical address — saved during multiboot2 tag scan.
+ * Returns 0 if no ACPI tag was found (e.g. -machine pc with SeaBIOS). */
+uint64_t arch_get_rsdp_phys(void);
+
 /* Physical base address of the kernel image (arch-defined load address).
  * pmm_init() uses this to reserve the kernel image pages. */
 #define ARCH_KERNEL_PHYS_BASE 0x100000UL
@@ -190,6 +194,10 @@ void arch_syscall_init(void);
  * Prints [SMAP] OK: supervisor access prevention active, or
  * [SMAP] WARN: not supported by CPU. Must be called after arch_syscall_init(). */
 void arch_smap_init(void);
+
+/* arch_smep_init — detect SMEP via CPUID and enable CR4.SMEP if supported.
+ * Call after arch_smap_init. Prints [SMEP] OK or [SMEP] WARN. */
+void arch_smep_init(void);
 
 /* arch_sse_init — enable SSE/SSE2 for user-mode execution.
  * Clears CR0.EM, sets CR0.MP, sets CR4.OSFXSR + CR4.OSXMMEXCPT.
