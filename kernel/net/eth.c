@@ -178,16 +178,15 @@ int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
      * would cause frames to be consumed twice or silently dropped. */
     arp_send_request(dev, ip);
 
+    /* arch_get_ticks() cannot advance while cli is active (PIT IRQ blocked).
+     * Use a raw iteration count instead: 300000 polls is ample for SLIRP to
+     * respond to an ARP REQUEST (typically <1 ms on a KVM host). */
     __asm__ volatile("cli");
     {
-        uint32_t deadline = (uint32_t)arch_get_ticks() + 1000; /* ~100 ms */
-        while ((uint32_t)arch_get_ticks() < deadline) {
-            /* Poll NIC directly. netdev_t.poll is void (*)(struct netdev *dev) —
-             * it calls netdev_rx_deliver → eth_rx → arp_rx_pkt internally.
-             * After each poll, check the ARP cache rather than inspecting raw
-             * frames. */
+        uint32_t n;
+        for (n = 0; n < 300000u; n++) {
             if (dev->poll)
-                dev->poll(dev);  /* may call netdev_rx_deliver → eth_rx → arp_rx_pkt */
+                dev->poll(dev);
             e = arp_find(ip);
             if (e) {
                 __asm__ volatile("sti");
