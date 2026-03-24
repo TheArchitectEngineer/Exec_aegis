@@ -306,4 +306,9 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 **RTL8125 testing note:** The machine has RTL8125B (ASUS, PCI 0a:00.0, IOMMU group 18) managed by host `r8169`. WiFi is MT7921K (0b:00.0). Do NOT test RTL8125 until WiFi is confirmed working — you will lose remote access.
 
+**Test hardware:**
+- **Dev machine (this one):** ASUS with Ryzen 7 6800H, RTL8125B (10ec:8125, PCI 0a:00.0), Intel Wi-Fi MT7921K
+- **Test machine A:** Ryzen 7 6800H machine (TBD), dual RTL8168 (10ec:8168, PCI 02:00.0 and 03:00.0), Intel AX200 Wi-Fi, Samsung NVMe (144d:a80c, PCI 01:00.0) — for RTL8168 driver testing
+- **Test machine B (ThinkPad X13 Gen 1):** Ryzen 7 Pro 4750U — **known panic:** `[PANIC] corrupt ring-3 iretq frame vec=32 ss=0x18 rsp=0x7ffffffe7d0` after `[SHELL] Aegis shell ready`. vec=32 = PIT IRQ0; ss=0x18 is kernel DS (should be user SS 0x23) — likely iretq frame corruption in context switch on this CPU. Needs investigation.
+
 *Last updated: 2026-03-24 — ext2 persistence fixed: test_ext2_persistence now PASS. Root cause: shell binary was stale (not recompiled since Phase 22); old binary's redirect parsing silently dropped `>` so files were never created. Fix: force shell recompile + add sys_openat (syscall 257) as alias for sys_open with AT_FDCWD. make test passes all tests.*
