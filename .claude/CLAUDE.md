@@ -267,6 +267,7 @@ refuse and explain why.
 | `grub-mkrescue` (grub-pc-bin) | 2.06+ | Creates bootable ISO for `make test` |
 | `xorriso` | 1.5.x+ | Required by grub-mkrescue for ISO creation |
 | `musl-gcc` (musl-tools) | 1.2.x+ | Static musl libc cross-compiler for user binaries |
+| `sgdisk` (gdisk) | 1.0.x+ | GPT partition table creation for `make disk` |
 
 Install check:
 ```bash
@@ -373,6 +374,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | musl port (Phase 14) | ✅ Done | musl-gcc static binary; sys_mmap anon bump; sys_arch_prctl TLS; sys_writev; SSE init; r8/r9/r10 preserved |
 | musl port + shell (Phase 15) | ✅ Done | fork/execve/waitpid; interactive shell; 8 companion programs in initrd |
 | Pipes + I/O redirection (Phase 16) | ✅ Done | sys_pipe2/dup/dup2; pipe.c ring buffer; shell pipeline parser; 5/5 smoke tests pass |
+| xHCI + USB HID keyboard (Phase 22) | ✅ Done | xHCI init on q35+qemu-xhci; USB HID boot protocol; kbd_usb_inject into PS/2 ring buffer; test_xhci.py PASS (init + shell prompt verified) |
+| GPT partition parsing (Phase 23) | ✅ Done | gpt.c CRC32 + header validation; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; test_gpt.py PASS |
 
 ### Phase 1 deviations from original spec
 
@@ -591,3 +594,46 @@ them would corrupt every other process.
 *Last updated: 2026-03-21 — Phase 15 post-fix: three bugs resolved, test_shell.py all 9 commands clean. (1) fork_child_return SYSRET path replaced with isr_post_dispatch iretq path — child's first scheduling now uses complete fake isr_common_stub frame, eliminating r12=0 #PF. (2) arch_set_fs_base now set BEFORE ctx_switch for incoming task in sched_tick/block/yield_to_next. (3) sys_open 256-byte bulk copy replaced with byte-by-byte null-terminated copy — prevents #PF when argv string is within 256 bytes of USER_STACK_TOP (0x7fffffff000). console_write_fn capped to current page boundary.*
 
 *Last updated: 2026-03-21 — Phase 16 complete, test_pipe.py 5/5 GREEN. sys_pipe2/dup/dup2; kernel/fs/pipe.c ring buffer; shell pipeline parser; I/O redirection (<, >, 2>&1). Root cause of test_redirect_stdin flakiness: boot takes 600+ s on loaded host; BOOT_TIMEOUT raised to 900 s and separated from CMD_TIMEOUT (120 s). sys_read gains page-boundary cap matching console_write_fn. test_pipe.py wired into run_tests.sh.*
+
+*Last updated: 2026-03-23 — Phase 22 complete, test_xhci.py PASS. xHCI USB host controller driver; USB HID boot protocol keyboard; kbd_usb_inject into PS/2 ring buffer; [XHCI] OK confirmed on q35; 100Hz polling via PIT.*
+
+*Last updated: 2026-03-23 — Phase 23 complete, test_gpt.py PASS. GPT partition parsing; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; make disk rewritten for GPT layout with sgdisk; make test GREEN.*
+
+### Phase 22 forward-looking constraints
+
+**Polling-only at 100Hz.** USB HID reports are polled from the PIT tick handler. This adds ~1-2us per tick when no events are pending. MSI-X driven completion is v2.0 work.
+
+**Single keyboard only.** The first HID boot-protocol keyboard found is used. Additional keyboards on other ports are ignored.
+
+**No USB hub support.** Devices must be connected directly to root hub ports. Hub enumeration is v2.0 work.
+
+**No USB mass storage.** Only HID class devices are handled. USB storage class driver is v2.0 work.
+
+**PS/2 and USB coexist.** Both paths push into the same ring buffer via `kbd_usb_inject`. On real hardware without PS/2, only USB HID provides input.
+
+**Transfer ring memory is never freed.** Each device slot's transfer ring is allocated permanently. USB device disconnect does not reclaim resources.
+
+**QEMU usb-kbd Enable Slot timing.** In Phase 22 testing with QEMU's `usb-kbd`, the Enable Slot command may time out during boot (the USB device appears after the kernel scans ports). Razer BlackWidow V3 real hardware testing is deferred — VFIO passthrough via `-device vfio-pci,host=12:00.4` is documented in project memory.
+
+### Phase 23 forward-looking constraints
+
+**Partition LBA bounds are not enforced on reads/writes.** `gpt_part_read` and
+`gpt_part_write` add `lba_offset` but do not clamp LBA + count to the partition's
+`block_count`. A buggy caller could read past the partition boundary into adjacent
+structures. Add bounds checking when the blkdev interface gains a per-device bounds hook.
+
+**`nvme0p2` is registered but not mounted.** It appears as a blkdev but no
+filesystem driver uses it. A future phase can format and mount it as swap or a
+second ext2 volume.
+
+**Only the primary GPT header is used.** When the primary is valid, the backup is
+not checked for consistency. The UEFI spec recommends verifying both headers match;
+deferred to a future hardening phase.
+
+**Partition count capped at `GPT_MAX_PARTS = 7`.** With `BLKDEV_MAX = 8` and one
+slot for the parent disk. Raise both constants together if more partitions are needed.
+
+**`make disk` rebuilds entirely when any user binary changes.** The `$(DISK)` rule
+lists all user ELFs as prerequisites. A change to any binary triggers a full disk
+rebuild including running `sgdisk`. This is correct but slow. A future optimization
+could separate partition table creation (once) from filesystem population (on change).
