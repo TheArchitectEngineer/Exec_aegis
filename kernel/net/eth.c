@@ -1,0 +1,201 @@
+/* kernel/net/eth.c — Ethernet framing, ARP table, ARP send/resolve */
+#include "eth.h"
+#include "ip.h"     /* ip_rx(), net_get_config() */
+#include "../arch/x86_64/arch.h"   /* arch_get_ticks() */
+#include "../core/printk.h"
+#include <stddef.h>
+
+/* Local memory helpers — kernel does not link against libc. */
+static void
+_eth_memset(void *dst, int val, uint32_t n)
+{
+    uint8_t *p = (uint8_t *)dst;
+    while (n--) *p++ = (uint8_t)val;
+}
+
+static void
+_eth_memcpy(void *dst, const void *src, uint32_t n)
+{
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t       *d = (uint8_t *)dst;
+    while (n--) *d++ = *s++;
+}
+
+/* ---- ARP table --------------------------------------------------------- */
+
+#define ARP_TABLE_SIZE 16
+
+typedef struct {
+    ip4_addr_t ip;
+    mac_addr_t mac;
+    uint32_t   age;    /* PIT ticks since last use; evict oldest */
+    uint8_t    valid;
+} arp_entry_t;
+
+static arp_entry_t s_arp_table[ARP_TABLE_SIZE];
+
+/* Shared static TX buffer — callers are sequential (no concurrent sends). */
+static uint8_t s_tx_buf[1514];
+
+void eth_init(void)
+{
+    _eth_memset(s_arp_table, 0, sizeof(s_arp_table));
+}
+
+/* ---- ARP helpers ------------------------------------------------------- */
+
+static arp_entry_t *arp_find(ip4_addr_t ip)
+{
+    int i;
+    for (i = 0; i < ARP_TABLE_SIZE; i++) {
+        if (s_arp_table[i].valid && s_arp_table[i].ip == ip)
+            return &s_arp_table[i];
+    }
+    return NULL;
+}
+
+static void arp_insert(ip4_addr_t ip, const mac_addr_t *mac)
+{
+    /* Prefer an existing match to update, then a free slot, then oldest. */
+    arp_entry_t *victim = NULL;
+    uint32_t     oldest = 0;
+    int          i;
+
+    for (i = 0; i < ARP_TABLE_SIZE; i++) {
+        arp_entry_t *e = &s_arp_table[i];
+        if (e->valid && e->ip == ip) {
+            victim = e;
+            break;
+        }
+        if (!e->valid) {
+            if (!victim) victim = e;
+        } else if (e->age >= oldest) {
+            oldest = e->age;
+            if (!victim || victim->valid) victim = e;
+        }
+    }
+    if (!victim) victim = &s_arp_table[0]; /* fallback — never NULL */
+    victim->ip    = ip;
+    victim->mac   = *mac;
+    victim->age   = 0;
+    victim->valid = 1;
+}
+
+static void arp_send_request(netdev_t *dev, ip4_addr_t target_ip)
+{
+    ip4_addr_t  my_ip;
+    mac_addr_t  my_mac;
+    arp_pkt_t   pkt;
+    mac_addr_t  bcast;
+
+    net_get_config(&my_ip, NULL, NULL);  /* only need local IP; mask/gw unused here */
+    /* dev->mac is uint8_t[6]; copy into mac_addr_t (same layout). */
+    _eth_memcpy(my_mac.b, dev->mac, 6);
+
+    pkt.htype = htons(1);
+    pkt.ptype = htons(ETHERTYPE_IP);
+    pkt.hlen  = 6;
+    pkt.plen  = 4;
+    pkt.oper  = htons(1);       /* REQUEST */
+    pkt.sha   = my_mac;
+    pkt.spa   = my_ip;
+    _eth_memset(&pkt.tha, 0, sizeof(pkt.tha));
+    pkt.tpa   = target_ip;
+
+    _eth_memset(bcast.b, 0xff, 6);
+    eth_send(dev, &bcast, ETHERTYPE_ARP, &pkt, sizeof(pkt));
+}
+
+/* Called from eth_rx for ARP frames (inside and outside busy-poll). */
+static void arp_rx_pkt(const arp_pkt_t *pkt)
+{
+    if (ntohs(pkt->htype) != 1)      return;
+    if (ntohs(pkt->ptype) != 0x0800) return;
+    if (pkt->hlen != 6 || pkt->plen != 4) return;
+    if (ntohs(pkt->oper) != 2)       return;  /* only cache REPLY */
+    arp_insert(pkt->spa, &pkt->sha);
+}
+
+/* ---- eth_rx / eth_send ------------------------------------------------- */
+
+void eth_rx(netdev_t *dev, const void *frame, uint16_t len)
+{
+    const eth_hdr_t *hdr;
+    const void      *payload;
+    uint16_t         payload_len;
+    uint16_t         et;
+
+    if (len < (uint16_t)sizeof(eth_hdr_t)) return;
+    hdr         = (const eth_hdr_t *)frame;
+    payload     = (const uint8_t *)frame + sizeof(eth_hdr_t);
+    payload_len = (uint16_t)(len - sizeof(eth_hdr_t));
+    et          = ntohs(hdr->ethertype);
+
+    if (et == ETHERTYPE_ARP && payload_len >= (uint16_t)sizeof(arp_pkt_t)) {
+        arp_rx_pkt((const arp_pkt_t *)payload);
+    } else if (et == ETHERTYPE_IP) {
+        ip_rx(dev, frame, payload, payload_len);
+    }
+    /* Other ethertypes: drop silently */
+}
+
+int eth_send(netdev_t *dev, const mac_addr_t *dst_mac,
+             uint16_t ethertype, const void *payload, uint16_t len)
+{
+    eth_hdr_t *hdr;
+    uint16_t   total;
+    mac_addr_t src_mac;
+
+    if (!dev || len > 1500) return -1;
+
+    hdr = (eth_hdr_t *)s_tx_buf;
+    hdr->dst = *dst_mac;
+    /* dev->mac is uint8_t[6]; copy into mac_addr_t src field. */
+    _eth_memcpy(src_mac.b, dev->mac, 6);
+    hdr->src       = src_mac;
+    hdr->ethertype = htons(ethertype);
+    _eth_memcpy(s_tx_buf + sizeof(eth_hdr_t), payload, len);
+
+    total = (uint16_t)(sizeof(eth_hdr_t) + len);
+    dev->send(dev, s_tx_buf, total);
+    return 0;
+}
+
+/* ---- arp_resolve ------------------------------------------------------- */
+
+int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
+{
+    arp_entry_t *e = arp_find(ip);
+    if (e) {
+        e->age = 0;
+        *mac_out = e->mac;
+        return 0;
+    }
+
+    /* Not cached — send ARP REQUEST and busy-poll with interrupts disabled.
+     * cli prevents the PIT ISR from calling virtio_net_poll() concurrently
+     * and advancing rx_last_used while we are doing the same here, which
+     * would cause frames to be consumed twice or silently dropped. */
+    arp_send_request(dev, ip);
+
+    __asm__ volatile("cli");
+    {
+        uint32_t deadline = (uint32_t)arch_get_ticks() + 1000; /* ~100 ms */
+        while ((uint32_t)arch_get_ticks() < deadline) {
+            /* Poll NIC directly. netdev_t.poll is void (*)(struct netdev *dev) —
+             * it calls netdev_rx_deliver → eth_rx → arp_rx_pkt internally.
+             * After each poll, check the ARP cache rather than inspecting raw
+             * frames. */
+            if (dev->poll)
+                dev->poll(dev);  /* may call netdev_rx_deliver → eth_rx → arp_rx_pkt */
+            e = arp_find(ip);
+            if (e) {
+                __asm__ volatile("sti");
+                *mac_out = e->mac;
+                return 0;
+            }
+        }
+    }
+    __asm__ volatile("sti");
+    return -1; /* timeout — caller returns EHOSTUNREACH */
+}
