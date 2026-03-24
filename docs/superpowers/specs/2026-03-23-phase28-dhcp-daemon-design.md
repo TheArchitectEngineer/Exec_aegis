@@ -13,12 +13,12 @@
 ## Constraints and Non-Negotiables
 
 - Must use only the POSIX socket API — no kernel-internal calls. The daemon is a normal user process.
-- `sys_netcfg` requires `CAP_KIND_NET_ADMIN`. Granted via a new `proc_spawn` flag: `init_bin.c` calls a new kernel function `proc_grant_cap(pid, CAP_KIND_NET_ADMIN)` on the DHCP daemon's PID immediately after `fork()` and before `execve()`. This follows the established pattern where `proc_spawn` grants capabilities before the process starts executing.
+- `sys_netcfg` requires `CAP_KIND_NET_ADMIN`. **Phase 28 grants `CAP_KIND_NET_ADMIN` to ALL user processes via `proc_spawn`** — the same pattern used for `CAP_KIND_NET_SOCKET`. This is the simplest correct implementation. Fine-grained restriction (only the DHCP daemon gets NET_ADMIN) requires a capability delegation syscall or post-fork grant mechanism, both of which introduce new syscall numbers and security surface that are v2.0 work. The file layout table entry for `proc.c` reflects this: add `CAP_KIND_NET_ADMIN` to the `proc_spawn` grant list, alongside `CAP_KIND_NET_SOCKET`.
 - DHCP timeout: 5 seconds total. If no ACK received, print `[DHCP] timeout: no lease obtained` to stderr and exit. `init_bin.c` continues without network.
 - No lease renewal in Phase 28. The daemon exits after successful configuration. Renewal is v2.0 work.
 - The daemon writes to `/etc/resolv.conf` on the ext2 filesystem if DNS servers are provided in the ACK. If the file cannot be created (ext2 not mounted), silently skip.
 - Must work with QEMU SLIRP built-in DHCP server (assigns `10.0.2.15/24`, gateway `10.0.2.2`, DNS `10.0.2.3`).
-- `make test` unaffected — `-machine pc` has no NIC; `init_bin.c` does not exec `dhcp` if no netdev is registered (check via a new `netdev_count()` function).
+- `make test` unaffected — `-machine pc` has no NIC. `init_bin.c` always forks and execs `/bin/dhcp`. With no NIC, `sys_netcfg op=1` returns `-ENODEV` and the daemon exits immediately with status 1. `init_bin.c` waits up to 5 seconds (sees immediate exit) and then execs the shell. No `netdev_count()` kernel function is needed.
 
 ---
 
@@ -28,9 +28,8 @@
 |------|--------|---------|
 | `kernel/dhcp_bin.c` | Create | DHCP client implementation |
 | `kernel/init_bin.c` | Modify | Fork + exec `/bin/dhcp` before shell if netdev present |
-| `kernel/net/netdev.h` | Modify | Add `netdev_count()` — returns number of registered devices |
-| `kernel/net/netdev.c` | Modify | Implement `netdev_count()` |
-| `kernel/proc/proc.c` | Modify | Grant `CAP_KIND_NET_ADMIN` to DHCP daemon process |
+| `kernel/net/netdev.h` | No change | `netdev_count()` not needed — init always tries to exec `/bin/dhcp` |
+| `kernel/proc/proc.c` | Modify | Add `CAP_KIND_NET_ADMIN` to `proc_spawn` grant list (all user processes) |
 | `Makefile` | Modify | Compile `dhcp_bin.c` → `dhcp_bin.o`; add to initrd + ext2 as `/bin/dhcp` |
 | `tests/test_dhcp.py` | Create | Boot q35 + virtio-net + SLIRP; verify IP assigned and ping works |
 | `tests/run_tests.sh` | Modify | Add `test_dhcp.py` |
@@ -192,7 +191,9 @@ if (n < 0) { /* timeout */ exit(1); }
 ### Configure Kernel
 
 ```c
-/* Read MAC address before building DISCOVER */
+/* Read MAC address before building DISCOVER.
+ * sys_netcfg op=1: kernel fills netcfg_info_t via copy_to_user into &info.
+ * The struct is on the DHCP daemon's stack — a valid user-space address. */
 netcfg_info_t info;
 syscall(500, 1, (uint64_t)&info, 0, 0);
 memcpy(pkt.chaddr, info.mac, 6);
@@ -214,14 +215,7 @@ fprintf(stderr, "[DHCP] lease: %u.%u.%u.%u/... gw %u.%u.%u.%u\n", ...);
 
 ### `init_bin.c` Integration
 
-```c
-/* In init_bin.c, before exec-ing shell: */
-extern int netdev_count(void);  /* kernel function, linked into init binary? */
-```
-
-Wait — `init_bin.c` is a user binary. It cannot call kernel functions directly. Instead: `init_bin.c` always tries to exec `/bin/dhcp`. If the kernel has no netdev registered, `sys_netcfg` will return `-ENODEV` and the daemon will exit immediately after failing to bind (since there is no route for UDP broadcasts). This is the correct behavior — init continues to the shell.
-
-Alternatively, `init_bin.c` checks if `/bin/dhcp` exists before trying to exec it. If not found (`execve` returns `ENOENT`), skip silently.
+`init_bin.c` always forks and execs `/bin/dhcp`. The daemon itself handles the no-NIC case: `sys_netcfg op=1` returns `-ENODEV` when no netdev is registered, the daemon prints nothing and exits with status 1. `init_bin.c` detects the fast exit and continues to the shell.
 
 ```c
 pid_t dhcp_pid = fork();
@@ -229,11 +223,16 @@ if (dhcp_pid == 0) {
     execve("/bin/dhcp", argv_dhcp, envp);
     _exit(1); /* execve failed — no dhcp binary or no network */
 }
-/* Don't waitpid for dhcp — let it run in background */
-/* Wait 5s for DHCP before starting shell (optional: use poll on a pipe) */
+/* Wait for DHCP daemon to exit (max 5 seconds), then exec the shell.
+ * nanosleep yields the CPU so the daemon can receive network packets. */
+for (int i = 0; i < 50; i++) {
+    int status;
+    if (waitpid(dhcp_pid, &status, WNOHANG) > 0) break; /* daemon exited */
+    struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000000 }; /* 100ms */
+    nanosleep(&ts, NULL);
+}
+/* exec shell regardless of DHCP outcome */
 ```
-
-For Phase 28: exec dhcp, then loop calling `waitpid(dhcp_pid, WNOHANG)` with `nanosleep(100ms)` between each check, for up to 50 iterations (5 seconds total). The `nanosleep` yields the CPU to the DHCP daemon so it can actually run and receive packets. After 5 seconds (or when the daemon exits), exec the shell regardless.
 
 ---
 

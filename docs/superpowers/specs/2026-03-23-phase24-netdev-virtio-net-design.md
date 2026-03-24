@@ -146,7 +146,7 @@ int virtio_net_send(netdev_t *dev, const void *pkt, uint16_t len) {
     /* 5. sfence — required by virtio 1.0 section 2.6.13.2 before MMIO notify */
     __asm__ volatile("sfence" ::: "memory");
     /* 6. Write queue index (1 for TX) to notify doorbell MMIO address */
-    /* 7. Poll used ring until NIC signals completion (or 1000 iterations, return -EIO) */
+    /* 7. Poll used ring until NIC signals completion (or 100000 iterations, return -EIO) */
     return 0;
 }
 ```

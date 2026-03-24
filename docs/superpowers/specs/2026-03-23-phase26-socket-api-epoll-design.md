@@ -18,7 +18,7 @@
 - All socket operations go through `copy_from_user`/`copy_to_user` for pointer arguments (SMAP safety).
 - `sockaddr_in` layout must match musl's `struct sockaddr_in` exactly (verified with `_Static_assert`).
 - Capability gate: `sys_socket()` requires a new `CAP_KIND_NET_SOCKET` capability. `proc_spawn` grants it to all user processes in Phase 26 (same pattern as `CAP_KIND_VFS_OPEN`).
-- `sys_netcfg` (for DHCP daemon) is capability-gated with `CAP_KIND_NET_ADMIN`. Only granted to the DHCP daemon process explicitly.
+- `sys_netcfg` (for DHCP daemon) is capability-gated with `CAP_KIND_NET_ADMIN`. Granted to ALL user processes via `proc_spawn` (Phase 28 simplification — fine-grained restriction to only the DHCP daemon requires a capability delegation mechanism that is v2.0 work).
 - `make test` unaffected — socket syscalls added to dispatch table with no boot-time side effects.
 
 ---
@@ -34,7 +34,7 @@
 | `kernel/httpd_bin.c` | Create | Minimal HTTP server binary; `socket/bind/listen/accept/recv/send/close`; ships as `/bin/httpd` in ext2 |
 | `kernel/syscall/syscall.c` | Modify | Dispatch new syscall numbers |
 | `kernel/cap/src/lib.rs` | Modify | Add `CAP_KIND_NET_SOCKET`, `CAP_KIND_NET_ADMIN` |
-| `kernel/proc/proc.c` | Modify | Grant `CAP_KIND_NET_SOCKET` in `proc_spawn` |
+| `kernel/proc/proc.c` | Modify | Grant `CAP_KIND_NET_SOCKET` and `CAP_KIND_NET_ADMIN` in `proc_spawn` (Phase 28 DHCP needs NET_ADMIN) |
 | `kernel/net/tcp.c` | Modify | Call `epoll_notify()` + `sched_wake()` on data/connect events |
 | `kernel/net/udp.c` | Modify | Call `epoll_notify()` + `sched_wake()` on received datagrams |
 | `tests/test_socket.py` | Create | Boot q35 + virtio-net + SLIRP; DHCP; HTTP server; verify response |
@@ -60,7 +60,7 @@ Follow Linux x86-64 ABI (musl uses these):
 | `listen` | 50 | |
 | `getsockname` | 51 | |
 | `getpeername` | 52 | |
-| `socketpair` | 53 | AF_INET SOCK_STREAM loopback pair |
+| `socketpair` | 53 | in-kernel ring buffer pair (AF_UNIX or AF_INET; no IP stack) |
 | `setsockopt` | 54 | SO_REUSEADDR, SO_BROADCAST, SO_RCVTIMEO, SO_SNDTIMEO, TCP_NODELAY |
 | `getsockopt` | 55 | mirrors setsockopt options |
 | `select` | 23 | already reserved; implement now |
@@ -138,19 +138,19 @@ typedef struct {
 } epoll_watch_t;
 
 typedef struct {
-    uint8_t       in_use;
-    epoll_watch_t watches[EPOLL_MAX_WATCHES];
-    uint8_t       nwatches;
-    uint32_t      waiter_pid;
+    uint8_t          in_use;
+    epoll_watch_t    watches[EPOLL_MAX_WATCHES];
+    uint8_t          nwatches;
+    aegis_task_t    *waiter_task; /* NULL = none; same type as sched_wake() argument */
     /* ready list: indices into watches[] that are ready */
-    uint8_t       ready[EPOLL_MAX_WATCHES];
-    uint8_t       nready;
+    uint8_t          ready[EPOLL_MAX_WATCHES];
+    uint8_t          nready;
 } epoll_fd_t;
 
 static epoll_fd_t s_epoll[EPOLL_MAX_INSTANCES];
 ```
 
-`epoll_notify(sock_id, events)` — called by TCP/UDP layers when data arrives or connection completes. Finds all epoll instances watching `sock_id`, marks them ready, wakes any blocked `epoll_wait`.
+`epoll_notify(sock_id, events)` — called by TCP/UDP layers when data arrives or connection completes. Reads `sock_t.epoll_id` to find the single epoll instance watching this socket (UINT32_MAX = none), marks it ready, wakes any blocked `epoll_wait`. Only one epoll instance can watch a given socket at a time (enforced by `epoll_ctl` — `EPOLL_CTL_ADD` on a socket already watched by another epoll instance returns `-EBUSY`).
 
 `epoll_wait` with `timeout == 0`: non-blocking check. `timeout == -1`: block indefinitely. `timeout > 0`: block with PIT-tick deadline.
 
@@ -192,8 +192,23 @@ Edge-triggered (`EPOLLET`) is supported: ready flag is cleared on each `epoll_wa
 ```c
 /* op 0: set IP config */
 /* arg1 = ip (network byte order), arg2 = mask, arg3 = gateway */
+/* Requires CAP_KIND_NET_ADMIN. Calls net_set_config(ip, mask, gw).
+ * Prints "[NET] configured: %u.%u.%u.%u/%u gw %u.%u.%u.%u". */
+
+/* op 1: read current config + MAC address */
+/* arg1 = user pointer to netcfg_info_t (see below) */
+/* Requires CAP_KIND_NET_ADMIN. Fills struct via copy_to_user and returns 0.
+ * Returns -ENODEV if no netdev is registered. */
+typedef struct {
+    uint8_t    mac[6];
+    uint8_t    _pad[2];
+    uint32_t   ip;      /* current IP, network byte order; 0 if unconfigured */
+    uint32_t   mask;
+    uint32_t   gateway;
+} netcfg_info_t;
+/* Implementation: call netdev_get("eth0"), copy mac from dev->mac,
+ * call net_get_config(&ip, &mask, &gw), then copy_to_user(arg1, &info, sizeof(info)). */
 ```
-Requires `CAP_KIND_NET_ADMIN`. Calls `net_set_config(ip, mask, gw)`. Prints `[NET] configured: %u.%u.%u.%u/%u gw %u.%u.%u.%u`.
 
 ### `socketpair(domain, type, proto, sv[2])`
 
@@ -236,13 +251,13 @@ Uses the Phase 25 static IP (`10.0.2.15`) — the `dhcp` binary is Phase 28 and 
 
 ## Forward-Looking Constraints
 
-**`AF_UNIX` sockets deferred.** `socketpair` is implemented via TCP loopback as a workaround. True Unix domain sockets require a separate namespace and are v2.0 work.
+**`AF_UNIX` sockets deferred.** `socketpair` is implemented via a shared in-kernel ring buffer pair — no IP stack, no loopback routing, no ARP. True Unix domain sockets with path-based addressing require a separate namespace and are v2.0 work.
 
 **`epoll` max 8 instances, 64 watches.** Sufficient for a simple server. nginx-style event loops with thousands of connections require larger tables or dynamic allocation.
 
 **`select`/`poll` linear scan.** `poll(fds, nfds, timeout)` scans all `nfds` entries. For nfds > 100, performance degrades. `epoll` is the recommended path for high-connection servers.
 
-**Single waiter per socket.** `sock_t.waiter_pid` holds one blocked task. Multiple threads blocking on the same socket fd are not supported (only one will be woken). Multi-threaded `accept` requires a wait queue list — v2.0 work.
+**Single waiter per socket.** `sock_t.waiter_task` holds one blocked `aegis_task_t *`. Multiple threads blocking on the same socket fd are not supported (only one will be woken). Multi-threaded `accept` requires a wait queue list — v2.0 work.
 
 **`SO_REUSEPORT` not implemented.** `SO_REUSEADDR` is implemented (allows rebind while in TIME_WAIT). `SO_REUSEPORT` (multiple sockets on same port) is deferred.
 

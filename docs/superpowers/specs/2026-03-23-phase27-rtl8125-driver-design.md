@@ -126,15 +126,20 @@ void rtl8125_init(void) {
         mac[i] = mmio_read8(base + RTL_IDR0 + i);
 
     /* 7. Allocate RX descriptor ring (256 × 16 bytes = 4096 = 1 page) */
+    /*    rx_ring_phys = pmm_alloc_page() — physical address returned by PMM */
+    /*    rx_ring = kva-mapped virtual address of rx_ring_phys (for CPU access) */
     /*    Allocate 256 × 2KB RX packet buffers (one PMM page each, use first 2KB) */
-    /*    Fill descriptors: opts1 = OWN | 2048, addr = phys buffer */
+    /*    rx_virt[i] = kva-mapped virtual addr; descriptor addr field = phys (PMM value) */
+    /*    Fill descriptors: opts1 = OWN | 2048, addr = rx_buf_phys[i] (PMM physical) */
     /*    Set EOR on descriptor 255 */
-    mmio_write64(base + RTL_RDSAR, rx_ring_phys);
+    mmio_write64(base + RTL_RDSAR, rx_ring_phys); /* NIC needs physical address */
 
     /* 8. Allocate TX descriptor ring (256 × 16 bytes = 1 page) */
+    /*    tx_ring_phys = pmm_alloc_page() — physical address for NIC MMIO register */
+    /*    tx_ring = kva-mapped virtual address for CPU writes to descriptors */
     /*    All descriptors start with OWN=0, addr=0 */
     /*    Set EOR on descriptor 255 */
-    mmio_write64(base + RTL_TNPDS, tx_ring_phys);
+    mmio_write64(base + RTL_TNPDS, tx_ring_phys); /* NIC needs physical address */
 
     /* 9. Configure RX */
     mmio_write16(base + RTL_RMS, 2048);          /* max RX frame size */
