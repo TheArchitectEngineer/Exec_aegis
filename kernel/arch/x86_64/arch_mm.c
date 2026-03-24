@@ -34,11 +34,25 @@ typedef struct {
     uint32_t reserved;
 } mb2_mmap_entry_t;
 
-#define MB2_TAG_MMAP   6
+#define MB2_TAG_MMAP     6
 #define MB2_TAG_ACPI_OLD 14   /* ACPI 1.0 RSDP (32-bit, RSDT) */
 #define MB2_TAG_ACPI_NEW 15   /* ACPI 2.0+ RSDP (64-bit, XSDT) */
-#define MB2_MEM_AVAIL  1
-#define MAX_REGIONS    32
+#define MB2_TAG_FB       8
+#define MB2_MEM_AVAIL    1
+#define MAX_REGIONS      32
+
+/* Multiboot2 framebuffer info tag (type 8) */
+typedef struct {
+    uint32_t type;                  /* = 8 */
+    uint32_t size;
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t  framebuffer_bpp;
+    uint8_t  framebuffer_type;      /* 1 = RGB linear */
+    uint16_t reserved;
+} mb2_fb_tag_t;
 
 /* --------------------------------------------------------------------------
  * Usable RAM regions (type=1 from multiboot2)
@@ -48,6 +62,7 @@ static aegis_mem_region_t regions[MAX_REGIONS];
 static uint32_t           region_count = 0;
 static uint64_t s_rsdp_v1_phys = 0;   /* ACPI 1.0 RSDP (type-14 tag) */
 static uint64_t s_rsdp_v2_phys = 0;   /* ACPI 2.0+ RSDP (type-15 tag) */
+static arch_fb_info_t s_fb_info;       /* zeroed at startup; addr==0 means absent */
 
 void arch_mm_init(void *mb_info)
 {
@@ -94,6 +109,19 @@ void arch_mm_init(void *mb_info)
             s_rsdp_v1_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_tag_t));
         }
 
+        if (tag->type == MB2_TAG_FB) {
+            const mb2_fb_tag_t *fb = (const mb2_fb_tag_t *)p;
+            /* Only accept 32-bpp linear (type==1) framebuffers. */
+            if (fb->framebuffer_type == 1 && fb->framebuffer_bpp == 32) {
+                s_fb_info.addr   = fb->framebuffer_addr;
+                s_fb_info.pitch  = fb->framebuffer_pitch;
+                s_fb_info.width  = fb->framebuffer_width;
+                s_fb_info.height = fb->framebuffer_height;
+                s_fb_info.bpp    = fb->framebuffer_bpp;
+                s_fb_info.type   = fb->framebuffer_type;
+            }
+        }
+
         /* Tags are 8-byte aligned */
         p += (tag->size + 7) & ~7U;
     }
@@ -133,4 +161,12 @@ uint64_t arch_get_rsdp_phys(void)
 {
     /* Prefer ACPI 2.0+ (XSDT, 64-bit pointers); fall back to 1.0 (RSDT). */
     return (s_rsdp_v2_phys != 0) ? s_rsdp_v2_phys : s_rsdp_v1_phys;
+}
+
+int
+arch_get_fb_info(arch_fb_info_t *out)
+{
+    if (!out || s_fb_info.addr == 0) return 0;
+    *out = s_fb_info;
+    return 1;
 }
