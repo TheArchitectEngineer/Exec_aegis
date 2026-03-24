@@ -41,6 +41,11 @@ void serial_init(void)
 
 void serial_write_char(char c)
 {
+    /* Emit \r before every \n so terminal emulators render correctly. */
+    if (c == '\n') {
+        while ((inb(COM1_LSR) & LSR_TXEMPTY) == 0) {}
+        outb(COM1_DATA, '\r');
+    }
     /* Spin until transmit-hold register is empty */
     while ((inb(COM1_LSR) & LSR_TXEMPTY) == 0) {}
     outb(COM1_DATA, (unsigned char)c);

@@ -61,7 +61,7 @@ void net_set_config(ip4_addr_t ip, ip4_addr_t mask, ip4_addr_t gw)
 
     uint32_t a = ntohl(ip);
     uint32_t g = ntohl(gw);
-    printk("[NET] configured: %u.%u.%u.%u/%d gw %u.%u.%u.%u\n",
+    printk("[NET] configured: %u.%u.%u.%u/%u gw %u.%u.%u.%u\n",
            (a>>24)&0xff, (a>>16)&0xff, (a>>8)&0xff, a&0xff, pl,
            (g>>24)&0xff, (g>>16)&0xff, (g>>8)&0xff, g&0xff);
 }
