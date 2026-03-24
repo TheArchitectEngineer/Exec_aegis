@@ -83,6 +83,25 @@ const aegis_mem_region_t  *arch_mm_get_reserved_regions(void);
  * Returns 0 if no ACPI tag was found (e.g. -machine pc with SeaBIOS). */
 uint64_t arch_get_rsdp_phys(void);
 
+/*
+ * Framebuffer info extracted from the multiboot2 type-8 tag.
+ * Populated by arch_mm_init(); read by fb_init() after VMM+KVA are up.
+ * addr == 0 if no framebuffer tag was present.
+ */
+typedef struct {
+    uint64_t addr;    /* physical base address of linear framebuffer */
+    uint32_t pitch;   /* bytes per scan line */
+    uint32_t width;   /* pixels per row */
+    uint32_t height;  /* rows */
+    uint8_t  bpp;     /* bits per pixel (32 for our use case) */
+    uint8_t  type;    /* 1 = RGB/BGR linear, 2 = EGA text */
+} arch_fb_info_t;
+
+/* arch_get_fb_info — fill *out with the framebuffer info saved during
+ * arch_mm_init().  Returns 1 if a usable (type==1, bpp==32) framebuffer
+ * was found, 0 otherwise. */
+int arch_get_fb_info(arch_fb_info_t *out);
+
 /* Physical base address of the kernel image (arch-defined load address).
  * pmm_init() uses this to reserve the kernel image pages. */
 #define ARCH_KERNEL_PHYS_BASE 0x100000UL
