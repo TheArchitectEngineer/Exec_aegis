@@ -30,7 +30,8 @@
 | `kernel/net/socket.h` | Create | `sock_t` struct, socket table API |
 | `kernel/net/socket.c` | Create | Socket table, `sock_alloc`, `sock_get`, blocking/wake |
 | `kernel/net/epoll.h` + `epoll.c` | Create | epoll instance table, `epoll_notify()` |
-|  `kernel/syscall/sys_socket.c` | Create | All socket syscall implementations |
+| `kernel/syscall/sys_socket.c` | Create | All socket syscall implementations |
+| `kernel/httpd_bin.c` | Create | Minimal HTTP server binary; `socket/bind/listen/accept/recv/send/close`; ships as `/bin/httpd` in ext2 |
 | `kernel/syscall/syscall.c` | Modify | Dispatch new syscall numbers |
 | `kernel/cap/src/lib.rs` | Modify | Add `CAP_KIND_NET_SOCKET`, `CAP_KIND_NET_ADMIN` |
 | `kernel/proc/proc.c` | Modify | Grant `CAP_KIND_NET_SOCKET` in `proc_spawn` |
@@ -60,7 +61,7 @@ Follow Linux x86-64 ABI (musl uses these):
 | `getsockname` | 51 | |
 | `getpeername` | 52 | |
 | `socketpair` | 53 | AF_INET SOCK_STREAM loopback pair |
-| `setsockopt` | 54 | SO_REUSEADDR, SO_RCVTIMEO, SO_SNDTIMEO, TCP_NODELAY |
+| `setsockopt` | 54 | SO_REUSEADDR, SO_BROADCAST, SO_RCVTIMEO, SO_SNDTIMEO, TCP_NODELAY |
 | `getsockopt` | 55 | mirrors setsockopt options |
 | `select` | 23 | already reserved; implement now |
 | `poll` | 7 | already reserved; implement now |
@@ -95,8 +96,10 @@ typedef struct {
     /* accept queue for LISTEN sockets: ring of completed conn ids */
     uint32_t     accept_queue[8];
     uint8_t      accept_head, accept_tail;
-    /* blocking waiter: one task waiting on recv/accept/connect */
-    uint32_t     waiter_pid;   /* 0 = none */
+    /* blocking waiter: one task waiting on recv/accept/connect.
+     * Store aegis_task_t* directly — matches sched_wake() signature and
+     * the established pipe.c pattern (reader_waiting/writer_waiting). */
+    aegis_task_t *waiter_task; /* NULL = none */
     uint32_t     epoll_id;     /* epoll instance watching this socket; UINT32_MAX = none */
     uint64_t     epoll_events; /* EPOLLIN | EPOLLOUT mask */
     uint8_t      reuseaddr;
@@ -110,10 +113,11 @@ static sock_t s_socks[SOCK_TABLE_SIZE];
 ## Blocking Model
 
 When `recv()` / `accept()` / `connect()` would block:
-1. Set `sock->waiter_pid = current->pid`
+1. Set `sock->waiter_task = current` (the `aegis_task_t *` for the calling process)
 2. Call `sched_block(current)` — process removed from run queue
-3. When TCP layer delivers data/connection: call `sock_wake(sock_id)` which calls `sched_wake(sock->waiter_pid)`
-4. Process re-enters syscall path, checks condition again (spurious-wake safe)
+3. When TCP layer delivers data/connection: call `sock_wake(sock_id)` which calls `sched_wake(sock->waiter_task)`
+4. Set `sock->waiter_task = NULL`
+5. Process re-enters syscall path, checks condition again (spurious-wake safe)
 
 For `O_NONBLOCK`: skip steps 1–4, return `-EAGAIN` immediately.
 
@@ -193,7 +197,7 @@ Requires `CAP_KIND_NET_ADMIN`. Calls `net_set_config(ip, mask, gw)`. Prints `[NE
 
 ### `socketpair(domain, type, proto, sv[2])`
 
-Creates two connected SOCK_STREAM sockets via loopback (`127.0.0.1`). Allocates two sock_t entries and two fd slots. Used by shell pipes-over-network and IPC patterns.
+Creates two connected SOCK_STREAM sockets backed by a **shared in-kernel ring buffer pair** — no IP stack involvement, no ARP, no loopback routing. Each socket has a 4KB send ring that is the other socket's receive ring (cross-linked). Reads and writes go directly to/from the ring buffers via `copy_from_user`/`copy_to_user`. This is the correct POSIX behavior (socketpair traffic never hits the wire). Allocates two `sock_t` entries and two fd slots. `domain` must be `AF_UNIX` or `AF_INET`; both are handled identically (in-kernel buffer only). Used for IPC and testing without network hardware.
 
 ---
 
@@ -218,12 +222,13 @@ _Static_assert(sizeof(k_sockaddr_in_t) == 16,
 
 ### `tests/test_socket.py`
 
+Uses the Phase 25 static IP (`10.0.2.15`) — the `dhcp` binary is Phase 28 and is not available yet.
+
 1. Boot with `-machine q35 -device virtio-net-pci,disable-legacy=on -netdev user,id=n0,hostfwd=tcp::8080-:80`
-2. Wait for shell prompt
-3. Type `dhcp` (blocks until IP assigned from QEMU SLIRP DHCP server → `10.0.2.15`)
-4. Type `httpd &` (minimal HTTP server binary, binds port 80, responds to GET /)
-5. From Python test: `requests.get("http://localhost:8080/")` → verify 200 response
-6. Verify `[NET] configured: 10.0.2.15/24` in serial output
+2. Wait for shell prompt (IP is already `10.0.2.15` from Phase 25 static config)
+3. Type `httpd &` (minimal HTTP server binary, binds port 80, responds to `GET /`)
+4. From Python test: connect via stdlib `http.client.HTTPConnection("localhost", 8080)` → verify 200 response and `"Hello from Aegis"` body
+5. Verify `[NET] OK: virtio-net eth0` in serial output
 
 `httpd` binary: shipped in ext2 `/bin/httpd`. Minimal — `socket`/`bind`/`listen`/`accept`/`recv`/`send`/`close` loop. Responds with `HTTP/1.0 200 OK\r\n\r\nHello from Aegis\r\n`.
 

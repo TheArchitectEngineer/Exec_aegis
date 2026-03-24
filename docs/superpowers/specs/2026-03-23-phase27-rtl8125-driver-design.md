@@ -108,9 +108,15 @@ void rtl8125_init(void) {
 
     /* 3. Map BAR2 (64K MMIO) via kva_alloc_pages + vmm_map_page, no-cache flags */
 
-    /* 4. Soft reset */
+    /* 4. Soft reset — poll with timeout (max 10000 iterations) */
     mmio_write8(base + RTL_CR, 0x10);           /* RST = 1 */
-    while (mmio_read8(base + RTL_CR) & 0x10);   /* poll until RST clears */
+    for (int i = 0; i < 10000; i++) {
+        if (!(mmio_read8(base + RTL_CR) & 0x10)) break;
+        if (i == 9999) {
+            printk("[RTL8125] reset timeout — hardware fault\n");
+            return;
+        }
+    }
 
     /* 5. Unlock config registers */
     mmio_write8(base + RTL_CFG9346, 0xC0);
@@ -174,9 +180,13 @@ int rtl8125_send(netdev_t *dev, const void *pkt, uint16_t len) {
     /* kick TX */
     mmio_write8(p->base + RTL_TPPOLL, 0x40);
     p->tx_head++;
-    /* poll for completion (wait until OWN clears) */
-    while (p->tx_ring[idx].opts1 & (1u<<31));
-    return 0;
+    /* poll for completion (wait until OWN clears), with timeout */
+    for (int i = 0; i < 100000; i++) {
+        if (!(p->tx_ring[idx].opts1 & (1u<<31)))
+            return 0;
+    }
+    printk("[RTL8125] TX timeout on descriptor %u — link down?\n", (unsigned)idx);
+    return -1; /* -EIO */
 }
 ```
 

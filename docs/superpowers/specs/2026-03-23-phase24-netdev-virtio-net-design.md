@@ -17,7 +17,7 @@
 - All DMA buffers (descriptor tables, receive buffers) must be physically contiguous pages allocated via `pmm_alloc_page()` and mapped via KVA window. Physical addresses passed to NIC, virtual addresses used by CPU.
 - `netdev_rx_deliver()` is called from the PIT tick ISR context — it must not block and must not call `sched_block()`.
 - `NETDEV_MAX = 4`. Static table, no dynamic allocation.
-- RX receive buffers: 1536 bytes each (1500 MTU + 14 Ethernet header + 22 virtio-net header headroom). Pre-allocated at init, never freed.
+- RX receive buffers: 1536 bytes each (1500 MTU + 14 Ethernet header + 10 virtio_net_hdr + 12 headroom). Pre-allocated at init, never freed.
 
 ---
 
@@ -101,7 +101,7 @@ virtio 1.0 modern devices advertise their register regions via PCI vendor-specif
 - `VIRTIO_PCI_CAP_NOTIFY_CFG` (2) — queue kick doorbell
 - `VIRTIO_PCI_CAP_DEVICE_CFG` (4) — device-specific config (MAC, status)
 
-Each capability encodes a BAR index + offset + length. Map the BAR via `kva_alloc_pages()` + `vmm_map_page()` with no-cache flags (`PTE_PRESENT | PTE_WRITE | PTE_PWT | PTE_PCD | PTE_NX`).
+Each capability encodes a BAR index + offset + length. Map the BAR via `kva_alloc_pages()` + `vmm_map_page()` with no-cache flags `0x1Bu` (Present|Write|PWT|PCD), matching the established driver pattern from `nvme.c`/`xhci.c`.
 
 ### Virtqueue Layout (per queue)
 
@@ -129,14 +129,24 @@ avail->idx = 256;
 
 ### TX Path
 
+TX bounce buffer layout (per slot): `[virtio_net_hdr (10 bytes zero)][Ethernet frame]`.
+
 ```c
 int virtio_net_send(netdev_t *dev, const void *pkt, uint16_t len) {
-    /* 1. Copy pkt into pre-allocated TX bounce buffer (1 PMM page) */
-    /* 2. Fill TX descriptor: addr=phys, len=len+sizeof(virtio_net_hdr), flags=0 */
+    /* 1. Zero the 10-byte virtio_net_hdr at start of TX bounce buffer,
+     *    then copy Ethernet frame at offset 10.
+     *    Total bytes to NIC: 10 + len. */
+    uint8_t *buf = p->tx_virt[p->tx_head & 255];
+    memset(buf, 0, 10);               /* virtio_net_hdr (all zeros = no offload) */
+    memcpy(buf + 10, pkt, len);
+    uint16_t total = 10 + len;
+    /* 2. Fill TX descriptor: addr=phys, len=total, flags=0 (single segment) */
     /* 3. Write descriptor index to avail->ring[avail->idx & 255] */
-    /* 4. avail->idx++ */
-    /* 5. Write queue index to notify doorbell MMIO address */
-    /* 6. Poll used ring until NIC signals completion (or timeout 10ms) */
+    /* 4. avail->idx++ (compiler barrier: __asm__ volatile("" ::: "memory")) */
+    /* 5. sfence — required by virtio 1.0 section 2.6.13.2 before MMIO notify */
+    __asm__ volatile("sfence" ::: "memory");
+    /* 6. Write queue index (1 for TX) to notify doorbell MMIO address */
+    /* 7. Poll used ring until NIC signals completion (or 1000 iterations, return -EIO) */
     return 0;
 }
 ```
@@ -150,8 +160,10 @@ void virtio_net_poll(netdev_t *dev) {
         uint32_t id  = p->rx_used->ring[p->rx_last_used & 255].id;
         uint32_t len = p->rx_used->ring[p->rx_last_used & 255].len;
         void *buf = p->rx_virt[id]; /* virtual address of receive buffer */
-        /* skip 12-byte virtio_net_hdr at start of buffer */
-        netdev_rx_deliver(dev, (uint8_t *)buf + 12, len - 12);
+        /* skip 10-byte virtio_net_hdr at start of buffer.
+         * Without VIRTIO_NET_F_MRG_RXBUF, the header is 10 bytes:
+         * flags(1) + gso_type(1) + hdr_len(2) + gso_size(2) + csum_start(2) + csum_offset(2). */
+        netdev_rx_deliver(dev, (uint8_t *)buf + 10, len - 10);
         /* return descriptor to available ring */
         p->rx_avail->ring[p->rx_avail->idx & 255] = id;
         p->rx_avail->idx++;
