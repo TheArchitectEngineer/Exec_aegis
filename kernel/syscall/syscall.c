@@ -55,6 +55,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  82: return sys_rename(arg1, arg2);
     case  83: return sys_mkdir(arg1, arg2);
     case  87: return sys_unlink(arg1);
+    case 257: return sys_openat(arg1, arg2, arg3, arg4);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

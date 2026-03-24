@@ -29,8 +29,10 @@ int ext2_lookup_parent(const char *path, uint32_t *parent_ino_out,
         for (ci = 0; ci < plen; ci++)
             parent_path[ci] = path[ci];
         parent_path[plen] = '\0';
-        if (ext2_open(parent_path, parent_ino_out) != 0)
+        if (ext2_open(parent_path, parent_ino_out) != 0) {
+            printk("[EXT2] lookup_parent: ext2_open(%s) failed\n", parent_path);
             return -1;
+        }
         *basename_out = last_slash + 1;
     }
     return 0;

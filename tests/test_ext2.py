@@ -123,7 +123,7 @@ def run_shell_session(disk_path, commands):
         QEMU,
         "-machine", "q35", "-cpu", "Broadwell",
         "-cdrom", ISO, "-boot", "order=d",
-        "-drive", "file=%s,format=raw,if=none,id=nvme0" % disk_path,
+        "-drive", "file=%s,format=raw,if=none,id=nvme0,cache=none" % disk_path,
         "-device", "nvme,drive=nvme0,serial=aegis00",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
@@ -165,6 +165,9 @@ def run_shell_session(disk_path, commands):
 
     # Inject 'exit' to trigger isa-debug-exit and halt QEMU
     _type_string(mon_sock, "exit\n")
+    # Collect post-exit output (sync messages, System halted, etc.)
+    post_exit = _read_until_prompt(proc, time.time() + 15)
+    all_output.append(post_exit)
     try:
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
@@ -177,6 +180,72 @@ def run_shell_session(disk_path, commands):
         pass
 
     return "\n".join(all_output)
+
+
+def _ext2_find_file(disk_path, filepath):
+    """Return True if filepath exists in the ext2 partition on disk_path.
+    Parses the partition at LBA 2048 with 1024-byte blocks."""
+    PART_OFFSET = 2048 * 512    # partition start in bytes
+    BLOCK_SIZE  = 1024
+    INODE_SIZE  = 128
+
+    def read_block(f, blk):
+        f.seek(PART_OFFSET + blk * BLOCK_SIZE)
+        return f.read(BLOCK_SIZE)
+
+    def read_inode(f, ino):
+        import struct
+        # Read superblock to get bg_inode_table
+        f.seek(PART_OFFSET + 1024)
+        sb = f.read(1024)
+        s_inodes_per_group = struct.unpack_from('<I', sb, 40)[0]
+        s_first_data_block = struct.unpack_from('<I', sb, 20)[0]
+        # Read BGD (block 2 for 1024-byte blocks)
+        bgd_block = 2 if s_first_data_block == 1 else 1
+        f.seek(PART_OFFSET + bgd_block * BLOCK_SIZE)
+        bgd = f.read(32)
+        bg_inode_table = struct.unpack_from('<I', bgd, 8)[0]
+        group  = (ino - 1) // s_inodes_per_group
+        index  = (ino - 1) % s_inodes_per_group
+        byte_off = index * INODE_SIZE
+        blk_off  = byte_off // BLOCK_SIZE
+        in_blk   = byte_off % BLOCK_SIZE
+        f.seek(PART_OFFSET + (bg_inode_table + blk_off) * BLOCK_SIZE + in_blk)
+        return f.read(INODE_SIZE)
+
+    def scan_dir(f, dir_ino, name):
+        import struct
+        raw = read_inode(f, dir_ino)
+        i_block_0 = struct.unpack_from('<I', raw, 40)[0]  # i_block[0]
+        if i_block_0 == 0:
+            return 0
+        data = read_block(f, i_block_0)
+        pos = 0
+        while pos < BLOCK_SIZE:
+            inode_val = struct.unpack_from('<I', data, pos)[0]
+            rec_len   = struct.unpack_from('<H', data, pos + 4)[0]
+            name_len  = data[pos + 6]
+            if rec_len < 8:
+                break
+            if inode_val != 0:
+                ent_name = data[pos + 8: pos + 8 + name_len].decode('ascii', errors='replace')
+                if ent_name == name:
+                    return inode_val
+            pos += rec_len
+        return 0
+
+    components = [c for c in filepath.split('/') if c]
+    try:
+        with open(disk_path, 'rb') as f:
+            cur = 2  # root inode
+            for comp in components:
+                cur = scan_dir(f, cur, comp)
+                if cur == 0:
+                    return False
+        return True
+    except Exception as e:
+        print("  [disk-check] error: %s" % e)
+        return False
 
 
 def test_ext2_persistence():
@@ -203,6 +272,13 @@ def test_ext2_persistence():
         assert "hello" in out1, (
             "FAIL test_ext2_persistence: 'hello' not in boot-1 output\n%s" % out1)
         print("  boot 1: 'hello' confirmed in cat output")
+        print("  [boot1 full output follows]")
+        print(out1)
+        print("  [boot1 output end]")
+
+        # Check the disk image directly before boot 2
+        on_disk = _ext2_find_file(disk_path, "/tmp/test.txt")
+        print("  disk-check after boot 1: /tmp/test.txt on disk = %s" % on_disk)
 
         # ── Boot 2: verify /tmp/test.txt persists ─────────────────────
         print("  boot 2: reading /tmp/test.txt ...")

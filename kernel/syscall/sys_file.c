@@ -56,6 +56,25 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     return fd;
 }
 
+/*
+ * sys_openat — syscall 257
+ *
+ * arg1 = dirfd (AT_FDCWD = -100 means resolve relative to CWD)
+ * arg2 = user pointer to path
+ * arg3 = flags
+ * arg4 = mode
+ *
+ * We only support AT_FDCWD (absolute paths and CWD-relative).  Paths starting
+ * with '/' are absolute and dirfd is irrelevant.  For now we forward to
+ * sys_open unconditionally — the shell only calls openat with AT_FDCWD.
+ */
+uint64_t
+sys_openat(uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
+{
+    (void)arg1;  /* dirfd — only AT_FDCWD (-100) or absolute paths handled */
+    return sys_open(arg2, arg3, arg4);
+}
+
 /* ── Phase 18 syscalls ───────────────────────────────────────────────────── */
 
 int

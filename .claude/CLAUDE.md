@@ -231,7 +231,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | stat + getdents64 | ✅ | sys_stat/fstat/lstat/access/nanosleep; wc/grep/sort binaries |
 | PCIe + ACPI | ✅ | MCFG+MADT on q35; ECAM ≤8 buses; graceful skip on -machine pc |
 | NVMe driver | ✅ | NVMe 1.4; blkdev abstraction; synchronous poll; NSID=1 only |
-| ext2 filesystem | ✅ | Read-write on nvme0p1; 16-slot LRU block cache; create/unlink/mkdir/rename |
+| ext2 filesystem | ✅ | Read-write on nvme0p1; 16-slot LRU block cache; create/unlink/mkdir/rename; test_ext2_persistence PASS |
 | xHCI + USB HID | ✅ | xHCI on q35+qemu-xhci; HID boot protocol; injects into PS/2 ring |
 | Security audit | ✅ | SMEP; sa_handler validation; lseek overflow guards; O_CLOEXEC; SIGPIPE; Rust CAP bounds |
 | GPT partitions | ✅ | CRC32 + primary header; nvme0p1/nvme0p2 registered; ext2 on nvme0p1 |
@@ -306,4 +306,4 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 **RTL8125 testing note:** The machine has RTL8125B (ASUS, PCI 0a:00.0, IOMMU group 18) managed by host `r8169`. WiFi is MT7921K (0b:00.0). Do NOT test RTL8125 until WiFi is confirmed working — you will lose remote access.
 
-*Last updated: 2026-03-24 — Robustness audit (22 issues) all fixed. Phase 25 network stack complete: test_net_stack.py PASS. Root cause: virtio-net header was 10 bytes, Virtio 1.0 requires 12 (num_buffers field). make test passes boot oracle. Known pre-existing failure: test_ext2_persistence (ext2 write sync across reboots — separate issue from ext2 hardening fixes applied this session).*
+*Last updated: 2026-03-24 — ext2 persistence fixed: test_ext2_persistence now PASS. Root cause: shell binary was stale (not recompiled since Phase 22); old binary's redirect parsing silently dropped `>` so files were never created. Fix: force shell recompile + add sys_openat (syscall 257) as alias for sys_open with AT_FDCWD. make test passes all tests.*
