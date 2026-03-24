@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "arch.h"
 #include "printk.h"
+#include "../drivers/fb.h"
 
 /*
  * printk — route formatted output to all available output sinks.
@@ -28,6 +29,9 @@ emit_char(char c)
     if (vga_available) {
         vga_write_string(buf);
     }
+    if (fb_available) {
+        fb_write_string(buf);
+    }
 }
 
 /* Emit a null-terminated string to all active output sinks. */
@@ -39,11 +43,17 @@ emit_string(const char *s)
         if (vga_available) {
             vga_write_string("(null)");
         }
+        if (fb_available) {
+            fb_write_string("(null)");
+        }
         return;
     }
     serial_write_string(s);
     if (vga_available) {
         vga_write_string(s);
+    }
+    if (fb_available) {
+        fb_write_string(s);
     }
 }
 

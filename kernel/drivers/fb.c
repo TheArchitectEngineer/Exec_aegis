@@ -341,6 +341,11 @@ fb_init(void)
     for (i = 0; i < fb_pages; i++) {
         uint64_t va     = (uint64_t)region + (uint64_t)i * 0x1000u;
         uint64_t old_pa = kva_page_phys((void *)va);
+        /* kva_alloc_pages already mapped va to a PMM frame.
+         * SAFETY: vmm_unmap_page removes the existing PTE so that the
+         * following vmm_map_page does not panic on a double-map.
+         * The PMM frame is freed back to the allocator. */
+        vmm_unmap_page(va);
         pmm_free_page(old_pa);
         vmm_map_page(va,
                      info.addr + (uint64_t)i * 0x1000u,
