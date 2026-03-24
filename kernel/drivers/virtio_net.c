@@ -424,7 +424,12 @@ virtio_net_send(netdev_t *dev, const void *pkt, uint16_t len)
             return 0;
         }
     }
-    /* TX timeout — link down or device stuck. */
+    /* TX timeout — drain any completions the device may have posted
+     * to keep tx_last_used in sync before giving up. */
+    while (p->tx_used->idx != p->tx_last_used) {
+        p->tx_last_used++;
+        p->tx_head++;
+    }
     return -1;
 }
 
@@ -448,6 +453,11 @@ virtio_net_poll(netdev_t *dev)
         uint16_t slot = (uint16_t)(p->rx_last_used & (uint16_t)(VIRTQ_SIZE - 1));
         uint32_t id   = p->rx_used->ring[slot].id;
         uint32_t rlen = p->rx_used->ring[slot].len;
+
+        if (id >= VIRTQ_SIZE) {          /* guard against misbehaving device */
+            p->rx_last_used++;
+            continue;
+        }
 
         /* Skip the 10-byte virtio_net_hdr at the start of the receive buffer.
          * Without VIRTIO_NET_F_MRG_RXBUF the header is always 10 bytes. */
