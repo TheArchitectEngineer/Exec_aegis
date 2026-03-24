@@ -52,7 +52,8 @@ kernel/core/            ← Architecture-agnostic kernel logic only.
 kernel/mm/              ← Memory management (arch-agnostic logic)
 kernel/cap/             ← Capability subsystem (Rust)
 kernel/fs/              ← VFS and filesystem drivers
-kernel/drivers/         ← Hardware device drivers (NVMe, AHCI, etc.)
+kernel/drivers/         ← Hardware device drivers (NVMe, xHCI, virtio-net, RTL8125, etc.)
+kernel/net/             ← Network stack (netdev_t, Ethernet, IP, TCP, UDP, ICMP)
 kernel/sched/           ← Scheduler
 tests/                  ← Test harness and expected output
 tools/                  ← Build helpers, QEMU wrappers
@@ -747,3 +748,28 @@ slot for the parent disk. Raise both constants together if more partitions are n
 lists all user ELFs as prerequisites. A change to any binary triggers a full disk
 rebuild including running `sgdisk`. This is correct but slow. A future optimization
 could separate partition table creation (once) from filesystem population (on change).
+
+---
+
+## Phase Roadmap (post-Phase 23)
+
+The following phases are planned in order. Framebuffer/display work is intentionally
+deferred until the network stack is complete — the server use case takes priority.
+
+| Phase | Content | Notes |
+|-------|---------|-------|
+| 24 | `netdev_t` abstraction + virtio-net driver | QEMU-testable via `-netdev user` |
+| 25 | Ethernet/ARP/IP/ICMP/TCP/UDP protocol stack | Kernel-side; ICMP ping CI test |
+| 26 | Full POSIX socket API + epoll | `sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*` |
+| 27 | RTL8125 2.5GbE driver (PCI ID 10ec:8125) | Real hardware only; testing deferred until WiFi is set up |
+| 28 | DHCP userspace daemon | musl binary; uses socket API; QEMU SLIRP built-in DHCP server for CI |
+| 29 | Framebuffer / VESA | Was Phase 23 before network stack inserted |
+| 30 | AMD Display Core | Was Phase 24 |
+| 31 | Installable disk | Was Phase 25 |
+| 32 | Release | Was Phase 26 |
+
+**RTL8125 testing note:** The machine has an RTL8125B 2.5GbE (ASUS, PCI 0a:00.0,
+IRQ 24, IOMMU group 18) currently managed by the host `r8169` driver. Testing the
+Aegis RTL8125 driver requires either VFIO passthrough or rebooting into Aegis natively.
+Do NOT attempt to test the RTL8125 driver until a WiFi connection (MT7921K, 0b:00.0)
+is configured and confirmed working, to avoid losing remote access during testing.
