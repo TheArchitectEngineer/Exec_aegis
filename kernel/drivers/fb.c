@@ -414,12 +414,15 @@ fb_check_amd(void)
     if (fb_available)
         return;   /* framebuffer already working — nothing to report */
 
-    /* pcie_find_device wildcard: class=0x03 (Display), subclass/progif=0xFF */
+    /* Note: pcie_find_device returns the first class-0x03 device.
+     * On multi-GPU systems this may not be the AMD GPU if another
+     * display controller appears first in the PCIe table. Single-iGPU
+     * systems (the target platform) are always correct. */
     amd = pcie_find_device(0x03u, 0xFFu, 0xFFu);
     if (amd == NULL || amd->vendor_id != 0x1002u)
         return;   /* no AMD display device — silent */
 
-    printk("[FB] WARN: AMD GPU 0x%x found but no UEFI framebuffer tag\n",
+    printk("[FB] WARN: AMD GPU 0x%x found but no framebuffer tag from GRUB\n",
            (uint32_t)amd->device_id);
-    printk("[FB] WARN: boot Aegis in UEFI mode for AMD iGPU display\n");
+    printk("[FB] WARN: ensure GRUB boots in UEFI mode (AMD APUs lack VBE)\n");
 }
