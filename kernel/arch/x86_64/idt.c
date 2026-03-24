@@ -129,11 +129,16 @@ isr_dispatch(cpu_state_t *s)
 
         /* Sanity-check the iretq frame for ring-3 interrupts.
          * For a ring-3 interrupt (cs=0x23), cpu_state_t.rsp=user_rsp and
-         * cpu_state_t.ss=user_SS which must be 0x1B.  If the frame is
-         * corrupted we would get a silent #GP at iretq; catch it here. */
-        if (s->cs == 0x23 && s->ss != 0x1B) {
-            printk("[PANIC] corrupt ring-3 iretq frame vec=%lu ss=0x%lx rsp=0x%lx\n",
-                   s->vector, s->ss, s->rsp);
+         * cpu_state_t.ss must point to the user data descriptor (GDT index 3).
+         *
+         * AMD CPUs in 64-bit mode may strip SS RPL bits after loading, pushing
+         * 0x18 (RPL=0) instead of 0x1B (RPL=3) on interrupt entry — both are
+         * valid since SS is unused for addressing in 64-bit long mode.
+         * Accept any RPL variant of the user data selector: (ss & ~3) == 0x18.
+         * Reject kernel selectors (0x08, 0x10) or user code (0x20). */
+        if (s->cs == 0x23 && (s->ss & ~(uint64_t)3) != 0x18) {
+            printk("[PANIC] corrupt ring-3 iretq frame vec=%lu rip=0x%lx rsp=0x%lx ss=0x%lx\n",
+                   s->vector, s->rip, s->rsp, s->ss);
             for (;;) {}
         }
     }
