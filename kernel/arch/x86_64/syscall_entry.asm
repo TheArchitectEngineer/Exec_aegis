@@ -33,6 +33,8 @@ section .text
 extern syscall_dispatch
 extern g_kernel_rsp
 extern g_user_rsp
+extern signal_deliver_sysret
+extern signal_check_pending
 
 global syscall_entry
 global proc_enter_user
@@ -61,10 +63,20 @@ syscall_entry:
     push r10         ; save user r10 (also frame->r10 at +0 = struct base)
     ; rsp → frame base (&frame->r10)
 
+    ; Save user rdi/rsi/rdx BEFORE the SysV shuffle destroys them.
+    ; Linux ABI guarantees all registers except rax/rcx/r11 are preserved
+    ; across syscall.  musl relies on this — readdir sets rsi=dir->buf before
+    ; getdents64 and uses rsi AFTER the syscall returns.  Without this save,
+    ; rsi contains post-call garbage and readdir computes a null pointer.
+    push rdx         ; save user rdx (user arg3) — preserved per Linux ABI
+    push rsi         ; save user rsi (user arg2) — preserved per Linux ABI
+    push rdi         ; save user rdi (user arg1) — preserved per Linux ABI
+    ; rsp → saved user rdi; frame base at [rsp+24]
+
     ; Push two stack args for 8-arg call (deepest = arg6 first):
     push r9          ; → [rsp+16] after call = arg6 (user r9)
     push r8          ; → [rsp+8]  after call = arg5 (user r8)
-    ; rsp → top of stack arg slots; frame is at [rsp+16]
+    ; rsp → top of stack arg slots; frame is at [rsp+40]
 
     ; Shuffle registers (dependency-safe order):
     mov  r9,  r10    ; SysV arg6 = arg4 = user r10
@@ -72,10 +84,72 @@ syscall_entry:
     mov  rcx, rsi    ; SysV arg4 = arg2 = user rsi
     mov  rdx, rdi    ; SysV arg3 = arg1 = user rdi
     mov  rsi, rax    ; SysV arg2 = num  = syscall number
-    lea  rdi, [rsp+16] ; SysV arg1 = frame ptr (past 2 stack-arg slots)
+    lea  rdi, [rsp+40] ; SysV arg1 = frame ptr (past 2 stack-arg + 3 user-reg-save slots)
 
     call syscall_dispatch
-    add  rsp, 16     ; discard two stack-arg slots; rsp → saved r10
+    add  rsp, 16     ; discard two stack-arg slots; rsp → saved user rdi
+
+    ; Restore user rdi/rsi/rdx — these must have their original user-space
+    ; values when we push them into the signal slots below.
+    pop  rdi         ; restore user rdi
+    pop  rsi         ; restore user rsi (critical: musl readdir uses rsi after getdents64)
+    pop  rdx         ; restore user rdx
+    ; rsp → frame base (&frame->r10) — same as old code after add rsp,16
+
+    ; ── Allocate saved rdi/rsi/rdx slots for signal delivery ─────────────────
+    ; Push in reverse pop order: rdi deepest, rdx shallowest.
+    ; rdi slot will be overwritten by signal_deliver_sysret if a handler
+    ; is installed, so pop rdi delivers signum as arg1 to the handler.
+    push rdi         ; [rsp+16] = saved rdi slot  (deepest of the three)
+    push rsi         ; [rsp+8]  = saved rsi slot
+    push rdx         ; [rsp+0]  = saved rdx slot   (top, popped first)
+    ;
+    ; Stack layout now (rsp → saved rdx):
+    ;   [rsp+0]  saved rdx  [rsp+8]  saved rsi  [rsp+16] saved rdi
+    ;   [rsp+24] frame.r10  [rsp+32] frame.r9   [rsp+40] frame.r8
+    ;   [rsp+48] frame.rflags  [rsp+56] frame.rip  [rsp+64] frame.user_rsp
+
+    ; ── Signal delivery on syscall return path ─────────────────────────────
+    ;
+    ; Case 1: SIGRETURN_MAGIC — sys_rt_sigreturn patched frame already.
+    ;         Skip signal delivery; sysret restores interrupted context.
+    ; Case 2: No pending signals — skip. Normal sysret.
+    ; Case 3: User handler — signal_deliver_sysret patches frame->rip/user_rsp,
+    ;         writes signum to [rsp+16]. Set rax=0, sysret enters handler.
+    ; Case 4: SIG_DFL — signal_deliver_sysret calls sched_exit (no return).
+
+    ; Case 1: SIGRETURN_MAGIC check
+    mov  r11, 0xdeadbeefcafebabe
+    cmp  rax, r11
+    je   .sig_sysret_done
+
+    ; Case 2: fast no-signal check (preserves rax across call)
+    push rax
+    call signal_check_pending   ; returns 1 if signals pending, 0 otherwise
+    test rax, rax
+    pop  rax
+    jz   .sig_sysret_done
+
+    ; Case 3/4: deliver signal
+    ; After push rax: [rsp+0]=saved rax, [rsp+24]=saved rdi, [rsp+32]=frame*
+    push rax
+    lea  rdi, [rsp + 32]    ; frame* = rsp+8(push)+24(frame_offset) = rsp+32
+    lea  rsi, [rsp + 24]    ; &saved_rdi = rsp+8(push)+16(rdi_offset) = rsp+24
+    call signal_deliver_sysret  ; returns 0=no handler, 1=handler installed
+    test rax, rax
+    pop  rax                    ; restore original syscall return value
+    jz   .sig_sysret_done
+
+    ; Case 3: user handler installed — rax=0 on entry to handler
+    xor  eax, eax
+
+.sig_sysret_done:
+    ; ── End signal delivery ─────────────────────────────────────────────────
+
+    ; Restore the three scratch slots (rdi gets signum if handler installed)
+    pop  rdx
+    pop  rsi
+    pop  rdi
 
     ; Restore user r10/r9/r8
     pop  r10

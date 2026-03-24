@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "vfs.h"
 #include "cap.h"
+#include "signal.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -30,6 +31,10 @@ typedef struct {
     uint32_t      ppid;         /* parent PID; 0 = no parent   */
     char          cwd[256];     /* current working directory; init = "/" */
     uint64_t      exit_status;  /* lower 8 bits = exit code; written before zombie */
+    /* Phase 17 — signal subsystem */
+    uint64_t      pending_signals;   /* bitmask; bit N = signal N pending */
+    uint64_t      signal_mask;       /* blocked signals; 0 = nothing blocked */
+    k_sigaction_t sigactions[64];    /* per-signal handler/mask/flags */
 } aegis_process_t;
 
 /* Allocate and return the next unique process ID (monotonically increasing). */

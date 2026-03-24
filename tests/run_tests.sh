@@ -62,3 +62,45 @@ diff "$EXPECTED" "$ACTUAL"
 # BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
 # effect so any Python exit code != 0 will abort this script.
 python3 tests/test_pipe.py
+
+# Phase 17 signal smoke tests — boots the shell ISO and tests signal delivery
+# via Ctrl-C (SIGINT). Each test spawns its own QEMU instance.
+# BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
+# effect so any Python exit code != 0 will abort this script.
+python3 tests/test_signal.py
+
+# Phase 18 stat/utility smoke tests — boots the shell ISO and tests stat,
+# wc, grep via ls/pipe commands. Each test spawns its own QEMU instance.
+# BOOT_TIMEOUT=900 (15 min) to handle loaded host machines; set -e is in
+# effect so any Python exit code != 0 will abort this script.
+python3 tests/test_stat.py
+
+# Phase 20 NVMe driver smoke test — boots on q35 with NVMe disk,
+# verifies [NVME] OK: in serial output.
+python3 tests/test_nvme.py
+
+# Phase 21 ext2 persistence test — boots shell ISO twice with the same
+# NVMe disk image; writes /tmp/test.txt in boot 1 and verifies it persists
+# into boot 2.  Requires make disk (build/disk.img) to exist.
+echo "--- test_ext2 ---"
+python3 tests/test_ext2.py
+
+# Phase 22 xHCI USB controller test — boots on q35 with qemu-xhci + usb-kbd,
+# verifies [XHCI] OK: in serial output and that the shell prompt appears.
+echo "--- test_xhci ---"
+python3 tests/test_xhci.py
+
+# Phase 23 GPT partition parsing test — boots on q35 with GPT-partitioned
+# NVMe disk image; verifies [GPT] OK, [EXT2] nvme0p1, shell prompt, /bin, /etc/motd.
+echo "--- test_gpt ---"
+python3 tests/test_gpt.py
+
+# Phase 24 virtio-net driver test — boots on q35 with virtio-net-pci
+# (modern transport, SLIRP user networking); verifies [NET] OK in serial output.
+echo "--- test_virtio_net ---"
+python3 tests/test_virtio_net.py
+
+# Phase 25 network protocol stack test — boots on q35 with virtio-net + SLIRP;
+# verifies [NET] configured: and [NET] ICMP: echo reply from 10.0.2.2.
+echo "--- test_net_stack.py ---"
+python3 tests/test_net_stack.py || exit 1

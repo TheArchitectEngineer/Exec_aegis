@@ -1,6 +1,8 @@
 #include "pipe.h"
 #include "vfs.h"
 #include "sched.h"
+#include "proc.h"
+#include "signal.h"
 #include "kva.h"
 #include "uaccess.h"
 #include <stdint.h>
@@ -16,6 +18,7 @@ static void pipe_read_close_fn(void *priv);
 static void pipe_write_close_fn(void *priv);
 static void pipe_dup_read_fn(void *priv);
 static void pipe_dup_write_fn(void *priv);
+static int  pipe_stat_fn(void *priv, k_stat_t *st);
 
 const vfs_ops_t g_pipe_read_ops = {
     .read    = pipe_read_fn,
@@ -23,6 +26,7 @@ const vfs_ops_t g_pipe_read_ops = {
     .close   = pipe_read_close_fn,
     .readdir = (void *)0,
     .dup     = pipe_dup_read_fn,
+    .stat    = pipe_stat_fn,
 };
 
 const vfs_ops_t g_pipe_write_ops = {
@@ -31,6 +35,7 @@ const vfs_ops_t g_pipe_write_ops = {
     .close   = pipe_write_close_fn,
     .readdir = (void *)0,
     .dup     = pipe_dup_write_fn,
+    .stat    = pipe_stat_fn,
 };
 
 /*
@@ -50,6 +55,16 @@ pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 {
     pipe_t *p = (pipe_t *)priv;
     (void)off;
+
+    /*
+     * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
+     * Reset to 0 rather than panic — index corruption is a kernel bug, not
+     * user-visible input, and a silent reset is safer than an undiagnosable
+     * halt. The ring invariant (read_pos < PIPE_BUF_SIZE) is restored before
+     * any arithmetic that could wrap or overflow.
+     */
+    if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
+    if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
 
     for (;;) {
         if (p->count == 0 && p->write_refs == 0)
@@ -106,9 +121,28 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
     pipe_t *p = (pipe_t *)priv;
     char staging[PIPE_BUF_SIZE];
 
+    /*
+     * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
+     * Same rationale as pipe_read_fn: silent reset preferred over panic for
+     * kernel-internal corruption. Restores invariant before any wrap arithmetic.
+     */
+    if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
+    if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
+
     for (;;) {
-        if (p->read_refs == 0)
+        if (p->read_refs == 0) {
+            /* Deliver SIGPIPE to the writer before returning -EPIPE.
+             * If the process has SIGPIPE masked or SIG_IGN, it handles
+             * -EPIPE via errno. SIGPIPE = 13 per POSIX.
+             * Kernel tasks (is_user == 0) have no sigactions and must not
+             * receive signals; they get -EPIPE only and must check it. */
+            aegis_task_t *t = sched_current();
+            if (t && t->is_user) {
+                aegis_process_t *p_cur = (aegis_process_t *)t;
+                signal_send_pid(p_cur->pid, SIGPIPE);
+            }
             return -32;   /* EPIPE: all readers gone */
+        }
         if (p->count == PIPE_BUF_SIZE) {
             /* Block until a reader drains some data. */
             p->writer_waiting = sched_current();
@@ -193,4 +227,15 @@ static void
 pipe_dup_write_fn(void *priv)
 {
     ((pipe_t *)priv)->write_refs++;
+}
+
+static int
+pipe_stat_fn(void *priv, k_stat_t *st)
+{
+    pipe_t *p = (pipe_t *)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_mode = S_IFIFO | 0600;
+    st->st_ino  = 0;    /* anonymous pipe: no inode */
+    st->st_size = (int64_t)p->count;
+    return 0;
 }

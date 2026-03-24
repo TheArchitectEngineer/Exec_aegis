@@ -4,6 +4,20 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>   /* for SIGCHLD, struct sigaction, sigaction() */
+
+static long
+sys_setfg(long pid)
+{
+    long ret;
+    __asm__ volatile(
+        "syscall"
+        : "=a"(ret)
+        : "0"(360L), "D"(pid)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
 
 #define MAX_PIPELINE 6    /* max pipeline stages; (PROC_MAX_FDS-3)/2 = 6 */
 #define MAX_ARGV     16   /* max args per command */
@@ -193,7 +207,7 @@ run_pipeline(cmd_t *cmds, int n)
             if (i < n - 1)
                 dup2(pipes[i][1], STDOUT_FILENO);
 
-            /* < stdin redirect (opens initrd file) */
+            /* < stdin redirect */
             if (cmds[i].stdin_file) {
                 int fd = open(cmds[i].stdin_file, O_RDONLY);
                 if (fd < 0) {
@@ -201,6 +215,19 @@ run_pipeline(cmd_t *cmds, int n)
                     _exit(1);
                 }
                 dup2(fd, STDIN_FILENO);
+                close(fd);
+            }
+
+            /* > stdout redirect — create/truncate the output file */
+            if (cmds[i].stdout_file && i == n - 1) {
+                int fd = open(cmds[i].stdout_file,
+                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) {
+                    fprintf(stderr, "%s: cannot open for writing\n",
+                            cmds[i].stdout_file);
+                    _exit(1);
+                }
+                dup2(fd, STDOUT_FILENO);
                 close(fd);
             }
 
@@ -232,10 +259,18 @@ run_pipeline(cmd_t *cmds, int n)
         close(pipes[j][1]);
     }
 
+    /* Register the last stage as foreground process so Ctrl-C sends SIGINT to it.
+     * Use pids[n-1] (last stage) for single-command and for the terminal stage
+     * of a pipeline (the stage the user interacts with). */
+    sys_setfg((long)pids[n - 1]);
+
     /* Wait for all children in order */
     int status;
     for (i = 0; i < n; i++)
         waitpid(pids[i], &status, 0);
+
+    /* Clear foreground process after all children exit */
+    sys_setfg(0);
 }
 
 int
@@ -245,6 +280,16 @@ main(void)
     cmd_t cmds[MAX_PIPELINE];
 
     printf("[SHELL] Aegis shell ready\n");
+
+    /* Prevent SIGCHLD from terminating the shell.
+     * signal_deliver already treats SIGCHLD SIG_DFL as ignore, but
+     * install SIG_IGN explicitly as a defence-in-depth measure. */
+    {
+        struct sigaction sa_chld;
+        __builtin_memset(&sa_chld, 0, sizeof(sa_chld));
+        sa_chld.sa_handler = SIG_IGN;
+        sigaction(SIGCHLD, &sa_chld, NULL);
+    }
 
     for (;;) {
         write(1, "# ", 2);

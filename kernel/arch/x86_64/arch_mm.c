@@ -35,6 +35,8 @@ typedef struct {
 } mb2_mmap_entry_t;
 
 #define MB2_TAG_MMAP   6
+#define MB2_TAG_ACPI_OLD 14   /* ACPI 1.0 RSDP (32-bit, RSDT) */
+#define MB2_TAG_ACPI_NEW 15   /* ACPI 2.0+ RSDP (64-bit, XSDT) */
 #define MB2_MEM_AVAIL  1
 #define MAX_REGIONS    32
 
@@ -44,6 +46,8 @@ typedef struct {
 
 static aegis_mem_region_t regions[MAX_REGIONS];
 static uint32_t           region_count = 0;
+static uint64_t s_rsdp_v1_phys = 0;   /* ACPI 1.0 RSDP (type-14 tag) */
+static uint64_t s_rsdp_v2_phys = 0;   /* ACPI 2.0+ RSDP (type-15 tag) */
 
 void arch_mm_init(void *mb_info)
 {
@@ -74,6 +78,20 @@ void arch_mm_init(void *mb_info)
                 }
                 ep += mmap->entry_size;
             }
+        }
+
+        if (tag->type == MB2_TAG_ACPI_NEW && s_rsdp_v2_phys == 0) {
+            /* SAFETY: multiboot2 tag stream is identity-mapped (VA==PA) at this
+             * point in boot. s_rsdp_v2_phys holds the PA of the inline RSDP v2.
+             * Valid until identity map teardown (Phase 7 — already done, but
+             * arch_mm_init runs before that; the value is consumed by acpi_init
+             * which runs in the same boot phase while the physical address
+             * remains accessible via the higher-half mapping). */
+            s_rsdp_v2_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_tag_t));
+        }
+        if (tag->type == MB2_TAG_ACPI_OLD && s_rsdp_v1_phys == 0) {
+            /* SAFETY: same identity-map guarantee as ACPI_NEW above. */
+            s_rsdp_v1_phys = (uint64_t)(uintptr_t)(p + sizeof(mb2_tag_t));
         }
 
         /* Tags are 8-byte aligned */
@@ -109,4 +127,10 @@ uint32_t arch_mm_reserved_region_count(void)
 const aegis_mem_region_t *arch_mm_get_reserved_regions(void)
 {
     return x86_reserved;
+}
+
+uint64_t arch_get_rsdp_phys(void)
+{
+    /* Prefer ACPI 2.0+ (XSDT, 64-bit pointers); fall back to 1.0 (RSDT). */
+    return (s_rsdp_v2_phys != 0) ? s_rsdp_v2_phys : s_rsdp_v1_phys;
 }

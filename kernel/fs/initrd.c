@@ -9,7 +9,7 @@
 /* /etc/motd content — starts with '[' so it survives the make test ANSI filter.
  * The filter keeps only lines starting with '['; content not matching is
  * silently dropped from the serial diff. */
-static const char s_motd[] = "[MOTD] Hello from initrd!\n";
+static const char s_motd[] = "[MOTD] Welcome to Aegis\n";
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
  * These symbols are resolved at link time; their lengths are not
@@ -34,6 +34,22 @@ extern const unsigned char true_bin_elf[];
 extern const unsigned int  true_bin_elf_len;
 extern const unsigned char false_bin_elf[];
 extern const unsigned int  false_bin_elf_len;
+extern const unsigned char wc_elf[];
+extern const unsigned int  wc_elf_len;
+extern const unsigned char grep_elf[];
+extern const unsigned int  grep_elf_len;
+extern const unsigned char sort_elf[];
+extern const unsigned int  sort_elf_len;
+extern const unsigned char mkdir_elf[];
+extern const unsigned int  mkdir_elf_len;
+extern const unsigned char touch_elf[];
+extern const unsigned int  touch_elf_len;
+extern const unsigned char rm_elf[];
+extern const unsigned int  rm_elf_len;
+extern const unsigned char cp_elf[];
+extern const unsigned int  cp_elf_len;
+extern const unsigned char mv_elf[];
+extern const unsigned int  mv_elf_len;
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -56,13 +72,21 @@ static const initrd_entry_t s_files[] = {
     { "/bin/clear", (const char *)clear_elf,     &clear_elf_len     },
     { "/bin/true",  (const char *)true_bin_elf,  &true_bin_elf_len  },
     { "/bin/false", (const char *)false_bin_elf, &false_bin_elf_len },
+    { "/bin/wc",    (const char *)wc_elf,        &wc_elf_len        },
+    { "/bin/grep",  (const char *)grep_elf,      &grep_elf_len      },
+    { "/bin/sort",  (const char *)sort_elf,      &sort_elf_len      },
+    { "/bin/mkdir", (const char *)mkdir_elf,     &mkdir_elf_len     },
+    { "/bin/touch", (const char *)touch_elf,     &touch_elf_len     },
+    { "/bin/rm",    (const char *)rm_elf,        &rm_elf_len        },
+    { "/bin/cp",    (const char *)cp_elf,        &cp_elf_len        },
+    { "/bin/mv",    (const char *)mv_elf,        &mv_elf_len        },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
 /* s_motd_size is a compile-time constant separate from the size_ptr scheme. */
 static const uint32_t s_motd_size = sizeof(s_motd) - 1;
 
-static const uint32_t s_nfiles = 10;
+static const uint32_t s_nfiles = 18;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -93,12 +117,51 @@ initrd_close_fn(void *priv)
     (void)priv; /* static data, nothing to free */
 }
 
+static int
+initrd_stat_fn(void *priv, k_stat_t *st)
+{
+    const initrd_entry_t *e = (const initrd_entry_t *)priv;
+    uint32_t sz = entry_size(e);
+
+    /* Compute index of this entry in s_files for a synthetic inode */
+    uint64_t ino = 1;
+    {
+        uint32_t i;
+        for (i = 0; s_files[i].name != (const char *)0; i++) {
+            if (&s_files[i] == e) { ino = (uint64_t)(i + 2); break; }
+        }
+    }
+
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_dev     = 1;
+    st->st_ino     = ino;
+    st->st_nlink   = 1;
+    st->st_mode    = S_IFREG | 0444;
+    st->st_size    = (int64_t)sz;
+    st->st_blksize = 512;
+    st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
+    return 0;
+}
+
+static int
+dir_stat_fn(void *priv, k_stat_t *st)
+{
+    (void)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_dev   = 1;
+    st->st_ino   = 1;  /* root dir inode */
+    st->st_nlink = 2;
+    st->st_mode  = S_IFDIR | 0555;
+    return 0;
+}
+
 static const vfs_ops_t initrd_ops = {
     .read    = initrd_read_fn,
     .write   = (void *)0,
     .close   = initrd_close_fn,
     .readdir = (void *)0,
     .dup     = (void *)0,
+    .stat    = initrd_stat_fn,
 };
 
 /* ── Directory entry type and static directory listings ────────────────── */
@@ -114,7 +177,8 @@ static const dir_entry_t s_etc_entries[] = {
 static const dir_entry_t s_bin_entries[] = {
     { "sh",    8 }, { "ls",    8 }, { "cat",   8 }, { "echo",  8 },
     { "pwd",   8 }, { "uname", 8 }, { "clear",  8 }, { "true",  8 },
-    { "false", 8 }, { (const char *)0, 0 }
+    { "false", 8 }, { "wc",    8 }, { "grep",  8 }, { "sort",  8 },
+    { (const char *)0, 0 }
 };
 
 static int
@@ -151,6 +215,7 @@ static const vfs_ops_t dir_ops = {
     .close   = dir_close_fn,
     .readdir = dir_readdir_fn,
     .dup     = (void *)0,
+    .stat    = dir_stat_fn,
 };
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
@@ -212,4 +277,23 @@ initrd_get_size(const vfs_file_t *f)
 {
     if (!f->priv) return 0;
     return entry_size((const initrd_entry_t *)f->priv);
+}
+
+/*
+ * initrd_stat_entry — fill *out with stat for the initrd file at path.
+ * Returns 0 if found, -2 (ENOENT) if not found.
+ * Used by vfs_stat_path to avoid re-opening the file.
+ */
+int
+initrd_stat_entry(const char *path, k_stat_t *out)
+{
+    uint32_t i;
+    for (i = 0; s_files[i].name != (const char *)0; i++) {
+        const char *a = path, *b = s_files[i].name;
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == *b) {
+            return initrd_stat_fn((void *)&s_files[i], out);
+        }
+    }
+    return -2; /* ENOENT */
 }
