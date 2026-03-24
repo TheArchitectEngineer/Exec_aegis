@@ -30,7 +30,8 @@ CFLAGS = \
     -Ikernel/elf \
     -Ikernel/fs \
     -Ikernel/signal \
-    -Ikernel/drivers
+    -Ikernel/drivers \
+    -Ikernel/net
 
 ASFLAGS = -f elf64
 LDFLAGS = -T tools/linker.ld -nostdlib
@@ -95,7 +96,11 @@ SCHED_SRCS = kernel/sched/sched.c
 DRIVER_SRCS = \
     kernel/drivers/nvme.c \
     kernel/drivers/xhci.c \
-    kernel/drivers/usb_hid.c
+    kernel/drivers/usb_hid.c \
+    kernel/drivers/virtio_net.c
+
+NET_SRCS = \
+    kernel/net/netdev.c
 
 FS_SRCS = \
     kernel/fs/vfs.c \
@@ -149,11 +154,12 @@ ARCH_ASM_OBJS  = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
 SCHED_OBJS     = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
 FS_OBJS        = $(patsubst kernel/%.c,$(BUILD)/%.o,$(FS_SRCS))
 DRIVER_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(DRIVER_SRCS))
+NET_OBJS       = $(patsubst kernel/%.c,$(BUILD)/%.o,$(NET_SRCS))
 USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 PROG_BIN_OBJS  = $(patsubst kernel/%.c,$(BUILD)/%.o,$(PROG_BIN_SRCS))
 
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
-           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
+           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(PROG_BIN_OBJS)
 
 .PHONY: all iso disk run shell test clean
 

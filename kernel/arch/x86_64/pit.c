@@ -3,6 +3,7 @@
 #include "arch.h"
 #include "printk.h"
 #include "../drivers/xhci.h"
+#include "netdev.h"
 
 #define PIT_CHANNEL0 0x40
 #define PIT_CMD      0x43
@@ -47,6 +48,7 @@ pit_handler(void)
     s_ticks++;
     sched_tick();
     xhci_poll();    /* poll USB event ring for HID reports (no-op if inactive) */
+    netdev_poll_all();  /* poll registered network devices (virtio-net etc.) */
     /* Check shutdown AFTER sched_tick so the task that set s_shutdown
      * gets preempted cleanly before we call arch_debug_exit. */
     if (s_shutdown)

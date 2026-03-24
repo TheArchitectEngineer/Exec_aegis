@@ -14,6 +14,7 @@
 #include "../fs/ext2.h"
 #include "../fs/gpt.h"
 #include "../drivers/xhci.h"
+#include "../drivers/virtio_net.h"
 #include <stdint.h>
 
 /*
@@ -68,6 +69,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     gpt_scan("nvme0");      /* GPT partitions — [GPT] OK or silent (no NVMe) */
     ext2_mount("nvme0p1");  /* mount partition 1 — [EXT2] OK or silent (-1)  */
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
+    virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */
