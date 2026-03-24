@@ -268,6 +268,7 @@ refuse and explain why.
 | `grub-mkrescue` (grub-pc-bin) | 2.06+ | Creates bootable ISO for `make test` |
 | `xorriso` | 1.5.x+ | Required by grub-mkrescue for ISO creation |
 | `musl-gcc` (musl-tools) | 1.2.x+ | Static musl libc cross-compiler for user binaries |
+| `sgdisk` (gdisk) | 1.0.x+ | GPT partition table creation for `make disk` |
 
 Install check:
 ```bash
@@ -400,6 +401,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | ext2 read-write filesystem (Phase 21) | ✅ Done | ext2 mount on nvme0; 16-slot LRU block cache; read/write/create/unlink/mkdir/rename; sys_mkdir(83)/unlink(87)/rename(82); mkdir/touch/rm/cp/mv user commands; make test GREEN; test_ext2.py PASS |
 | xHCI + USB HID keyboard (Phase 22) | ✅ Done | xHCI init on q35+qemu-xhci; USB HID boot protocol; kbd_usb_inject into PS/2 ring buffer; test_xhci.py PASS (init + shell prompt verified) |
 | Security audit (post-Phase 22) | ✅ Done | SMEP enabled; sa_handler validation; lseek overflow guards (SEEK_CUR + SEEK_END); ext2 dup ref counting; O_CLOEXEC full lifecycle; SIGPIPE delivery; pipe ring buffer guards; Rust CAP bounds clamp; all tests GREEN |
+| GPT partition parsing (Phase 23) | ✅ Done | gpt.c CRC32 + header validation; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; test_gpt.py PASS |
 
 ### Phase 1 deviations from original spec
 
@@ -675,7 +677,7 @@ them would corrupt every other process.
 
 **Queue memory is never freed.** Admin and I/O queue pages allocated via `alloc_queue_page` are permanent. NVMe hot-remove is not supported.
 
-**No partition table parsing.** `nvme_init` registers `"nvme0"` as a whole-disk blkdev. GPT partition parsing (nvme0p1, nvme0p2) is Phase 25 work.
+**GPT partition parsing complete (Phase 23).** `nvme_init` registers `"nvme0"` as a whole-disk blkdev; `gpt_scan("nvme0")` then registers `"nvme0p1"` and `"nvme0p2"` as child blkdevs. The ext2 filesystem mounts from `"nvme0p1"`.
 
 *Last updated: 2026-03-23 — Phase 20 complete, make test GREEN. NVMe 1.4 driver on q35; blkdev abstraction layer; ACPI kva-window for tables above 4MB; ECAM 8-bus cap; test_nvme.py PASS.*
 
@@ -699,6 +701,8 @@ them would corrupt every other process.
 
 *Last updated: 2026-03-23 — Phase 22 complete, test_xhci.py PASS. xHCI USB host controller driver; USB HID boot protocol keyboard; kbd_usb_inject into PS/2 ring buffer; [XHCI] OK confirmed on q35; 100Hz polling via PIT.*
 
+*Last updated: 2026-03-23 — Phase 23 complete, test_gpt.py PASS. GPT partition parsing; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; make disk rewritten for GPT layout with sgdisk; make test GREEN.*
+
 ### Phase 22 forward-looking constraints
 
 **Polling-only at 100Hz.** USB HID reports are polled from the PIT tick handler. This adds ~1-2us per tick when no events are pending. MSI-X driven completion is v2.0 work.
@@ -720,3 +724,26 @@ them would corrupt every other process.
 **`sys_lseek` SEEK_CUR negative overflow is now guarded.** The audit initially only added the positive overflow guard; the code review identified the missing negative direction. Both guards are now present: `off > 0 && f->offset > INT64_MAX - off` and `off < 0 && f->offset < INT64_MIN - off`. The downstream `new_off < 0` check provides a second defense but relies on UB arithmetic — both guards are required.
 
 **`VFS_O_CLOEXEC` constant replaces bare `0x80000U` literals.** Defined in `vfs.h` alongside `VFS_FD_CLOEXEC`. Both are `0x80000U` by design — same Linux x86-64 value, no shift needed at fd install time. Do not change one without changing the other.
+
+### Phase 23 forward-looking constraints
+
+**Partition LBA bounds are not enforced on reads/writes.** `gpt_part_read` and
+`gpt_part_write` add `lba_offset` but do not clamp LBA + count to the partition's
+`block_count`. A buggy caller could read past the partition boundary into adjacent
+structures. Add bounds checking when the blkdev interface gains a per-device bounds hook.
+
+**`nvme0p2` is registered but not mounted.** It appears as a blkdev but no
+filesystem driver uses it. A future phase can format and mount it as swap or a
+second ext2 volume.
+
+**Only the primary GPT header is used.** When the primary is valid, the backup is
+not checked for consistency. The UEFI spec recommends verifying both headers match;
+deferred to a future hardening phase.
+
+**Partition count capped at `GPT_MAX_PARTS = 7`.** With `BLKDEV_MAX = 8` and one
+slot for the parent disk. Raise both constants together if more partitions are needed.
+
+**`make disk` rebuilds entirely when any user binary changes.** The `$(DISK)` rule
+lists all user ELFs as prerequisites. A change to any binary triggers a full disk
+rebuild including running `sgdisk`. This is correct but slow. A future optimization
+could separate partition table creation (once) from filesystem population (on change).
