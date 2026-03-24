@@ -119,6 +119,7 @@ uint64_t sys_execve(syscall_frame_t *frame,
 
 /* ── sys_file.c ─────────────────────────────────────────────────────────── */
 uint64_t sys_open(uint64_t a1, uint64_t a2, uint64_t a3);
+uint64_t sys_openat(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
 uint64_t sys_getdents64(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_getcwd(uint64_t a1, uint64_t a2);
 uint64_t sys_chdir(uint64_t a1);

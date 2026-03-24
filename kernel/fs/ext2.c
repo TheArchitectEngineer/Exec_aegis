@@ -513,12 +513,16 @@ int ext2_create(const char *path, uint16_t mode)
 
     uint32_t parent_ino;
     const char *basename;
-    if (ext2_lookup_parent(path, &parent_ino, &basename) != 0)
+    if (ext2_lookup_parent(path, &parent_ino, &basename) != 0) {
+        printk("[EXT2] creat: lookup_parent failed for %s\n", path);
         return -1;
+    }
 
     uint32_t new_ino = ext2_alloc_inode(0);
-    if (new_ino == 0)
+    if (new_ino == 0) {
+        printk("[EXT2] creat: alloc_inode failed\n");
         return -1;
+    }
 
     ext2_inode_t inode;
     uint32_t ci;
@@ -527,7 +531,11 @@ int ext2_create(const char *path, uint16_t mode)
     inode.i_mode = EXT2_S_IFREG | (mode & 0x1FFu);
     inode.i_links_count = 1;
     ext2_write_inode(new_ino, &inode);
-    return ext2_dir_add_entry(parent_ino, new_ino, basename, EXT2_FT_REG_FILE);
+    int r = ext2_dir_add_entry(parent_ino, new_ino, basename, EXT2_FT_REG_FILE);
+    if (r != 0)
+        printk("[EXT2] creat: dir_add_entry failed parent=%u ino=%u\n",
+               parent_ino, new_ino);
+    return r;
 }
 
 int ext2_unlink(const char *path)

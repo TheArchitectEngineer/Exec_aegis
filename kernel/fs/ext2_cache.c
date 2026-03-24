@@ -61,8 +61,9 @@ int cache_evict(void)
 void cache_mark_dirty(uint32_t block_num)
 {
     int idx = cache_find(block_num);
-    if (idx >= 0)
+    if (idx >= 0) {
         s_cache[idx].dirty = 1;
+    }
 }
 
 /* cache_get_slot — return pointer to cached data for block_num,
