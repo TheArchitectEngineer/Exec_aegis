@@ -1,0 +1,249 @@
+# Phase 28: DHCP Userspace Daemon Design
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Implement a userspace DHCP client daemon that uses the Phase 26 socket API to obtain an IP address from a DHCP server, configure the kernel network stack via `sys_netcfg`, and write resolver configuration to `/etc/resolv.conf`.
+
+**Architecture:** A musl-linked binary (`dhcp_bin.c`) compiled like `shell_bin.c`. Uses `SOCK_DGRAM` on port 68, broadcasts DISCOVER, waits for OFFER, sends REQUEST, waits for ACK. Calls `sys_netcfg` to push IP/mask/gateway into the kernel. `init_bin.c` forks and execs it before dropping to the shell.
+
+**Tech Stack:** C (musl), POSIX socket API (Phase 26), UDP broadcast, `sys_netcfg` (syscall 500).
+
+---
+
+## Constraints and Non-Negotiables
+
+- Must use only the POSIX socket API — no kernel-internal calls. The daemon is a normal user process.
+- `sys_netcfg` requires `CAP_KIND_NET_ADMIN`. `proc_spawn` grants it only to the DHCP daemon process (by PID/name, or via a dedicated spawn path in `init_bin.c`).
+- DHCP timeout: 5 seconds total. If no ACK received, print `[DHCP] timeout: no lease obtained` to stderr and exit. `init_bin.c` continues without network.
+- No lease renewal in Phase 28. The daemon exits after successful configuration. Renewal is v2.0 work.
+- The daemon writes to `/etc/resolv.conf` on the ext2 filesystem if DNS servers are provided in the ACK. If the file cannot be created (ext2 not mounted), silently skip.
+- Must work with QEMU SLIRP built-in DHCP server (assigns `10.0.2.15/24`, gateway `10.0.2.2`, DNS `10.0.2.3`).
+- `make test` unaffected — `-machine pc` has no NIC; `init_bin.c` does not exec `dhcp` if no netdev is registered (check via a new `netdev_count()` function).
+
+---
+
+## File Layout
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `kernel/dhcp_bin.c` | Create | DHCP client implementation |
+| `kernel/init_bin.c` | Modify | Fork + exec `/bin/dhcp` before shell if netdev present |
+| `kernel/net/netdev.h` | Modify | Add `netdev_count()` — returns number of registered devices |
+| `kernel/net/netdev.c` | Modify | Implement `netdev_count()` |
+| `kernel/proc/proc.c` | Modify | Grant `CAP_KIND_NET_ADMIN` to DHCP daemon process |
+| `Makefile` | Modify | Compile `dhcp_bin.c` → `dhcp_bin.o`; add to initrd + ext2 as `/bin/dhcp` |
+| `tests/test_dhcp.py` | Create | Boot q35 + virtio-net + SLIRP; verify IP assigned and ping works |
+| `tests/run_tests.sh` | Modify | Add `test_dhcp.py` |
+
+---
+
+## DHCP Protocol (RFC 2131)
+
+DHCP runs over UDP: client port 68, server port 67. All packets are broadcast during discovery.
+
+### Packet Sequence
+
+```
+Client                          Server (QEMU SLIRP)
+  |                                    |
+  |--- DHCPDISCOVER (broadcast) ------>|
+  |<-- DHCPOFFER (unicast/broadcast) --|
+  |--- DHCPREQUEST (broadcast) ------->|
+  |<-- DHCPACK (unicast/broadcast) ----|
+```
+
+### Packet Structure (BOOTP header, RFC 951)
+
+```c
+typedef struct __attribute__((packed)) {
+    uint8_t  op;          /* 1=BOOTREQUEST, 2=BOOTREPLY */
+    uint8_t  htype;       /* 1=Ethernet */
+    uint8_t  hlen;        /* 6 (MAC address length) */
+    uint8_t  hops;        /* 0 for client */
+    uint32_t xid;         /* transaction ID (random) */
+    uint16_t secs;        /* seconds since start */
+    uint16_t flags;       /* 0x8000 = broadcast flag */
+    uint32_t ciaddr;      /* client IP (0 for DISCOVER) */
+    uint32_t yiaddr;      /* your IP (filled by server in OFFER/ACK) */
+    uint32_t siaddr;      /* server IP */
+    uint32_t giaddr;      /* gateway IP (0 for client) */
+    uint8_t  chaddr[16];  /* client hardware address (MAC in first 6 bytes) */
+    uint8_t  sname[64];   /* server hostname (zeroed) */
+    uint8_t  file[128];   /* boot filename (zeroed) */
+    uint32_t magic;       /* 0x63825363 — DHCP magic cookie */
+    uint8_t  options[308];/* DHCP options */
+} dhcp_pkt_t;
+
+_Static_assert(sizeof(dhcp_pkt_t) == 548, "DHCP packet must be 548 bytes");
+```
+
+### DHCP Options Parsed
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| 1 | Subnet mask | Store, pass to `sys_netcfg` |
+| 3 | Router (gateway) | Store, pass to `sys_netcfg` |
+| 6 | DNS servers | Write first two to `/etc/resolv.conf` |
+| 51 | Lease time | Print to serial (ignored for renewal) |
+| 53 | DHCP message type | 2=OFFER, 5=ACK, 6=NAK |
+| 54 | DHCP server identifier | Use in REQUEST |
+| 255 | End | Stop parsing |
+
+---
+
+## Implementation
+
+### Socket Setup
+
+```c
+int sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+/* Enable broadcast */
+int yes = 1;
+setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+
+/* Bind to port 68 */
+struct sockaddr_in local = {
+    .sin_family = AF_INET,
+    .sin_port   = htons(68),
+    .sin_addr   = { 0 },    /* INADDR_ANY */
+};
+bind(sock, (struct sockaddr *)&local, sizeof(local));
+
+/* Set receive timeout: 5 seconds */
+struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+```
+
+### Build DHCPDISCOVER
+
+```c
+dhcp_pkt_t pkt = {0};
+pkt.op    = 1;          /* BOOTREQUEST */
+pkt.htype = 1;          /* Ethernet */
+pkt.hlen  = 6;
+pkt.xid   = xid;        /* random 32-bit value */
+pkt.flags = htons(0x8000); /* request broadcast reply */
+pkt.magic = htonl(0x63825363);
+
+/* Options: message type DISCOVER (53=1), end (255) */
+uint8_t *opt = pkt.options;
+*opt++ = 53; *opt++ = 1; *opt++ = 1;  /* DHCPDISCOVER */
+*opt++ = 61; *opt++ = 7; *opt++ = 1;  /* client identifier: type=Ethernet */
+memcpy(opt, mac, 6); opt += 6;
+*opt++ = 255;  /* end */
+
+memcpy(pkt.chaddr, mac, 6);
+```
+
+### Send + Receive Loop
+
+```c
+struct sockaddr_in bcast = {
+    .sin_family = AF_INET,
+    .sin_port   = htons(67),
+    .sin_addr   = { 0xFFFFFFFF }, /* 255.255.255.255 */
+};
+
+sendto(sock, &pkt, sizeof(pkt), 0, (struct sockaddr *)&bcast, sizeof(bcast));
+
+/* Wait for OFFER */
+dhcp_pkt_t reply;
+struct sockaddr_in from;
+socklen_t fromlen = sizeof(from);
+ssize_t n = recvfrom(sock, &reply, sizeof(reply), 0,
+                     (struct sockaddr *)&from, &fromlen);
+if (n < 0) { /* timeout */ exit(1); }
+
+/* Verify xid matches, parse options to find DHCPOFFER */
+/* Send DHCPREQUEST with server identifier option */
+/* Wait for DHCPACK */
+/* Parse yiaddr, subnet mask, gateway, DNS */
+```
+
+### Configure Kernel
+
+```c
+/* syscall 500: sys_netcfg(op=0, ip, mask, gw) */
+syscall(500, 0, yiaddr, subnet_mask, gateway);
+
+/* Write /etc/resolv.conf */
+int fd = open("/etc/resolv.conf", O_WRONLY | O_CREAT | O_TRUNC);
+if (fd >= 0) {
+    dprintf(fd, "nameserver %u.%u.%u.%u\n", dns1 bytes...);
+    close(fd);
+}
+
+/* Print confirmation */
+fprintf(stderr, "[DHCP] lease: %u.%u.%u.%u/... gw %u.%u.%u.%u\n", ...);
+```
+
+### `init_bin.c` Integration
+
+```c
+/* In init_bin.c, before exec-ing shell: */
+extern int netdev_count(void);  /* kernel function, linked into init binary? */
+```
+
+Wait — `init_bin.c` is a user binary. It cannot call kernel functions directly. Instead: `init_bin.c` always tries to exec `/bin/dhcp`. If the kernel has no netdev registered, `sys_netcfg` will return `-ENODEV` and the daemon will exit immediately after failing to bind (since there is no route for UDP broadcasts). This is the correct behavior — init continues to the shell.
+
+Alternatively, `init_bin.c` checks if `/bin/dhcp` exists before trying to exec it. If not found (`execve` returns `ENOENT`), skip silently.
+
+```c
+pid_t dhcp_pid = fork();
+if (dhcp_pid == 0) {
+    execve("/bin/dhcp", argv_dhcp, envp);
+    _exit(1); /* execve failed — no dhcp binary or no network */
+}
+/* Don't waitpid for dhcp — let it run in background */
+/* Wait 5s for DHCP before starting shell (optional: use poll on a pipe) */
+```
+
+For Phase 28, the simpler approach: exec dhcp, waitpid with WNOHANG in a loop for up to 500 ticks (5 seconds), then exec shell regardless.
+
+---
+
+## MAC Address Access
+
+The DHCP daemon needs the hardware MAC address. Two options:
+1. **`sys_netcfg` op 1: get config** — returns current IP + MAC. The daemon calls this before DISCOVER.
+2. **`/sys/net/eth0/mac` virtual file** — a new VFS pseudo-file. Cleaner but more work.
+
+Phase 28 uses option 1: extend `sys_netcfg` with `op=1` (read) returning MAC + current IP in a struct.
+
+---
+
+## Testing
+
+### `tests/test_dhcp.py`
+
+Boots with `-machine q35 -device virtio-net-pci,disable-legacy=on -netdev user,id=n0`.
+
+QEMU SLIRP has a built-in DHCP server: assigns `10.0.2.15/24`, gateway `10.0.2.2`, DNS `10.0.2.3`.
+
+```python
+# Wait for DHCP confirmation in serial output
+assert "[DHCP] lease: 10.0.2.15" in output
+
+# Send ping via shell
+send_keys("ping 10.0.2.2\n")
+assert "echo reply" in read_until("#", timeout=10)
+```
+
+QEMU user networking responds to ICMP ping natively — no host configuration needed.
+
+---
+
+## Forward-Looking Constraints
+
+**No lease renewal.** The daemon exits after ACK. If the lease expires (QEMU SLIRP leases are typically 24h), the kernel retains the stale IP. A renewal daemon would need to sleep and re-negotiate before expiry. v2.0 work.
+
+**`sys_netcfg` is Aegis-specific.** Standard tools (`dhclient`, `NetworkManager`) use `ioctl(SIOCSIFADDR)` / `netlink`. A future phase may implement the `rtnetlink` interface so standard userspace network management tools work.
+
+**MAC address access is awkward.** `sys_netcfg op=1` is a workaround. A proper `ioctl(SIOCGIFHWADDR)` on a socket would be the POSIX approach.
+
+**No DHCPv6.** IPv6 is not in scope for Phases 24–28.
+
+**DNS not used.** `/etc/resolv.conf` is written but nothing in the kernel reads it. A future `sys_getaddrinfo` or userspace resolver library would use it.
+
+**Single network interface assumed.** `dhcp_bin.c` hardcodes `"eth0"`. Multi-interface DHCP requires iterating registered netdevs — v2.0 work.
