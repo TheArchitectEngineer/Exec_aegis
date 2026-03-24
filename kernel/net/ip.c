@@ -180,8 +180,10 @@ void ip_rx(netdev_t *dev, const void *frame,
         dst == (s_my_ip | ~s_netmask))                               accept = 1;
     if (!accept) return;
 
-    uint16_t hdr_len  = (uint16_t)sizeof(ip_hdr_t);
-    uint16_t data_len = (uint16_t)(ntohs(hdr->total_len) - hdr_len);
+    uint16_t hdr_len    = (uint16_t)sizeof(ip_hdr_t);
+    uint16_t ip_tot_len = ntohs(hdr->total_len);
+    if (ip_tot_len < hdr_len) return;               /* underflow guard */
+    uint16_t data_len   = (uint16_t)(ip_tot_len - hdr_len);
     if (data_len > ip_payload_len - hdr_len) return;
 
     const void *proto_data = (const uint8_t *)ip_payload + hdr_len;
@@ -192,7 +194,8 @@ void ip_rx(netdev_t *dev, const void *frame,
             icmp_rx(dev, hdr->src, (const icmp_hdr_t *)proto_data, data_len);
         break;
     case IP_PROTO_TCP:
-        tcp_rx(dev, hdr->src, hdr->dst, proto_data, data_len);
+        if (data_len >= 20u)   /* minimum TCP header is 20 bytes */
+            tcp_rx(dev, hdr->src, hdr->dst, proto_data, data_len);
         break;
     case IP_PROTO_UDP:
         udp_rx(dev, hdr->src, hdr->dst, proto_data, data_len);

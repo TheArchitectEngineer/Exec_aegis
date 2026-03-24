@@ -57,6 +57,9 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     if (len < (uint16_t)sizeof(udp_hdr_t)) return;
 
     const udp_hdr_t *hdr      = (const udp_hdr_t *)udp_data;
+    uint16_t udp_claimed = ntohs(hdr->length);
+    if (udp_claimed < (uint16_t)sizeof(udp_hdr_t)) return;  /* malformed */
+    if (udp_claimed > len) return;                           /* truncated */
     uint16_t         dst_port = ntohs(hdr->dst_port);
     int i;
 
