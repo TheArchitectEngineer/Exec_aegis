@@ -82,7 +82,7 @@ static arp_entry_t s_arp_table[ARP_TABLE_SIZE];
 ### `arp_resolve(ip, mac_out)`
 
 1. Search table for matching IP → return cached MAC if found.
-2. If not found: send ARP REQUEST (broadcast), busy-poll the NIC RX used ring for up to 1000 PIT ticks (~100ms). **During this poll, only ARP frames are processed** — all other frame types (IP, etc.) are silently discarded. This prevents re-entrant TCP/UDP state machine processing while the caller is already in a TCP connect path. If ARP REPLY received, cache and return. If timeout, return -1 (caller returns `EHOSTUNREACH`).
+2. If not found: send ARP REQUEST (broadcast), busy-poll the NIC RX used ring for up to 1000 PIT ticks (~100ms). **Disable interrupts (`cli`) for the duration of the busy-poll** — this prevents the PIT ISR from concurrently calling `virtio_net_poll()` and advancing `rx_last_used` while the busy-poll is doing the same, which would cause frames to be consumed twice or silently dropped. Re-enable interrupts (`sti`) when the busy-poll exits (whether on ARP reply, timeout, or error). **During this poll, only ARP frames are processed** — all other frame types (IP, etc.) are silently discarded. This prevents re-entrant TCP/UDP state machine processing while the caller is already in a TCP connect path. If ARP REPLY received, cache and return. If timeout, return -1 (caller returns `EHOSTUNREACH`).
 3. ARP table entries are updated on any ARP REPLY seen outside the busy-poll path (gratuitous ARP support for free).
 
 ### `eth_send(dev, dst_mac, ethertype, payload, len)`
@@ -119,7 +119,7 @@ void net_get_config(ip4_addr_t *ip, ip4_addr_t *mask, ip4_addr_t *gw);
 ### `ip_rx(dev, frame, ip_hdr, len)`
 
 1. Validate header checksum; drop on mismatch.
-2. Drop if `dst_ip != s_my_ip` and `dst_ip != broadcast`.
+2. Accept frame if `dst_ip == s_my_ip` OR `dst_ip == 0xFFFFFFFF` (limited broadcast) OR `dst_ip == (s_my_ip | ~s_netmask)` (subnet broadcast). Also accept if `s_my_ip == 0` and `dst_ip == 0xFFFFFFFF` — this permits DHCP OFFER/ACK reception before an IP address is assigned. Drop all other destination IPs.
 3. Dispatch on protocol: `1` = ICMP → `icmp_rx()`, `6` = TCP → `tcp_rx()`, `17` = UDP → `udp_rx()`.
 
 ### ICMP Echo
@@ -241,4 +241,4 @@ The static test IP `10.0.2.15/24` is hardcoded in the kernel for Phase 25 only. 
 
 **No `SO_REUSEADDR` in Phase 25.** A port in TIME_WAIT blocks rebind for 4 seconds. Phase 26 `setsockopt` implements this.
 
-**ARP busy-poll blocks the PIT tick.** `arp_resolve()` called from `tcp_connect()` (syscall context) busy-polls the RX used ring directly. This is safe in single-core single-thread context but will starve other processes during ARP wait. Phase 26+ should use an async ARP queue.
+**ARP busy-poll disables interrupts.** `arp_resolve()` called from `tcp_connect()` (syscall context) disables interrupts (`cli`) for the duration of the busy-poll (up to ~100ms) to prevent the PIT ISR from concurrently advancing `rx_last_used`. This means the scheduler does not preempt during ARP resolution, and other processes starve for up to 100ms. Phase 26+ should use an async ARP queue to avoid this.
