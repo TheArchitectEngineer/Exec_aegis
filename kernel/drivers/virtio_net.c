@@ -320,8 +320,8 @@ virtio_net_init(void)
             s_priv.rx_last_used  = 0;
         } else {
             /* TX queue: allocate one bounce buffer per slot.
-             * Each bounce buffer = 10 bytes (virtio_net_hdr) + 1514 bytes max
-             * Ethernet frame = 1524 bytes. One page (4096) per slot is ample. */
+             * Each bounce buffer = 12 bytes (virtio_net_hdr v1.0) + 1514 bytes max
+             * Ethernet frame = 1526 bytes. One page (4096) per slot is ample. */
             for (i = 0; i < (int)VIRTQ_SIZE; i++) {
                 uint64_t  buf_pa;
                 uintptr_t buf_va;
