@@ -13,7 +13,7 @@
 ## Constraints and Non-Negotiables
 
 - Must use only the POSIX socket API — no kernel-internal calls. The daemon is a normal user process.
-- `sys_netcfg` requires `CAP_KIND_NET_ADMIN`. `proc_spawn` grants it only to the DHCP daemon process (by PID/name, or via a dedicated spawn path in `init_bin.c`).
+- `sys_netcfg` requires `CAP_KIND_NET_ADMIN`. Granted via a new `proc_spawn` flag: `init_bin.c` calls a new kernel function `proc_grant_cap(pid, CAP_KIND_NET_ADMIN)` on the DHCP daemon's PID immediately after `fork()` and before `execve()`. This follows the established pattern where `proc_spawn` grants capabilities before the process starts executing.
 - DHCP timeout: 5 seconds total. If no ACK received, print `[DHCP] timeout: no lease obtained` to stderr and exit. `init_bin.c` continues without network.
 - No lease renewal in Phase 28. The daemon exits after successful configuration. Renewal is v2.0 work.
 - The daemon writes to `/etc/resolv.conf` on the ext2 filesystem if DNS servers are provided in the ACK. If the file cannot be created (ext2 not mounted), silently skip.
@@ -34,6 +34,34 @@
 | `Makefile` | Modify | Compile `dhcp_bin.c` → `dhcp_bin.o`; add to initrd + ext2 as `/bin/dhcp` |
 | `tests/test_dhcp.py` | Create | Boot q35 + virtio-net + SLIRP; verify IP assigned and ping works |
 | `tests/run_tests.sh` | Modify | Add `test_dhcp.py` |
+
+## Prerequisites from Earlier Phases
+
+The following fixes in earlier phases are required before Phase 28 can work:
+
+1. **Phase 25 `ip_send` must handle `255.255.255.255`** — DHCP DISCOVER/REQUEST are sent to the limited broadcast address. `ip_send` must short-circuit ARP and use `ff:ff:ff:ff:ff:ff` as the destination MAC when `dst_ip == 0xFFFFFFFF`. This is specified in the Phase 25 spec.
+
+2. **Phase 26 `setsockopt` must support `SO_BROADCAST`** — the DHCP daemon sets this option before sending. This is specified in the Phase 26 spec.
+
+3. **Phase 25 must permit `src_ip == 0.0.0.0`** — DHCP packets are sent before an IP address is assigned. `ip_send` must not reject sends with `src_ip == 0`. This is specified in the Phase 25 spec.
+
+---
+
+## sys_netcfg Read-Back Struct (op=1)
+
+```c
+/* Used by dhcp_bin.c to read MAC address before sending DISCOVER */
+typedef struct {
+    uint8_t    mac[6];
+    uint8_t    _pad[2];
+    uint32_t   ip;      /* current IP, network byte order; 0 if unconfigured */
+    uint32_t   mask;
+    uint32_t   gateway;
+} netcfg_info_t;
+
+/* syscall(500, 1, (uint64_t)&info, 0, 0) fills info and returns 0.
+ * Returns -ENODEV if no netdev is registered. */
+```
 
 ---
 
@@ -164,6 +192,12 @@ if (n < 0) { /* timeout */ exit(1); }
 ### Configure Kernel
 
 ```c
+/* Read MAC address before building DISCOVER */
+netcfg_info_t info;
+syscall(500, 1, (uint64_t)&info, 0, 0);
+memcpy(pkt.chaddr, info.mac, 6);
+
+/* After ACK: set IP config */
 /* syscall 500: sys_netcfg(op=0, ip, mask, gw) */
 syscall(500, 0, yiaddr, subnet_mask, gateway);
 
@@ -199,7 +233,7 @@ if (dhcp_pid == 0) {
 /* Wait 5s for DHCP before starting shell (optional: use poll on a pipe) */
 ```
 
-For Phase 28, the simpler approach: exec dhcp, waitpid with WNOHANG in a loop for up to 500 ticks (5 seconds), then exec shell regardless.
+For Phase 28: exec dhcp, then loop calling `waitpid(dhcp_pid, WNOHANG)` with `nanosleep(100ms)` between each check, for up to 50 iterations (5 seconds total). The `nanosleep` yields the CPU to the DHCP daemon so it can actually run and receive packets. After 5 seconds (or when the daemon exits), exec the shell regardless.
 
 ---
 

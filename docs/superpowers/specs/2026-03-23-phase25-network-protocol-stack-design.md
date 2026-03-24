@@ -82,8 +82,8 @@ static arp_entry_t s_arp_table[ARP_TABLE_SIZE];
 ### `arp_resolve(ip, mac_out)`
 
 1. Search table for matching IP → return cached MAC if found.
-2. If not found: send ARP REQUEST (broadcast), busy-poll used ring for up to 1000 PIT ticks (~100ms). If ARP REPLY received, cache and return. If timeout, return -1 (caller returns `EHOSTUNREACH`).
-3. ARP table entries are updated on any ARP REPLY seen (gratuitous ARP support for free).
+2. If not found: send ARP REQUEST (broadcast), busy-poll the NIC RX used ring for up to 1000 PIT ticks (~100ms). **During this poll, only ARP frames are processed** — all other frame types (IP, etc.) are silently discarded. This prevents re-entrant TCP/UDP state machine processing while the caller is already in a TCP connect path. If ARP REPLY received, cache and return. If timeout, return -1 (caller returns `EHOSTUNREACH`).
+3. ARP table entries are updated on any ARP REPLY seen outside the busy-poll path (gratuitous ARP support for free).
 
 ### `eth_send(dev, dst_mac, ethertype, payload, len)`
 
@@ -110,10 +110,11 @@ void net_get_config(ip4_addr_t *ip, ip4_addr_t *mask, ip4_addr_t *gw);
 
 ### `ip_send(dst_ip, proto, payload, len)`
 
-1. If `dst_ip` is on local subnet → `arp_resolve(dst_ip)` for next-hop MAC.
-2. Otherwise → `arp_resolve(s_gateway)` for gateway MAC.
-3. Build 20-byte IP header (version=4, IHL=5, TTL=64, no options). Compute header checksum.
-4. Call `eth_send(dev, next_hop_mac, 0x0800, ip_pkt, ip_len)`.
+1. If `dst_ip == 0xFFFFFFFF` (255.255.255.255) → use broadcast MAC `ff:ff:ff:ff:ff:ff` directly, no ARP. Required for DHCP DISCOVER/REQUEST.
+2. If `dst_ip` is on local subnet → `arp_resolve(dst_ip)` for next-hop MAC.
+3. Otherwise → `arp_resolve(s_gateway)` for gateway MAC.
+4. Build 20-byte IP header (version=4, IHL=5, TTL=64, `src_ip = s_my_ip` which may be `0.0.0.0` during DHCP bootstrap — `ip_send` must not reject sends with `src_ip == 0`). Compute header checksum.
+5. Call `eth_send(dev, next_hop_mac, 0x0800, ip_pkt, ip_len)`.
 
 ### `ip_rx(dev, frame, ip_hdr, len)`
 
@@ -160,6 +161,7 @@ Builds 8-byte UDP header, calls `ip_send(dst_ip, 17, udp_pkt, udp_len)`. Checksu
 typedef enum {
     TCP_CLOSED, TCP_LISTEN, TCP_SYN_RCVD, TCP_SYN_SENT,
     TCP_ESTABLISHED, TCP_FIN_WAIT_1, TCP_FIN_WAIT_2,
+    TCP_CLOSING,    /* simultaneous close: FIN_WAIT_1 + peer FIN → CLOSING + ACK → TIME_WAIT */
     TCP_CLOSE_WAIT, TCP_LAST_ACK, TCP_TIME_WAIT
 } tcp_state_t;
 
@@ -193,6 +195,8 @@ static tcp_conn_t s_tcp[TCP_MAX_CONNS];
 - ESTABLISHED + FIN → CLOSE_WAIT: send ACK, notify socket of EOF
 - CLOSE_WAIT → LAST_ACK on `close()`: send FIN
 - FIN_WAIT_1 + ACK → FIN_WAIT_2
+- FIN_WAIT_1 + FIN → CLOSING: send ACK (simultaneous close)
+- CLOSING + ACK → TIME_WAIT: set `timewait_at`
 - FIN_WAIT_2 + FIN → TIME_WAIT: send ACK, set `timewait_at`
 - TIME_WAIT expires → CLOSED (slot free)
 
@@ -223,7 +227,9 @@ The static test IP `10.0.2.15/24` is hardcoded in the kernel for Phase 25 only. 
 
 ## Forward-Looking Constraints
 
-**Static IP in Phase 25.** `net_init()` sets `s_my_ip = 10.0.2.15`, `s_netmask = 255.255.255.0`, `s_gateway = 10.0.2.2` for QEMU SLIRP compatibility. Phase 28 DHCP daemon overwrites this via `sys_netcfg`.
+**Static IP in Phase 25.** `net_init()` sets `s_my_ip = 10.0.2.15`, `s_netmask = 255.255.255.0`, `s_gateway = 10.0.2.2` for QEMU SLIRP compatibility. This hardcoded assignment must be removed (or guarded with a build flag) when Phase 28 is integrated — the DHCP daemon will configure the IP dynamically via `sys_netcfg`.
+
+**`eth_send` uses a file-level static TX buffer.** It is a single 1514-byte `static uint8_t s_tx_buf[]` in `eth.c`. Callers are sequential (no concurrent sends). ARP requests and IP data sends are never interleaved because `arp_resolve` discards non-ARP frames during its busy-poll window, preventing re-entrant `eth_send` calls.
 
 **No IP fragmentation.** Sends larger than 1480 bytes (1500 MTU - 20 IP header) fail with `EMSGSIZE`. Phase 26 socket layer enforces this limit.
 
