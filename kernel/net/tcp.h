@@ -34,6 +34,7 @@ typedef struct {
     tcp_state_t state;
     ip4_addr_t  local_ip,  remote_ip;
     uint16_t    local_port, remote_port;
+    netdev_t   *dev;           /* NIC this connection arrived on */
     uint32_t    snd_nxt, snd_una;
     uint32_t    rcv_nxt;
     uint16_t    snd_wnd;
