@@ -52,7 +52,19 @@ typedef struct { uint8_t b[6]; } mac_addr_t;
 #define htonl(x) __builtin_bswap32(x)
 #define ntohl(x) __builtin_bswap32(x)
 
-uint16_t net_checksum(const void *data, uint32_t len);
+/* net_checksum: accumulate a running 32-bit one's complement sum over `len` bytes.
+ * Returns a uint32_t partial sum (NOT folded, NOT inverted).
+ * Call multiple times for non-contiguous regions (TCP/UDP pseudo-header + payload).
+ * uint32_t sum = 0;
+ * sum += net_checksum(pseudo_header, sizeof(pseudo_header));
+ * sum += net_checksum(payload, payload_len);
+ * header->checksum = net_checksum_finish(sum);
+ */
+uint32_t net_checksum(const void *data, uint32_t len);
+
+/* net_checksum_finish: fold carry bits into 16 bits, invert (one's complement).
+ * Returns the final 16-bit checksum value ready to store in the header.
+ * A checksum of 0x0000 after folding becomes 0xFFFF per RFC (UDP, not TCP). */
 uint16_t net_checksum_finish(uint32_t sum);
 ```
 
@@ -229,7 +241,7 @@ The static test IP `10.0.2.15/24` is hardcoded in the kernel for Phase 25 only. 
 
 **Static IP in Phase 25.** `net_init()` sets `s_my_ip = 10.0.2.15`, `s_netmask = 255.255.255.0`, `s_gateway = 10.0.2.2` for QEMU SLIRP compatibility. This hardcoded assignment must be removed (or guarded with a build flag) when Phase 28 is integrated — the DHCP daemon will configure the IP dynamically via `sys_netcfg`.
 
-**`eth_send` uses a file-level static TX buffer.** It is a single 1514-byte `static uint8_t s_tx_buf[]` in `eth.c`. Callers are sequential (no concurrent sends). ARP requests and IP data sends are never interleaved because `arp_resolve` discards non-ARP frames during its busy-poll window, preventing re-entrant `eth_send` calls.
+**`eth_send` uses a file-level static TX buffer.** It is a single 1514-byte `static uint8_t s_tx_buf[]` in `eth.c`. Callers are sequential (no concurrent sends). When `arp_resolve` is called from within `ip_send` (e.g. to resolve the next-hop MAC for a TCP SYN), `arp_resolve` calls `eth_send` to transmit the ARP REQUEST, waits for the ARP REPLY, then **returns** — only then does `ip_send` call `eth_send` for the original IP packet. These two uses of `s_tx_buf` are sequential, not nested; the buffer is not in use when the second `eth_send` begins. Additionally, `arp_resolve` disables interrupts (`cli`) for its entire busy-poll duration, so the PIT ISR cannot call `virtio_net_poll` and accidentally produce an RX-triggered `eth_send` (e.g. an ICMP echo reply) while the original send is pending.
 
 **No IP fragmentation.** Sends larger than 1480 bytes (1500 MTU - 20 IP header) fail with `EMSGSIZE`. Phase 26 socket layer enforces this limit.
 

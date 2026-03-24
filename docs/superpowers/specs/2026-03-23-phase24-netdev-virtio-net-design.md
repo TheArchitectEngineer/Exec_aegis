@@ -146,8 +146,14 @@ int virtio_net_send(netdev_t *dev, const void *pkt, uint16_t len) {
     /* 5. sfence — required by virtio 1.0 section 2.6.13.2 before MMIO notify */
     __asm__ volatile("sfence" ::: "memory");
     /* 6. Write queue index (1 for TX) to notify doorbell MMIO address */
-    /* 7. Poll used ring until NIC signals completion (or 100000 iterations, return -EIO) */
-    return 0;
+    /* 7. Poll used ring until NIC signals completion */
+    for (int i = 0; i < 100000; i++) {
+        if (p->tx_used->idx != p->tx_last_used) {
+            p->tx_last_used++;
+            return 0; /* TX complete */
+        }
+    }
+    return -1; /* -EIO: timeout (link down?) */
 }
 ```
 
@@ -214,7 +220,7 @@ assert "[NET] OK: virtio-net eth0" in output
 
 ## Forward-Looking Constraints
 
-**`netdev_rx_deliver()` is a stub in Phase 24.** It prints a debug line and discards the frame. Phase 25 replaces it with `eth_rx()` dispatch.
+**`netdev_rx_deliver()` is a stub in Phase 24.** It silently discards the frame. No printk — unexpected serial output during `make run` (where SLIRP sends ARPs, mDNS, etc.) would spam the console. Phase 25 replaces this stub with `eth_rx()` dispatch.
 
 **Single TX bounce buffer.** TX is serialized — one frame in flight at a time. Concurrent sends from multiple processes require a TX ring with proper head/tail tracking. Deferred to Phase 25+.
 

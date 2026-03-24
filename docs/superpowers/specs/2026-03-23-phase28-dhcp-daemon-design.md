@@ -182,10 +182,17 @@ ssize_t n = recvfrom(sock, &reply, sizeof(reply), 0,
                      (struct sockaddr *)&from, &fromlen);
 if (n < 0) { /* timeout */ exit(1); }
 
-/* Verify xid matches, parse options to find DHCPOFFER */
-/* Send DHCPREQUEST with server identifier option */
-/* Wait for DHCPACK */
-/* Parse yiaddr, subnet mask, gateway, DNS */
+/* Verify xid matches, parse options to find DHCPOFFER (type 53 == 2) */
+/* Build DHCPREQUEST (broadcast, same xid, ciaddr=0): */
+uint8_t *opt = request_pkt.options;
+*opt++ = 53; *opt++ = 1; *opt++ = 3;              /* DHCPREQUEST */
+*opt++ = 54; *opt++ = 4;                            /* server identifier */
+memcpy(opt, &server_id, 4); opt += 4;              /* from OFFER option 54 */
+*opt++ = 50; *opt++ = 4;                            /* requested IP */
+memcpy(opt, &offered_ip, 4); opt += 4;             /* yiaddr from OFFER */
+*opt++ = 255;                                        /* end */
+/* Send REQUEST to broadcast, wait for DHCPACK (type 53 == 5) or NAK (type 53 == 6) */
+/* Parse yiaddr, subnet mask (option 1), gateway (option 3), DNS (option 6) */
 ```
 
 ### Configure Kernel
