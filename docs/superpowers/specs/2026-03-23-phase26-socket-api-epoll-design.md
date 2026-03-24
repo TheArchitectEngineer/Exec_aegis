@@ -183,8 +183,8 @@ Edge-triggered (`EPOLLET`) is supported: ready flag is cleared on each `epoll_wa
 
 ### `sys_accept(fd, addr, addrlen)`
 
-1. If accept queue non-empty: dequeue completed conn, fill `addr`, return new fd
-2. If empty and blocking: `sched_block()`, retry on wake
+1. If accept queue non-empty: dequeue completed `tcp_conn_id`, allocate a new `sock_t` slot (distinct from the listening socket) with `state=SOCK_CONNECTED`, `tcp_conn_id` set to the dequeued value, `local_ip`/`local_port`/`remote_ip`/`remote_port` copied from `tcp_conn_t`, allocate a new fd slot pointing to this `sock_t`, fill `addr` with `remote_ip`/`remote_port`, return the new fd.
+2. If empty and blocking: set `sock->waiter_task = current`, `sched_block()`, retry on wake
 3. If empty and `O_NONBLOCK`: return `-EAGAIN`
 
 ### `sys_netcfg(op, arg1, arg2, arg3)`

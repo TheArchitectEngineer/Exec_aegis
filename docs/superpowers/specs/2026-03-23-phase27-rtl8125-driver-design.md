@@ -228,6 +228,8 @@ Per architecture rules, no MMIO magic numbers outside `kernel/arch/x86_64/`. Pro
 static inline void mmio_write8 (uint64_t base, uint16_t off, uint8_t  v) { *(volatile uint8_t  *)(base+off) = v; }
 static inline void mmio_write16(uint64_t base, uint16_t off, uint16_t v) { *(volatile uint16_t *)(base+off) = v; }
 static inline void mmio_write32(uint64_t base, uint16_t off, uint32_t v) { *(volatile uint32_t *)(base+off) = v; }
+/* mmio_write64: single 64-bit write. Valid on x86_64 accessing PCIe BAR2 MMIO.
+ * Do NOT split into two 32-bit writes — the NIC latches TNPDS/RDSAR as a unit. */
 static inline void mmio_write64(uint64_t base, uint16_t off, uint64_t v) { *(volatile uint64_t *)(base+off) = v; }
 static inline uint8_t  mmio_read8 (uint64_t base, uint16_t off) { return *(volatile uint8_t  *)(base+off); }
 static inline uint16_t mmio_read16(uint64_t base, uint16_t off) { return *(volatile uint16_t *)(base+off); }
