@@ -95,12 +95,14 @@ alloc_queue_page(uint64_t *phys_out)
 /* Poll for a CQE whose phase tag matches *phase.  On success, advances the
  * head pointer, flips the phase on wrap, rings the CQ head doorbell, and
  * returns 0 if the status code is 0 (success) or -1 on error.
- * Returns -1 on timeout. */
+ * Returns -1 on timeout.
+ * submitted_cid: the CID embedded in the SQE cdw0[31:16]; verified against
+ * the CQE cid field to detect out-of-order or spurious completions. */
 static int
 poll_cqe(volatile nvme_cqe_t *cq, uint32_t cq_depth,
          uint32_t *cq_head, uint8_t *phase,
          volatile uint32_t *cq_head_db,
-         uint32_t qid)
+         uint32_t qid, uint16_t submitted_cid)
 {
     volatile nvme_cqe_t *entry;
     uint32_t timeout = 1000000u;
@@ -111,6 +113,18 @@ poll_cqe(volatile nvme_cqe_t *cq, uint32_t cq_depth,
         /* SAFETY: entry points into a kva-mapped page; volatile ensures each
          * read goes to memory so the hardware-updated phase tag is visible. */
         if (((entry->status) & 1u) == *phase) {
+            /* Verify completion belongs to our submission (NVMe 1.4 §4.6). */
+            if (entry->cid != submitted_cid) {
+                /* Wrong CID — advance head and phase, treat as error. */
+                (*cq_head)++;
+                if (*cq_head >= cq_depth) {
+                    *cq_head = 0;
+                    *phase ^= 1u;
+                }
+                __asm__ volatile("sfence" ::: "memory");
+                *cq_head_db = *cq_head;
+                return -1;
+            }
             uint16_t sc = (uint16_t)((entry->status >> 1) & 0x7FFu);
             (*cq_head)++;
             if (*cq_head >= cq_depth) {
@@ -139,9 +153,10 @@ static int
 nvme_identify(uint32_t nsid, uint8_t cns, void *buf, uint64_t buf_phys)
 {
     nvme_sqe_t *sqe = &s_asq[s_asq_tail];
+    uint16_t    cid = s_cid++;
     (void)buf;
     __builtin_memset(sqe, 0, sizeof(*sqe));
-    sqe->cdw0  = NVME_ADMIN_IDENTIFY | ((uint32_t)s_cid++ << 16);
+    sqe->cdw0  = NVME_ADMIN_IDENTIFY | ((uint32_t)cid << 16);
     sqe->nsid  = nsid;
     sqe->prp1  = buf_phys;
     sqe->prp2  = 0;
@@ -157,15 +172,16 @@ nvme_identify(uint32_t nsid, uint8_t cns, void *buf, uint64_t buf_phys)
 
     return poll_cqe(s_acq, NVME_ADMIN_QUEUE_DEPTH,
                     &s_acq_head, &s_acq_phase,
-                    doorbell(0, 1), 0);
+                    doorbell(0, 1), 0, cid);
 }
 
 static int
 nvme_create_io_cq(uint16_t qid, uint64_t cq_phys, uint16_t depth)
 {
     nvme_sqe_t *sqe = &s_asq[s_asq_tail];
+    uint16_t    cid = s_cid++;
     __builtin_memset(sqe, 0, sizeof(*sqe));
-    sqe->cdw0  = NVME_ADMIN_CREATE_IO_CQ | ((uint32_t)s_cid++ << 16);
+    sqe->cdw0  = NVME_ADMIN_CREATE_IO_CQ | ((uint32_t)cid << 16);
     sqe->prp1  = cq_phys;
     sqe->cdw10 = ((uint32_t)(depth - 1u) << 16) | qid;
     sqe->cdw11 = 1u;   /* physically contiguous */
@@ -177,7 +193,7 @@ nvme_create_io_cq(uint16_t qid, uint64_t cq_phys, uint16_t depth)
     __asm__ volatile("sfence" ::: "memory");
     *doorbell(0, 0) = s_asq_tail;
     return poll_cqe(s_acq, NVME_ADMIN_QUEUE_DEPTH,
-                    &s_acq_head, &s_acq_phase, doorbell(0, 1), 0);
+                    &s_acq_head, &s_acq_phase, doorbell(0, 1), 0, cid);
 }
 
 static int
@@ -185,8 +201,9 @@ nvme_create_io_sq(uint16_t qid, uint64_t sq_phys, uint16_t depth,
                   uint16_t cqid)
 {
     nvme_sqe_t *sqe = &s_asq[s_asq_tail];
+    uint16_t    cid = s_cid++;
     __builtin_memset(sqe, 0, sizeof(*sqe));
-    sqe->cdw0  = NVME_ADMIN_CREATE_IO_SQ | ((uint32_t)s_cid++ << 16);
+    sqe->cdw0  = NVME_ADMIN_CREATE_IO_SQ | ((uint32_t)cid << 16);
     sqe->prp1  = sq_phys;
     sqe->cdw10 = ((uint32_t)(depth - 1u) << 16) | qid;
     sqe->cdw11 = ((uint32_t)cqid << 16) | 1u;  /* cqid | physically contiguous */
@@ -198,7 +215,7 @@ nvme_create_io_sq(uint16_t qid, uint64_t sq_phys, uint16_t depth,
     __asm__ volatile("sfence" ::: "memory");
     *doorbell(0, 0) = s_asq_tail;
     return poll_cqe(s_acq, NVME_ADMIN_QUEUE_DEPTH,
-                    &s_acq_head, &s_acq_phase, doorbell(0, 1), 0);
+                    &s_acq_head, &s_acq_phase, doorbell(0, 1), 0, cid);
 }
 
 /* -------------------------------------------------------------------------
@@ -397,9 +414,11 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
     tmp = s_iobuf;
     uint64_t buf_phys = s_iobuf_phys;
 
+    {
+    uint16_t cid = s_cid++;
     sqe = &s_iosq[s_iosq_tail];
     __builtin_memset(sqe, 0, sizeof(*sqe));
-    sqe->cdw0  = NVME_IO_READ | ((uint32_t)s_cid++ << 16);
+    sqe->cdw0  = NVME_IO_READ | ((uint32_t)cid << 16);
     sqe->nsid  = 1u;
     sqe->prp1  = buf_phys;
     sqe->prp2  = 0u;
@@ -417,7 +436,8 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
 
     rc = poll_cqe(s_iocq, NVME_IO_QUEUE_DEPTH,
                   &s_iocq_head, &s_iocq_phase,
-                  doorbell(1u, 1), 1u);
+                  doorbell(1u, 1), 1u, cid);
+    }
     if (rc == 0)
         __builtin_memcpy(buf, tmp, bytes);
     return rc;
@@ -443,9 +463,11 @@ nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
     uint64_t buf_phys = s_iobuf_phys;
     __builtin_memcpy(tmp, buf, bytes);
 
+    {
+    uint16_t cid = s_cid++;
     sqe = &s_iosq[s_iosq_tail];
     __builtin_memset(sqe, 0, sizeof(*sqe));
-    sqe->cdw0  = NVME_IO_WRITE | ((uint32_t)s_cid++ << 16);
+    sqe->cdw0  = NVME_IO_WRITE | ((uint32_t)cid << 16);
     sqe->nsid  = 1u;
     sqe->prp1  = buf_phys;
     sqe->prp2  = 0u;
@@ -463,5 +485,6 @@ nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
 
     return poll_cqe(s_iocq, NVME_IO_QUEUE_DEPTH,
                     &s_iocq_head, &s_iocq_phase,
-                    doorbell(1u, 1), 1u);
+                    doorbell(1u, 1), 1u, cid);
+    }
 }

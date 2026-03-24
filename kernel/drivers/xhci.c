@@ -670,6 +670,7 @@ xhci_poll(void)
 
         if (trb_type == XHCI_TRB_TRANSFER_EVENT &&
             slot > 0 && slot < XHCI_MAX_SLOTS && s_hid_slots[slot]) {
+            if (!s_hid_buf[slot]) goto next_trb;  /* alloc failure guard */
             /* Deliver the 8-byte HID boot report */
             usb_hid_process_report(s_hid_buf[slot], 8u);
             /* Re-arm: schedule the next interrupt IN */
@@ -677,6 +678,7 @@ xhci_poll(void)
                                        s_hid_buf_phys[slot], 8u);
         }
 
+        next_trb:
         s_evt_dequeue++;
         if (s_evt_dequeue >= XHCI_EVT_RING_SIZE) {
             s_evt_dequeue = 0;
