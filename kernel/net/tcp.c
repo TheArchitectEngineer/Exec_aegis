@@ -176,6 +176,7 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             conn = tcp_alloc();
             if (!conn) return;
             conn->state       = TCP_SYN_RCVD;
+            conn->dev         = dev;
             conn->local_ip    = dst_ip;
             conn->local_port  = local_port;
             conn->remote_ip   = src_ip;
@@ -298,17 +299,17 @@ void tcp_tick(void)
         if (c->state == TCP_CLOSED) continue;
 
         if (c->state == TCP_TIME_WAIT) {
-            if (now >= c->timewait_at)
+            if ((int32_t)(now - c->timewait_at) >= 0)
                 c->state = TCP_CLOSED;
             continue;
         }
 
         if (c->retransmit_at == 0) continue;
-        if (now < c->retransmit_at) continue;
+        if ((int32_t)(now - c->retransmit_at) < 0) continue;
 
         if (c->retransmit_count >= TCP_RETRANSMIT_MAX) {
-            /* Maximum retransmits — RST best-effort (NULL dev) and close. */
-            tcp_send_segment(NULL, c, TCP_RST, NULL, 0);
+            /* Maximum retransmits — RST best-effort and close. */
+            tcp_send_segment(c->dev, c, TCP_RST, NULL, 0);
             c->state = TCP_CLOSED;
             continue;
         }
@@ -319,8 +320,8 @@ void tcp_tick(void)
         c->retransmit_at = now + rto;
 
         if (c->state == TCP_SYN_RCVD)
-            tcp_send_segment(NULL, c, TCP_SYN | TCP_ACK, NULL, 0);
+            tcp_send_segment(c->dev, c, TCP_SYN | TCP_ACK, NULL, 0);
         else if (c->state == TCP_SYN_SENT)
-            tcp_send_segment(NULL, c, TCP_SYN, NULL, 0);
+            tcp_send_segment(c->dev, c, TCP_SYN, NULL, 0);
     }
 }
