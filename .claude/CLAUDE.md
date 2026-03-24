@@ -1,21 +1,13 @@
 # Aegis Kernel — Claude Code Persistent Instructions
 
-> Read this file completely at the start of every session, every time.
-> Do not summarize it. Do not skip sections. Do not assume you remember it.
-> If anything here conflicts with a user instruction given in-session,
-> follow the in-session instruction and flag the conflict explicitly.
+> Read this file completely at the start of every session.
+> Do not skip sections. If anything conflicts with a user instruction, follow the user and flag it.
 
 ---
 
 ## What Aegis Is
 
-Aegis is a clean-slate, capability-based POSIX-compatible kernel. It is not a
-Linux fork. It is not a research toy. The goal is a kernel that boots real
-x86-64 hardware, runs real software via a musl-compatible ABI, and enforces a
-security model where no process — including root — holds ambient authority.
-
-Every design decision must be evaluated against that principle.
-If a shortcut undermines capability isolation, the shortcut is wrong.
+A clean-slate, capability-based POSIX-compatible kernel. Not a Linux fork. Goal: boots real x86-64 hardware, runs real software via musl-compatible ABI, enforces a security model where no process — including root — holds ambient authority.
 
 See MISSION.md for the full mission statement.
 
@@ -23,21 +15,15 @@ See MISSION.md for the full mission statement.
 
 ## Methodology — Superpowers Required
 
-This project uses the Superpowers plugin. Every session must follow this order:
+Every session must follow this order:
 
-1. **Brainstorm before designing** — invoke `/superpowers:brainstorm` for any
-   non-trivial task. Never start designing a subsystem from scratch.
-2. **Plan before coding** — invoke `/superpowers:write-plan` after brainstorm.
-   Tasks must be ≤5 minutes each. Ambiguous tasks must be split further.
-3. **Test before implementing** — RED before GREEN, always.
-   Write the failing test first. Watch it fail. Then implement.
-   If you write code before a test exists, delete the code and start over.
-4. **Review before merging** — invoke the code review skill after each task.
-   Critical issues block progress. Do not work around them.
-5. **Verify before declaring done** — run `make test` and show the output.
-   "This should work" is not evidence. Passing tests are evidence.
+1. **Brainstorm before designing** — `/superpowers:brainstorm` for any non-trivial task.
+2. **Plan before coding** — `/superpowers:write-plan` after brainstorm. Tasks ≤5 minutes each.
+3. **Test before implementing** — RED before GREEN. Write failing test first. Watch it fail. Then implement. If you write code before a test exists, delete the code and start over.
+4. **Review before merging** — code review skill after each task. Critical issues block progress.
+5. **Verify before declaring done** — run `make test`, show output. "This should work" is not evidence.
 
-If Superpowers is not installed, stop and tell the user before proceeding.
+If Superpowers is not installed, stop and tell the user.
 
 ---
 
@@ -46,768 +32,278 @@ If Superpowers is not installed, stop and tell the user before proceeding.
 ### Directory Layout
 
 ```
-kernel/arch/x86_64/     ← ALL x86-specific code lives here. Nowhere else.
-kernel/core/            ← Architecture-agnostic kernel logic only.
-                          Pretend it must port to ARM64 tomorrow.
-kernel/mm/              ← Memory management (arch-agnostic logic)
-kernel/cap/             ← Capability subsystem (Rust)
-kernel/fs/              ← VFS and filesystem drivers
-kernel/drivers/         ← Hardware device drivers (NVMe, xHCI, virtio-net, RTL8125, etc.)
-kernel/net/             ← Network stack (netdev_t, Ethernet, IP, TCP, UDP, ICMP)
-kernel/sched/           ← Scheduler
-tests/                  ← Test harness and expected output
-tools/                  ← Build helpers, QEMU wrappers
-docs/                   ← Architecture docs, capability model spec
+kernel/arch/x86_64/   ← ALL x86-specific code. Nowhere else.
+kernel/core/          ← Architecture-agnostic logic only. Must port to ARM64 tomorrow.
+kernel/mm/            ← Memory management (arch-agnostic)
+kernel/cap/           ← Capability subsystem (Rust)
+kernel/fs/            ← VFS and filesystem drivers
+kernel/drivers/       ← Hardware drivers (NVMe, xHCI, virtio-net, RTL8125, etc.)
+kernel/net/           ← Network stack (netdev_t, Ethernet, ARP, IP, TCP, UDP, ICMP)
+kernel/sched/         ← Scheduler
+tests/                ← Test harness and expected output
+tools/                ← Build helpers, QEMU wrappers
+docs/                 ← Architecture docs, capability model spec
 ```
 
-No x86 register names, port I/O, or memory-mapped addresses outside
-`kernel/arch/x86_64/`. If you find yourself writing `0xB8000` or `inb/outb`
-in `kernel/core/`, stop. You are in the wrong place.
+No x86 register names, port I/O, or MMIO addresses outside `kernel/arch/x86_64/`.
 
 ### The C/Rust Boundary
 
-The capability subsystem (`kernel/cap/`) and the syscall validation layer are
-written in Rust (`no_std`). Everything else is C.
+`kernel/cap/` and the syscall validation layer are Rust (`no_std`). Everything else is C. The boundary is a clean subsystem interface with a stable header — not sprinkled throughout the codebase. Crossed exactly at syscall entry and capability grant/revoke.
 
-The boundary is a clean subsystem interface — a set of C-callable functions
-with a stable header. It is not sprinkled throughout the codebase. Do not
-call Rust from drivers. Do not call Rust from early boot. The boundary is
-crossed exactly at syscall entry and capability grant/revoke operations.
-
-Rules for Rust code in this project:
-- `no_std` always. No exceptions.
-- No `alloc` until the heap is proven working and you have explicit
-  sign-off in the session to use it.
-- Every `unsafe` block requires a comment of the form:
-  `// SAFETY: <reason this is actually safe>`
-  A vague comment like `// SAFETY: trust me` is not acceptable.
-- FFI functions exposed to C must be marked `#[no_mangle]` and documented.
+Rust rules:
+- `no_std` always. `#![no_std]` at top of every file.
+- No `alloc` without explicit sign-off.
+- Every `unsafe` block: `// SAFETY: <specific reason>`. Vague comments are not acceptable.
+- FFI functions: `#[no_mangle]` and documented.
+- Clippy must pass. Clippy warnings are errors.
 
 ### Output Routing — The Two Laws
 
-**Law 1:** All kernel output goes through `printk()`. Always.
-Never write directly to `0xB8000`. Never write directly to serial port
-registers. If you need debug output before `printk` is initialized,
-use the raw serial write functions in `serial.c` and leave a comment
-explaining why, with a TODO to remove it.
+**Law 1:** All kernel output through `printk()`. Never write directly to `0xB8000` or serial registers. Pre-`printk` debug: use raw serial write functions in `serial.c` with a comment and TODO.
 
-**Law 2:** Serial output must always work, even if VGA fails.
-`printk()` writes to serial first, then VGA. If VGA init fails,
-serial continues. If serial fails, the system panics immediately —
-we are blind without it. Never write code where VGA failure silences
-serial output.
+**Law 2:** Serial must always work even if VGA fails. `printk()` writes serial first, VGA second. If VGA fails, serial continues. If serial fails, panic. Never write code where VGA failure silences serial.
 
 ---
 
-## Testing Harness — The Definition of Working
+## Testing Harness
 
-A subsystem is not working because it compiles.
-A subsystem is not working because it looks right.
-A subsystem is working when `make test` exits 0.
+A subsystem is working when `make test` exits 0. Not when it compiles. Not when it looks right.
 
 ### How the harness works
 
-```bash
-make test
-```
-
-This must:
-1. Build the kernel and GRUB-bootable ISO cleanly (exit on compiler warning if -Werror is set)
-2. Boot the ISO headless with these exact flags:
+`make test`:
+1. Build kernel + GRUB-bootable ISO (exit on compiler warning — `-Werror` is set)
+2. Boot headless:
    ```
-   qemu-system-x86_64 \
-     -machine pc \
-     -cdrom aegis.iso \
-     -boot order=d \
-     -display none \
-     -vga std \
-     -nodefaults \
-     -serial stdio \
-     -no-reboot \
-     -m 128M \
-     -device isa-debug-exit,iobase=0xf4,iosize=0x04
+   qemu-system-x86_64 -machine pc -cdrom aegis.iso -boot order=d \
+     -display none -vga std -nodefaults -serial stdio -no-reboot \
+     -m 128M -device isa-debug-exit,iobase=0xf4,iosize=0x04
    ```
-3. Capture COM1 serial output; strip ANSI escape sequences (SeaBIOS and GRUB
-   write ANSI codes before the kernel starts); keep only lines starting with `[`
+3. Capture COM1; strip ANSI escape sequences **and `\r` carriage returns**; keep only lines starting with `[`
 4. Diff against `tests/expected/boot.txt`
 5. Exit 0 on exact match, exit 1 on any mismatch
 
-**Why GRUB + ISO instead of `-kernel aegis.elf`:**
-QEMU 10 dropped direct ELF64 multiboot2 detection via `-kernel`. It now requires
-a PVH ELF Note for 64-bit direct boot. GRUB is the standard multiboot2 loader
-and detects our header correctly. The constraint (kernel lines must start with
-`[SUBSYSTEM]`) ensures they survive the ANSI-strip filter.
+**Note:** The boot oracle uses `-machine pc` (no virtio-net). Network initialization lines (`[NET] configured:`, `[NET] ICMP:`) only appear in q35 tests (test_net_stack.py). They must NOT appear in `tests/expected/boot.txt`.
+
+**Why GRUB + ISO:** QEMU 10 dropped ELF64 multiboot2 detection via `-kernel`. GRUB is the standard multiboot2 loader.
+
+**CRLF:** The serial driver emits `\r\n`. The harness sed must strip `\r` (`s/\r//g`) or diffs fail on every line.
 
 ### Serial output format
 
-Every subsystem init must emit exactly one status line to serial:
-
 ```
 [SUBSYSTEM] OK: <message>
-```
-or
-```
 [SUBSYSTEM] FAIL: <reason>
 ```
 
-Examples:
-```
-[SERIAL] OK: COM1 initialized at 115200 baud
-[VGA] OK: text mode 80x25
-[PMM] OK: 126MB usable across 3 regions
-[VMM] OK: kernel mapped to 0xFFFFFFFF80000000
-[CAP] OK: capability subsystem reserved
-[AEGIS] System halted.
-```
-
-`tests/expected/boot.txt` must contain the exact lines the kernel will emit,
-in order, with no trailing spaces and a single newline at end of file.
-When a new subsystem is added, update this file before writing the subsystem.
-That is the failing test. Then make it pass.
+`tests/expected/boot.txt` must contain the exact lines in order, no trailing spaces, single newline at end. Update it before writing the subsystem — that is the failing test.
 
 ### make targets
 
-| Target      | What it does                                              |
-|-------------|-----------------------------------------------------------|
-| `make`      | Build only                                                |
-| `make run`  | Build + boot in QEMU with VGA + serial (interactive)     |
-| `make test` | Build + boot headless, diff serial output, exit 0 or 1   |
-| `make clean`| Remove all build artifacts                                |
-| `make docs` | Generate docs if tooling is present (optional)            |
+| Target       | What it does                                            |
+|--------------|---------------------------------------------------------|
+| `make`       | Build only                                              |
+| `make run`   | Build + boot QEMU interactive (VGA + serial)           |
+| `make test`  | Build + boot headless, diff serial output, exit 0 or 1 |
+| `make clean` | Remove all build artifacts                              |
+| `make sym ADDR=0x...` | Resolve address to source line (addr2line)    |
+| `make gdb`   | Boot QEMU with GDB server on :1234, CPU halted          |
+| `make disk`  | Build GPT disk image with ext2 partition                |
 
 ---
 
-## Security Model — Understand This Before Touching cap/
+## Security Model
 
-The defining feature of Aegis is capability-based security with no ambient
-authority. This means:
+Capability-based, no ambient authority:
+- Process starts with exactly the capabilities explicitly granted. Nothing more.
+- `uid=0` is cosmetic. There is no superuser bypass.
+- Capabilities are unforgeable tokens — not guessable integer IDs, not inherited by default.
+- Syscalls requiring authority validate a capability token first. No valid token → `ENOCAP`.
 
-- A process starts with exactly the capabilities it is explicitly granted.
-  Nothing more. Not even the ability to open files, unless granted.
-- There is no superuser that bypasses this. `uid=0` is cosmetic.
-- Capabilities are unforgeable tokens. They are not integer IDs that can be
-  guessed. They are not inherited by default.
-- Kernel syscalls that require authority must validate a capability token
-  before proceeding. A syscall without a valid capability token fails with
-  `ENOCAP`, not `EPERM`.
-
-**In v1, `kernel/cap/` is a stub.** `cap_init()` prints its OK line and
-returns. Do not implement capability logic until the memory manager,
-scheduler, and syscall layer are solid. When the time comes, read
-`docs/capability-model.md` before touching anything.
-
-If you find yourself designing a shortcut that says "we'll add capabilities
-later, for now just let root do it" — that shortcut is explicitly forbidden.
-Design the interface correctly now even if the implementation is a stub.
+`kernel/cap/` is a complete implementation. Read `docs/capability-model.md` before touching it. Never design a shortcut where "root can do it for now" — design the interface correctly even if the stub is minimal.
 
 ---
 
 ## Language and Style
 
-### C
-- K&R brace style
-- No dynamic allocation in early boot (before PMM is initialized)
-- No floating point. Ever. Not even for debug output.
-- No VLAs. No compiler extensions unless wrapped in an `#ifdef` with a comment.
-- `-Wall -Wextra -Werror` — warnings are errors. Fix them.
-- Prefer explicit over implicit. If something can be `NULL`, check it.
-- No `malloc`/`free` in kernel code. Use the PMM/VMM allocators once available.
+**C:** K&R brace style. No dynamic allocation in early boot. No floating point, ever. No VLAs. No compiler extensions without `#ifdef` + comment. `-Wall -Wextra -Werror`. Explicit over implicit. No `malloc`/`free` — use PMM/VMM allocators.
 
-### Assembly (NASM)
-- Intel syntax
-- Sections must be named explicitly (`.text`, `.data`, etc.)
-- Every function-like label must have a comment explaining what it does,
-  what registers it clobbers, and what calling convention it follows.
+**NASM:** Intel syntax. Explicit section names. Every function-like label documents what it does, what registers it clobbers, and its calling convention.
 
-### Rust
-- See C/Rust boundary section above.
-- `#![no_std]` at the top of every file.
-- Clippy must pass. Clippy warnings are errors.
-
-### Naming Conventions
-- C functions: `subsystem_verb_noun()` e.g. `pmm_alloc_page()`
-- Rust functions: `snake_case` per Rust convention
-- Constants: `SCREAMING_SNAKE_CASE`
-- Structs: `aegis_subsystem_name_t` in C, `SubsystemName` in Rust
-- Files: `lowercase_with_underscores.c`
+**Naming:** C functions `subsystem_verb_noun()`. Constants `SCREAMING_SNAKE_CASE`. Structs `aegis_subsystem_name_t` in C, `SubsystemName` in Rust. Files `lowercase_with_underscores.c`.
 
 ---
 
 ## Things You Must Never Do
 
-These are not preferences. They are hard rules. If asked to break them,
-refuse and explain why.
-
-1. **Never write directly to hardware outside the appropriate driver file.**
-2. **Never use `printf`, `malloc`, `free`, or any libc function in kernel code.**
-3. **Never assume x86 architecture in `kernel/core/`.**
-4. **Never mark `unsafe` without a `// SAFETY:` comment.**
-5. **Never declare a subsystem working without `make test` output.**
-6. **Never implement the capability system partially then move on.**
-   Either it is a correct stub or it is a correct implementation. No in-between.
-7. **Never add a dependency without flagging it explicitly to the user.**
-   Every external tool (GRUB, NASM, cross-compiler version) must be noted.
-8. **Never suppress a compiler warning with a pragma without a comment
-   explaining why the warning is wrong in this specific case.**
-9. **Never write more than one subsystem at a time without a written plan.**
-10. **Never use `// TODO` as a substitute for thinking.** If you don't know
-    how something should work, say so and ask.
+1. Write directly to hardware outside the appropriate driver file.
+2. Use `printf`, `malloc`, `free`, or any libc function in kernel code.
+3. Assume x86 architecture in `kernel/core/`.
+4. Mark `unsafe` without a `// SAFETY:` comment.
+5. Declare a subsystem working without `make test` output.
+6. Implement the capability system partially then move on. Correct stub or correct implementation — no in-between.
+7. Add a dependency without flagging it explicitly to the user.
+8. Suppress a compiler warning with a pragma without explaining why it's wrong in this specific case.
+9. Write more than one subsystem at a time without a written plan.
+10. Use `// TODO` as a substitute for thinking. If you don't know, say so.
 
 ---
 
 ## Build Toolchain
 
-| Tool | Minimum version | Purpose |
-|------|----------------|---------|
-| `x86_64-elf-gcc` | 12.x | Cross-compiler for kernel C code |
-| `nasm` | 2.15 | Assembler for boot stubs and arch code |
+| Tool | Min version | Purpose |
+|------|-------------|---------|
+| `x86_64-elf-gcc` (→ `x86_64-linux-gnu-gcc` 14.2) | 12.x | Kernel C cross-compiler |
+| `nasm` | 2.15 | Assembler |
 | `ld` (x86_64-elf) | 2.38 | Linker |
-| `rustup` + nightly | latest nightly | Rust for cap/ subsystem |
-| `rust-src` component | — | Required for `no_std` builds |
-| `qemu-system-x86_64` | 7.x+ | Emulator for testing |
-| `make` | 4.x | Build orchestration |
-| `grub-mkrescue` (grub-pc-bin) | 2.06+ | Creates bootable ISO for `make test` |
-| `xorriso` | 1.5.x+ | Required by grub-mkrescue for ISO creation |
-| `musl-gcc` (musl-tools) | 1.2.x+ | Static musl libc cross-compiler for user binaries |
-| `sgdisk` (gdisk) | 1.0.x+ | GPT partition table creation for `make disk` |
+| `rustup` + nightly + `rust-src` | latest | Rust cap/ subsystem |
+| `qemu-system-x86_64` | 7.x+ | Emulator |
+| `grub-mkrescue` (grub-pc-bin) | 2.06+ | Bootable ISO |
+| `xorriso` | 1.5.x+ | Required by grub-mkrescue |
+| `musl-gcc` (musl-tools) | 1.2.x+ | User binary cross-compiler |
+| `sgdisk` (gdisk) | 1.0.x+ | GPT partition table |
+| `e2tools` + `e2fsprogs` | any | ext2 image population (`make disk`) |
 
-Install check:
-```bash
-x86_64-elf-gcc --version
-nasm --version
-rustup show
-qemu-system-x86_64 --version
-grub-mkrescue --version
-xorriso --version
-```
-
-If any of these fail, stop and tell the user before writing code.
+Run `x86_64-elf-gcc --version && nasm --version && rustup show && qemu-system-x86_64 --version && grub-mkrescue --version` before writing code. If any fail, stop.
 
 ---
 
-## QEMU Boot Time — Non-Negotiable Invariant
+## QEMU Boot Time
 
-**QEMU must boot to the shell/init prompt in under 30 seconds on this machine.**
+QEMU must boot to init prompt in under 30 seconds. If it takes longer, something is wrong — investigate before running tests. `BOOT_TIMEOUT=900` in test scripts is a CI safety net, not a target. Normal boots are 10–20 seconds.
 
-If a QEMU session takes more than 30 seconds to reach the first shell prompt,
-something is wrong — investigate and fix it before running any tests. Do not
-accept, work around, or paper over slow boots.
-
-When a test fails, the debug cycle is: **one failure → diagnose → fix → one retry**.
-Do NOT loop retrying the same failing test more than 2 times without changing
-something. If a test keeps failing, stop, read the output carefully, use
-`make gdb` or serial output to understand why, then fix the root cause.
-
-The `BOOT_TIMEOUT=900` in test scripts is a safety net for loaded CI machines,
-not a target. Normal boots are 10–20 seconds. If you see a test waiting more than
-60 seconds for a boot prompt, kill QEMU and check what is wrong.
+Debug cycle: **one failure → diagnose → fix → one retry**. Do NOT retry the same failing test more than twice without changing something.
 
 ---
 
-## Debug Tooling (added Phase 15 post-fix)
+## Debug Tooling
 
-These tools exist to shorten debugging sessions. Use them whenever there
-is a kernel panic, unexpected crash, or behavior that needs inspection.
+CFLAGS includes `-g` and `-fno-omit-frame-pointer` for reliable stack unwinding.
 
-### Compiler flags
-CFLAGS includes `-g` (DWARF debug info) and `-fno-omit-frame-pointer`.
-`-fno-omit-frame-pointer` ensures every kernel frame has a valid RBP chain
-at any optimization level, making stack unwinding reliable.
+**Panic backtrace:** `isr_dispatch` calls `panic_backtrace(s->rbp)` on kernel-mode exceptions (CS=0x08). Prints up to 16 return addresses. Ring-3 faults (CS=0x23) skip backtrace.
 
-### Panic backtrace
-`isr_dispatch` in `kernel/arch/x86_64/idt.c` calls `panic_backtrace(s->rbp)`
-on any kernel-mode exception (CS=0x08). It walks the RBP frame chain and
-prints up to 16 return addresses to serial output:
 ```
 [PANIC] backtrace (resolve: make sym ADDR=0x<addr>):
 [PANIC]   [0] 0xffffffff80107abc
-[PANIC]   [1] 0xffffffff80109def
 ```
-For ring-3 faults (CS=0x23) the backtrace is skipped — the RBP is a
-user-space pointer and not meaningful for kernel tracing.
 
-### Address resolution
-```bash
-make sym ADDR=0xffffffff80107abc
-# → copy_from_user at kernel/mm/uaccess.h:23
-```
-Wraps `addr2line -e build/aegis.elf -f -p`. Requires a build with `-g`.
-Use this immediately on any RIP or return address from a panic.
+**Address resolution:** `make sym ADDR=0xffffffff80107abc` → wraps `addr2line -e build/aegis.elf -f -p`.
 
-### Interactive GDB session
-```bash
-make gdb
-```
-Boots QEMU with `-s -S` (GDB server on :1234, CPU halted at first instruction).
-Serial output captured to `build/debug.log`. GDB auto-connects via
-`tools/aegis.gdb` with the right arch and symbol file loaded.
+**GDB:** `make gdb` → QEMU with `-s -S`, GDB on :1234. Auto-connects via `tools/aegis.gdb`.
+- `c` start, `Ctrl-C` pause, `bt` backtrace, `break isr_dispatch`, `p *s` (cpu_state_t), `x/20gx $rsp`
 
-In GDB:
-- `c` — start the kernel
-- `Ctrl-C` — pause at current instruction
-- `bt` — backtrace
-- `break isr_dispatch` — catch any exception before the panic halt
-- `info registers` — all registers
-- `x/20gx $rsp` — dump 20 qwords from the stack
-- `p *s` — print the full `cpu_state_t` (when stopped inside `isr_dispatch`)
-
-### Workflow for a kernel panic
-1. Read the serial output — RIP and CR2 are printed by `isr_dispatch`
-2. Run `make sym ADDR=<RIP>` to get the source line
-3. Read the backtrace addresses, run `make sym` on each to get the call chain
-4. If that's not enough context, `make gdb`, set a breakpoint before the
-   faulting code, and step through it interactively
+**Panic workflow:** serial output → `make sym` on RIP → `make sym` on each backtrace frame → if still unclear, `make gdb`.
 
 ---
 
-## Build Status — Keep This Updated
+## Build Status
 
-Update this section at the end of every session.
 A subsystem is ✅ only when `make test` passes with it included.
 
 | Subsystem | Status | Notes |
 |-----------|--------|-------|
-| Boot entry (multiboot2) | ✅ Done | GRUB loads via multiboot2; identity-mapped at 0x100000 |
-| Serial driver (COM1) | ✅ Done | 115200 baud, polling 8N1 |
-| VGA text mode driver | ✅ Done | 80×25, ROM font, attr 0x07 |
-| printk | ✅ Done | serial-first, VGA-conditional |
-| Test harness (make test) | ✅ Done | GRUB ISO + ANSI-strip + diff; exits 0 |
-| Physical memory manager | ✅ Done | Bitmap allocator; single-page (4KB) only; multi-page deferred to buddy allocator |
-| Virtual memory / paging | ✅ Done | Higher-half kernel at 0xFFFFFFFF80000000; 5-table setup (identity + kernel); identity map kept; teardown deferred to Phase 4 |
-| Mapped-window allocator | ✅ Done | VMM_WINDOW_VA=0xFFFFFFFF80600000; phys_to_table/zero_page eliminated from vmm.c; identity map still active (teardown Phase 7) |
-| Identity map teardown | ✅ Done | kva bump allocator at pd_hi[4+]; phys casts in sched/proc/elf eliminated; pml4[0] cleared |
-| SMAP + user pointer validation | ✅ Done | CR4.SMAP enabled (Broadwell+); sys_write returns EFAULT for kernel addresses; stac/clac per-byte load |
-| Syscall cleanup + kva free path (Phase 9) | ✅ Done | syscall_util.h + uaccess.h; copy_from_user in sys_write; kva_free_pages wired into sched_exit |
-| IDT | ✅ Done | 48 interrupt gates; isr_dispatch handles PIC EOI before calling handlers |
-| PIC | ✅ Done | 8259A remapped; IRQ0-15 → vectors 0x20-0x2F; per-driver unmask |
-| PIT | ✅ Done | Channel 0 at 100 Hz; arch_get_ticks() accessor; arch_request_shutdown() defers exit to ISR |
-| PS/2 keyboard | ✅ Done | Scancode→ASCII; ring buffer; blocking kbd_read() + non-blocking kbd_poll() |
-| Scheduler (single-core) | ✅ Done | Preemptive round-robin; circular TCB list; ctx_switch in NASM; sched_start dummy-TCB pattern |
-| GDT (ring-3 descriptors) | ✅ Done | User CS 0x23, User DS 0x1B installed; arch_gdt_init() |
-| TSS | ✅ Done | RSP0 wired to kernel stack top; arch_tss_init() + arch_set_kernel_stack() |
-| SYSCALL/SYSRET | ✅ Done | IA32_STAR/LSTAR/SFMASK; syscall_entry.asm landing pad; o64 sysret |
-| ELF loader | ✅ Done | PT_LOAD segments mapped into user PML4 via vmm_map_user_page |
-| User process (proc_spawn) | ✅ Done | Per-process PML4; KSTACK_VA; proc_enter_user CR3 switch + iretq |
-| Syscall dispatch (C) | ✅ Done | sys_write cap-gated (VFS_WRITE) + fd-table dispatch; sys_exit/open/read/close |
-| Capability system (Rust) | ✅ Done | CapSlot type; cap_grant/cap_check FFI; per-process caps[] table; sys_open + sys_write gated |
-| VFS | ✅ Done | vfs.h + initrd.c + console.c; sys_open/read/write/close; fd 1 pre-opened at spawn |
-| stdin/stderr/sys_brk (Phase 13) | ✅ Done | kbd VFS (fd 0); stderr (fd 2); sys_brk (syscall 12); CAP_KIND_VFS_READ gate on sys_read; task_kbd retired; task count 2 |
-| musl port (Phase 14) | ✅ Done | musl-gcc static binary; sys_mmap anon bump; sys_arch_prctl TLS; sys_writev; SSE init; r8/r9/r10 preserved |
-| musl port + shell (Phase 15) | ✅ Done | fork/execve/waitpid; interactive shell; 8 companion programs in initrd |
-| Pipes + I/O redirection (Phase 16) | ✅ Done | sys_pipe2/dup/dup2; pipe.c ring buffer; shell pipeline parser; 5/5 smoke tests pass |
-| Signals (Phase 17) | ✅ Done | sigaction/sigprocmask/sigreturn/kill/setfg; Ctrl-C kills foreground; iretq+sysret delivery paths; 1/1 smoke test pass |
-| stat/getdents64/utilities (Phase 18) | ✅ Done | sys_stat/fstat/lstat/access/nanosleep; getdents64; wc/grep/sort binaries; syscall_entry.asm rdi/rsi/rdx preservation; 4/4 smoke tests pass |
-| PCIe enumeration + ACPI (Phase 19) | ✅ Done | MCFG+MADT on q35; graceful skip on -machine pc; kva_alloc_pages ECAM mapping; make test GREEN |
-| NVMe driver + blkdev (Phase 20) | ✅ Done | nvme_init on q35; blkdev_register; alloc_queue_page kva window; sfence doorbell; ECAM capped at 8 buses; make test GREEN; test_nvme.py PASS |
-| ext2 read-write filesystem (Phase 21) | ✅ Done | ext2 mount on nvme0; 16-slot LRU block cache; read/write/create/unlink/mkdir/rename; sys_mkdir(83)/unlink(87)/rename(82); mkdir/touch/rm/cp/mv user commands; make test GREEN; test_ext2.py PASS |
-| xHCI + USB HID keyboard (Phase 22) | ✅ Done | xHCI init on q35+qemu-xhci; USB HID boot protocol; kbd_usb_inject into PS/2 ring buffer; test_xhci.py PASS (init + shell prompt verified) |
-| Security audit (post-Phase 22) | ✅ Done | SMEP enabled; sa_handler validation; lseek overflow guards (SEEK_CUR + SEEK_END); ext2 dup ref counting; O_CLOEXEC full lifecycle; SIGPIPE delivery; pipe ring buffer guards; Rust CAP bounds clamp; all tests GREEN |
-| GPT partition parsing (Phase 23) | ✅ Done | gpt.c CRC32 + header validation; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; test_gpt.py PASS |
-| virtio-net driver + netdev_t (Phase 24) | ✅ Done | netdev_t registry; virtio-net eth0; PCI cap walk; KVA BAR map; VIRTIO_F_VERSION_1; 256-slot RX prefill + kick; sfence TX; test_virtio_net.py PASS |
+| Boot (multiboot2) | ✅ | GRUB + GRUB ISO; identity-mapped at 0x100000 |
+| Serial (COM1) | ✅ | 115200 baud 8N1; emits `\r\n` for terminals |
+| VGA text mode | ✅ | 80×25, ROM font |
+| printk | ✅ | serial-first, VGA-conditional; `%u` for unsigned, no `%d` |
+| Test harness | ✅ | GRUB ISO + ANSI-strip + CRLF-strip + diff |
+| PMM | ✅ | Bitmap allocator; 4KB pages; no contiguous multi-page |
+| VMM + paging | ✅ | Higher-half at 0xFFFFFFFF80000000; identity map removed |
+| KVA allocator | ✅ | Bump allocator; `kva_free_pages` unmaps but VA not reclaimed |
+| SMAP + uaccess | ✅ | CR4.SMAP; `copy_from_user`/`copy_to_user`; EFAULT on bad ptr |
+| IDT | ✅ | 48 vectors; PIC EOI before handlers |
+| PIC | ✅ | 8259A remapped; IRQ0-15 → vectors 0x20-0x2F |
+| PIT | ✅ | 100 Hz; `arch_get_ticks()`; runs: sched, xhci, netdev_poll_all, tcp_tick |
+| PS/2 keyboard | ✅ | Scancode→ASCII; ring buffer; `kbd_read()` + `kbd_poll()` |
+| Scheduler | ✅ | Preemptive round-robin; single-core; `ctx_switch` in NASM |
+| GDT + TSS | ✅ | Ring-3 descriptors; RSP0 wired to kernel stack top |
+| SYSCALL/SYSRET | ✅ | IA32_STAR/LSTAR/SFMASK; rdi/rsi/rdx preserved across dispatch |
+| SMEP + SMEP | ✅ | CR4.SMEP + CR4.SMAP; graceful WARN if CPU lacks support |
+| ELF loader | ✅ | PT_LOAD segments → user PML4 via `vmm_map_user_page` |
+| User process | ✅ | Per-process PML4; per-process kernel stack; `proc_enter_user` iretq |
+| Syscall dispatch | ✅ | `sys_write/read/open/close/exit/brk/mmap/fork/execve/waitpid/…` |
+| Capability system | ✅ | Rust `CapSlot`; `cap_grant`/`cap_check` FFI; per-process caps[] |
+| VFS + initrd | ✅ | vfs.h; initrd (18 files); console/kbd/pipe VFS devices |
+| Shell + musl | ✅ | musl-gcc static binary; fork/execve/waitpid; interactive shell |
+| Pipes + redirection | ✅ | `sys_pipe2`/`dup`/`dup2`; ring buffer; `\|`, `<`, `>`, `2>&1` |
+| Signals | ✅ | sigaction/sigprocmask/sigreturn/kill/setfg; Ctrl-C; iretq+sysret paths |
+| stat + getdents64 | ✅ | sys_stat/fstat/lstat/access/nanosleep; wc/grep/sort binaries |
+| PCIe + ACPI | ✅ | MCFG+MADT on q35; ECAM ≤8 buses; graceful skip on -machine pc |
+| NVMe driver | ✅ | NVMe 1.4; blkdev abstraction; synchronous poll; NSID=1 only |
+| ext2 filesystem | ✅ | Read-write on nvme0p1; 16-slot LRU block cache; create/unlink/mkdir/rename |
+| xHCI + USB HID | ✅ | xHCI on q35+qemu-xhci; HID boot protocol; injects into PS/2 ring |
+| Security audit | ✅ | SMEP; sa_handler validation; lseek overflow guards; O_CLOEXEC; SIGPIPE; Rust CAP bounds |
+| GPT partitions | ✅ | CRC32 + primary header; nvme0p1/nvme0p2 registered; ext2 on nvme0p1 |
+| virtio-net + netdev_t | ✅ | netdev_t registry; virtio-net eth0; VIRTIO_F_VERSION_1; 256-slot RX; test_virtio_net.py PASS |
+| Net stack (Phase 25) | ✅ | Ethernet/ARP/IPv4/ICMP/TCP/UDP; arp_resolve uses sti+hlt; 12-byte virtio header; test_net_stack.py PASS |
 
-### Phase 1 deviations from original spec
+### Known deviations
 
 | Item | Spec | Actual | Reason |
 |------|------|--------|--------|
-| `x86_64-elf-gcc` | native cross-compiler | symlink → `x86_64-linux-gnu-gcc` 14.2 | Not in Debian repos; functionally equivalent with `-ffreestanding -nostdlib` |
-| Boot method | QEMU `-kernel aegis.elf` | GRUB + `-cdrom aegis.iso` | QEMU 10 dropped ELF64 multiboot2 detection via `-kernel`; GRUB detects correctly |
-| Serial output isolation | direct `diff` | strip ANSI + `grep ^[` + `diff` | SeaBIOS/GRUB write ANSI sequences to COM1 before kernel; our lines all start with `[` |
-| QEMU test flags | `-nographic` | `-display none -vga std` | Without VGA device, GRUB falls back to serial, contaminating COM1 with escape sequences even after ANSI stripping |
+| `x86_64-elf-gcc` | native cross | symlink → `x86_64-linux-gnu-gcc` 14.2 | Not in Debian repos; equivalent with `-ffreestanding -nostdlib` |
+| Boot method | QEMU `-kernel` | GRUB + `-cdrom` | QEMU 10 dropped ELF64 multiboot2 via `-kernel` |
+| Serial isolation | direct diff | strip ANSI + strip CRLF + `grep ^[` + diff | SeaBIOS/GRUB contaminate COM1; serial driver uses CRLF |
+| QEMU test flags | `-nographic` | `-display none -vga std` | GRUB falls back to serial without a VGA device |
+
 ---
 
 ## Session Startup Checklist
 
-Run through this at the start of every session before touching code:
-
 - [ ] Read MISSION.md
-- [ ] Read this file (CLAUDE.md) — all of it
-- [ ] Run `make test` — what is the current baseline?
-- [ ] Check the Build Status table above
-- [ ] Confirm Superpowers is active (`/superpowers:brainstorm` available)
+- [ ] Read this file — all of it
+- [ ] Run `make test` — current baseline?
+- [ ] Check Build Status table above
+- [ ] Confirm Superpowers is active
 - [ ] Ask the user what the goal for this session is
 - [ ] Do not write code until brainstorm and plan are complete
 
 ---
 
-### Phase 3 forward-looking constraints
+## Phase 25 — Forward Constraints
 
-**Identity map teardown and `zero_page()` must be resolved together in Phase 4.**
-`vmm.c`'s `zero_page()` works by casting a physical address to a pointer and
-writing through it — valid only while the identity window `[0..4MB)` is active.
-Phase 4 must provide a **mapped-window allocator** (a fixed virtual window that
-always maps the page being initialized) *before* tearing down the identity map.
-Tearing down identity first and fixing zero_page second causes a fault you cannot
-debug. The order is non-negotiable: mapped-window allocator → tear down identity.
+**Phase 25 status: ✅ complete. `make test` passes. `test_net_stack.py` PASS.**
 
-*Last updated: 2026-03-20 — Phase 4 complete, make test GREEN. Preemptive round-robin scheduler live; IDT/PIC/PIT/KBD active; interactive VGA terminal.*
+**Root cause of ICMP failure (fixed):** `virtio_net_hdr_t` was 10 bytes but Virtio 1.0 modern transport requires 12 bytes (includes `num_buffers` field). TX frames were 2 bytes short and RX frames 2-byte-shifted, so SLIRP misread ARP requests. Fix: `VIRTIO_NET_HDR_SIZE=12u`. `arp_resolve` now uses `sti;hlt;cli` instead of cli+busy-poll so the PIT ISR can drive RX.
 
-*Last updated: 2026-03-20 — Phase 5 complete, make test GREEN. User-space process runs init binary via SYSCALL/SYSRET; sys_write + sys_exit wired; CR3 save/restore in isr_common_stub; proc_enter_user switches PML4 on KSTACK_VA.*
+### Architecture constraints
 
-*Last updated: 2026-03-21 — Phase 6 complete, make test GREEN. Mapped-window allocator live; phys_to_table/zero_page eliminated from vmm.c.*
+3. **UDP RX delivery is a stub.** `udp_rx()` parses the header and looks up the port binding table but returns without delivering. Delivery to socket deferred to Phase 26 (socket API).
 
-*Last updated: 2026-03-21 — Phase 7 complete, make test GREEN. Identity map removed; kva allocator live; per-process kernel stacks.*
+4. **TCP has no socket API.** The 32-slot connection table, state machine, and retransmit timers are implemented. But `sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv` don't exist. TCP connections can be established in-kernel but are invisible to userspace. Phase 26.
 
-*Last updated: 2026-03-21 — Phase 8 complete, make test GREEN. SMAP enabled; sys_write validates user pointers; EFAULT returned for kernel addresses.*
+5. **ARP busy-poll disables interrupts.** `arp_resolve()` calls `cli` for up to 300,000 iterations (~100ms). This blocks preemption during ARP resolution from the syscall path. Async ARP queue is Phase 26+ work.
 
-*Last updated: 2026-03-21 — Phase 9 complete, make test GREEN. syscall_util.h + uaccess.h introduced; copy_from_user in sys_write; kva_free_pages + deferred cleanup in sched_exit.*
+6. **Static IP hardcoded.** `net_init()` sets 10.0.2.15/24 gw 10.0.2.2. Phase 28 DHCP daemon will replace this. A future `sys_netcfg` syscall will allow dynamic reconfiguration.
 
-*Last updated: 2026-03-21 — Phase 10 complete, make test GREEN. VFS + sys_read/open/close; static initrd; vmm_free_user_pml4; stack_pages field; task_idle; copy_to_user.*
+7. **Shared static TX buffers.** `eth_send()` and `ip_send()` use file-scoped 1514-byte and 1500-byte static buffers. No concurrent sends. Sequential callers only. Phase 26 socket layer needs a per-process TX lock or ring.
 
-*Last updated: 2026-03-21 — Phase 11 complete, make test GREEN. CapSlot + cap_grant/cap_check Rust FFI; per-process cap table in aegis_process_t; sys_open gated on CAP_KIND_VFS_OPEN|CAP_RIGHTS_READ; docs/capability-model.md added.*
+8. **PCI Bus Master Enable not set.** QEMU SeaBIOS enables Bus Master for all devices at boot. On real bare-metal UEFI, must set PCI command register bits 1+2 explicitly in `virtio_net_init()` before Phase 27 (RTL8125).
 
-*Last updated: 2026-03-21 — Phase 12 complete, make test GREEN. Console VFS device; fd 1 pre-opened at spawn; CAP_KIND_VFS_WRITE; sys_write capability-gated + routed through fd table.*
+9. **No interrupt-driven RX.** Polling at 100 Hz via PIT. MSI/MSI-X deferred to v2.0.
 
-*Last updated: 2026-03-21 — Phase 13 complete, make test GREEN. kbd VFS driver; fd 0/2 pre-open; CAP_KIND_VFS_READ gate on sys_read; sys_brk (syscall 12); task_kbd retired; task count 2.*
+10. **`ext2_readdir()` is a stub.** Always returns -1. `getdents64` on ext2-mounted directories won't work until this is implemented.
 
-*Last updated: 2026-03-21 — Phase 14 complete, make test GREEN. musl-gcc static binary runs via sys_mmap/sys_arch_prctl/sys_writev; SSE init; r8/r9/r10 preserved across syscall; ELF segment alignment fixed; [INIT] Hello from musl libc! confirmed.*
+11. **`nvme0p2` registered but unmounted.** Available as blkdev, no filesystem uses it.
 
-### Phase 13 forward-looking constraints
-
-**`sys_brk` page-aligns the break.** `proc->brk` is always page-aligned after grow or shrink. musl's `malloc` passes exact byte offsets and expects the kernel to return the actual rounded-up break — Phase 13 rounds up, which musl handles correctly.
-
-**fd 0 blocks on `kbd_read()`.** A user process calling `sys_read(0, ...)` will block until a key is pressed. In headless `make test` there is no keyboard input — `init` must not call `sys_read(0, ...)`. Phase 14 or later should provide a `kbd_poll`-based non-blocking path or `sys_poll`.
-
-**No `sys_mmap`.** musl's allocator falls back to `mmap(MAP_ANONYMOUS)` if `brk` fails. Phase 13 provides no `mmap`. A musl port requires either a brk-only allocator config or a minimal `sys_mmap` in Phase 14.
-
-**Capability delegation deferred.** A second user process receives capabilities via `proc_spawn` grants only. `sys_cap_grant` for parent→child delegation remains future work.
-
-### Phase 14 forward-looking constraints
-
-**`mmap_base` is a bump allocator — no free path.** `sys_munmap` is a no-op stub. Pages mapped via `sys_mmap` are never reclaimed. A real allocator (freelist or buddy over the `[0x700000000000, 0x710000000000)` range) is Phase 15+ work.
-
-**`fs_base` is not saved/restored on context switch.** `proc->fs_base` stores the value set by `arch_prctl(ARCH_SET_FS)` but `ctx_switch` in `syscall_entry.asm` does not write IA32_FS_BASE on entry to each task. With a single user process this is correct — the value set at musl startup persists. Multi-process TLS requires saving/restoring IA32_FS_BASE in `ctx_switch` using `wrmsr`/`rdmsr`. Phase 15 must address this before spawning a second user process.
-
-**No file-backed mmap.** `sys_mmap` rejects any call without `MAP_ANONYMOUS` with `-ENOSYS`. File-backed mmap requires VFS integration and a page cache — Phase 15+ work.
-
-**No `mprotect`.** musl does not call `mprotect` in its minimal configuration, but any ELF that marks segments executable post-load will get `-ENOSYS`. Phase 15+ work.
-
-**No `fork`/`exec`.** A shell requires at minimum `sys_fork` + `sys_execve`. Phase 15 (shell) must implement these with full PML4 copy-on-write or a simpler `vfork`+`exec` path.
-
-### Phase 15 forward-looking constraints
-
-**No `sys_munmap` VA reclaim.** Each fork+exec child allocates mmap VA before execve resets it. At Phase 15 scale this is negligible; a real mmap with page freeing is Phase 16 work.
-
-**`sys_chdir` does not validate path existence.** Any string is accepted. Full validation requires a real filesystem in Phase 16.
-
-**No I/O redirection or pipes.** `>`, `<`, `|` are Phase 16.
-
-**No signal handling.** `Ctrl-C` does not kill the foreground process. Phase 16.
-
-**`sys_fork` fd copy without reference counting.** console and kbd close ops are no-ops; safe for Phase 15. Reference counting deferred.
-
-**`opendir`/`readdir` are not generic VFS paths.** The initrd `readdir` is a synthetic listing. A real directory hierarchy with on-disk inodes is Phase 16+.
-
-### Phase 17 forward-looking constraints
-
-**`sys_rt_sigreturn` must NOT restore GS/FS from `gregs[REG_CSGSFS]`.** `signal_deliver` stores only the CS value in `sf.gregs[REG_CSGSFS]` (GS=0, FS=0). When `sys_rt_sigreturn` restores the context, it must set `s->cs` from `gregs[REG_CSGSFS]` and separately call `arch_set_fs_base(proc->fs_base)` to restore musl's TLS pointer. Blindly writing `gregs[REG_CSGSFS]` to the GS/FS registers would zero FS base, corrupting musl thread-local storage on the very first signal return.
-
-**`signal_deliver` is called on every interrupt including ring-0.** The cs check (`s->cs != 0x23`) guards against delivering to kernel context, but the call itself has a small overhead on every PIT tick and keyboard interrupt. If interrupt rate becomes a concern, guard the call in `isr.asm` with a ring-3 check in assembly before the `call signal_deliver`.
-
-**`proc_spawn` kernel stack (4KB) is safe for signal delivery.** Maximum depth at `signal_deliver` entry from RSP0: ~750 bytes (cpu_state_t + signal_deliver frame + 560-byte `rt_sigframe_t` local). 4KB minus 750 bytes leaves ~3350 bytes of headroom, which is adequate.
-
-**Partial GPR restore via sysret sigreturn.** Only rip/rflags/rsp/r8/r9/r10 are in `syscall_frame_t` and restored by `sys_rt_sigreturn`. rbx/rbp/r12-r15/rax/rcx/rdx/rsi/rdi are not restored (they survive through the C call chain for callee-saved regs per SysV ABI). A future phase may add full cpu_state_t on the syscall path.
-
-**No SIGPIPE.** Pipe write with no readers returns -EPIPE (errno) but does not deliver SIGPIPE signal. musl handles -EPIPE gracefully. Add SIGPIPE delivery in Phase 19+.
-
-**No process groups / setpgid.** Ctrl-C delivers to a single foreground PID only (sys_setfg). pgid field deferred to when setpgid/getpgid syscalls are implemented.
-
-**Right Ctrl does not track as Ctrl.** Scancode 0xE0 prefix (right Ctrl, right Alt, etc.) is filtered by `if (sc == 0xE0) return` in kbd_handler. Only left Ctrl (0x1D) is tracked.
-
-### Phase 16 forward-looking constraints
-
-**`O_CLOEXEC` implemented** (security audit post-Phase 22). `sys_open`, `sys_pipe2` propagate the flag; `sys_dup`/`sys_dup2` clear it on the new fd (POSIX); `sys_execve` closes all CLOEXEC fds with full slot zero before loading the new image; `sys_fcntl` F_GETFD/F_SETFD are live.
-
-**`SIGPIPE` implemented** (security audit post-Phase 22). `pipe_write_fn` calls `signal_send_pid(pid, SIGPIPE)` before returning `-EPIPE` when the read end is closed. Kernel tasks with `is_user == 0` receive `-EPIPE` only (no signal).
-
-**Single waiter per pipe end.** `pipe_t` holds one `reader_waiting` and one `writer_waiting`. Multiple concurrent readers or writers on the same pipe end are not supported — the second waiter is never woken. Not a concern for Phase 16 shell pipelines.
-
-**No `sys_munmap` VA reclaim for pipe_t.** `kva_free_pages` is called on pipe close, but the kva VA range is not returned to a free list (bump allocator). Negligible at Phase 16 scale.
-
-### Phase 4 forward-looking constraints
-
-**Identity map still active.** TCB and stack allocations in `sched.c` cast PMM
-physical addresses directly to pointers — valid only while the identity window
-`[0..4MB)` is live. Phase 5 must provide a mapped-window allocator before
-tearing down the identity map (see Phase 3 constraint above — same requirement).
-
-**arch_request_shutdown is a test-harness hook, not a real shutdown path.**
-The current implementation writes isa-debug-exit (QEMU only). Phase 5+ must
-implement a clean kernel shutdown: drain run queue, flush I/O, then halt.
-
-**Single-core only.** The scheduler has no SMP awareness. `s_current` is a
-global with no locking. Multi-core brings here requires per-CPU run queues and
-IPI-based preemption — Phase 5+ concern.
-
-### Phase 5 forward-looking constraints
-
-**Identity map still active.** All TCB and kernel-stack allocations use physical
-addresses cast directly to pointers — valid only while `[0..4MB)` is identity-
-mapped in the master PML4. Phase 6 must introduce a mapped-window allocator
-before tearing down the identity map.
-
-**SMAP not enabled.** sys_write dereferences user virtual addresses directly
-with no pointer validation.  Phase 6 must add bounds checking
-(arg2 + arg3 <= 0x00007FFFFFFFFFFF) and enable SMAP so unintentional
-kernel→user dereferences fault.
-
-**Single user process only.** KSTACK_VA (0xFFFFFFFF80400000) is a single fixed
-address shared by all user processes. Phase 6 must introduce a VA allocator to
-assign a distinct kernel-stack VA per process.
-
-**sched_exit master-PML4 switch.** sched_exit switches to master PML4 at entry
-because TCBs live in the identity-mapped [0..4MB) range, which is absent from
-user PML4s. This is correct and intentional. Phase 6 cleanup: after introducing
-a proper kernel allocator, TCBs should be allocated from the higher-half so
-this unconditional switch is no longer necessary.
-
-### Phase 6 constraints — Mapped-window allocator implementation
-
-**Window-map walk pattern: map once, unmap once — not per-level.**
-The `vmm_window_map` / `vmm_window_unmap` pair exposes a single fixed virtual
-slot backed by `s_window_pte`. The correct walk pattern is:
-
-  map(pml4_phys) → read PML4[i] → overwrite PTE with pdpt_phys → read PDPT[j]
-  → overwrite PTE with pd_phys → read PD[k] → overwrite PTE with pt_phys
-  → read PT[l] → vmm_window_unmap()
-
-One `invlpg` per level (4 total for a 4-level walk), one unmap at the end.
-Do NOT call `vmm_window_unmap()` between levels — that doubles the `invlpg`
-count to 8 and creates a window between unmap and re-map where a stale TLB
-entry could produce a silent wrong read if any code path (assertion, printk)
-executes between the two calls. Overwriting the PTE directly to advance to the
-next level is safe: the non-reentrancy guarantee holds because this is
-single-threaded at Phase 6 scope.
-
-**`s_window_pte` must remain `volatile` — do not remove it.**
-The compiler must not cache the PTE value or reorder the write to `*s_window_pte`
-against the `invlpg` instruction. `volatile` prevents the compiler from hoisting
-or coalescing the write. The `invlpg` itself is inside an `__asm__ volatile`
-block, which acts as a compiler barrier, so write ordering is correct as long as
-the `volatile` qualifier stays. Any future maintainer who sees `volatile` on a
-static pointer and reaches for the delete key must read this comment first.
-
-**Identity map teardown order is non-negotiable.**
-Phase 6 sequence:
-  1. Implement `vmm_window_map` / `vmm_window_unmap` (the window slot).
-  2. Replace every `phys_to_table()` call in `vmm.c` with window-mapped access.
-  3. Verify `make test` is GREEN.
-  4. Only then clear PML4[0] (the identity-map entry) and `invlpg` the range.
-Tearing down PML4[0] before step 2-3 is complete will cause an undebuggable
-fault on the next `phys_to_table()` call.
-
-### Phase 7 forward-looking constraints
-
-**Identity map still active.** Phase 6 eliminated `phys_to_table` from `vmm.c`
-but TCBs and kernel stacks in `sched.c` and `proc.c` still cast PMM physical
-addresses to pointers via the identity map. Run the following to get a complete
-list before starting Phase 7:
-```bash
-grep -rn '(uint64_t \*)(uintptr_t)\|(uint8_t \*)(uintptr_t)\|(void \*)(uintptr_t)' kernel/
-```
-Known sites: `sched_spawn` (TCB + stack), `proc_spawn` (PCB + kernel stack).
-Phase 7 must migrate these to a higher-half slab or kernel allocator, then
-remove the `[0..4MB) → [0..4MB)` identity entries from `pd_lo` and flush TLB.
-
-**Single window slot.** `s_window_pt[512]` has 511 unused entries. Phase 7+
-work involving concurrent kernel threads or DMA mappings may require additional
-slots.
-
-### Phase 10 forward-looking constraints
-
-**`copy_to_user` not yet needed.** When `sys_read` arrives in Phase 10, add a symmetric
-`copy_to_user(dst_user, src_kernel, len)` to `uaccess.h` alongside `copy_from_user`.
-Pattern is identical: `arch_stac`, `memcpy`, `arch_clac`.
-
-**`is_user ? 1 : STACK_PAGES` is a hidden contract.** Add a `stack_pages` field to
-`aegis_task_t` and populate it at allocation time (`sched_spawn`, `proc_spawn`),
-eliminating the inference. A kernel task with a non-`STACK_PAGES` stack size would
-silently free the wrong number of pages.
-
-**Last-exit leak.** Simplest fix: permanent idle task. Rename `task_heartbeat` to
-`task_idle`, remove the 500-tick exit, and add a separate shutdown mechanism. A
-non-exiting kernel task in the run queue ensures every exiting process gets cleaned
-up by the deferred pattern at the next call to `sched_exit`.
-
-**User address space teardown deferred.** `sched_exit` still leaks the user PML4
-and ELF segment pages. Phase 10 must walk and free PML4 entries 0–255 only (the user
-half). Entries 256–511 are the kernel half, shared with the master PML4 — touching
-them would corrupt every other process.
-
-*Last updated: 2026-03-21 — Phase 15 complete, make test GREEN. Interactive shell live; fork/execve/waitpid; 8 companion programs in initrd.*
-
-*Last updated: 2026-03-21 — Phase 15 post-fix: three bugs resolved, test_shell.py all 9 commands clean. (1) fork_child_return SYSRET path replaced with isr_post_dispatch iretq path — child's first scheduling now uses complete fake isr_common_stub frame, eliminating r12=0 #PF. (2) arch_set_fs_base now set BEFORE ctx_switch for incoming task in sched_tick/block/yield_to_next. (3) sys_open 256-byte bulk copy replaced with byte-by-byte null-terminated copy — prevents #PF when argv string is within 256 bytes of USER_STACK_TOP (0x7fffffff000). console_write_fn capped to current page boundary.*
-
-*Last updated: 2026-03-21 — Phase 16 complete, test_pipe.py 5/5 GREEN. sys_pipe2/dup/dup2; kernel/fs/pipe.c ring buffer; shell pipeline parser; I/O redirection (<, >, 2>&1). Root cause of test_redirect_stdin flakiness: boot takes 600+ s on loaded host; BOOT_TIMEOUT raised to 900 s and separated from CMD_TIMEOUT (120 s). sys_read gains page-boundary cap matching console_write_fn. test_pipe.py wired into run_tests.sh.*
-
-*Last updated: 2026-03-22 — Phase 18 complete, test_stat.py 4/4 GREEN. sys_stat/fstat/lstat/access/nanosleep/getdents64; wc/grep/sort binaries; syscall_entry.asm now saves/restores user rdi/rsi/rdx across syscall_dispatch (Linux ABI requirement — musl readdir uses rsi after getdents64); sys_brk zeroes new pages. wc -c/-l/-w flag parsing added.*
-
-### Phase 18 forward-looking constraints
-
-**`syscall_entry.asm` rdi/rsi/rdx preservation is a correctness fix, not an optimization.** Any future syscall that passes pointers in rdi/rsi/rdx and has the caller inspect those registers after the syscall returns will now work correctly. This fix is a prerequisite for any musl function that follows the Linux syscall ABI preservation guarantee.
-
-**`sys_stat` field coverage.** `k_stat_t` populates `st_ino`, `st_mode`, `st_size`, `st_nlink`=1, and zeroes uid/gid/dev/rdev/blksize/blocks/timestamps. musl's `stat(3)` works because it only uses `st_size` for most operations. A future phase may populate timestamps from a wall clock when one is available.
-
-**`sys_nanosleep` busy-waits.** The current implementation converts `timespec` to PIT ticks and busy-waits in a loop. This blocks the CPU; the scheduler continues to preempt the process but the process immediately re-enters the busy-wait. A proper `nanosleep` should block the task (sched_block with a wakeup timer) rather than spinning.
-
-**`getdents64` returns synthetic initrd directory.** The directory listing is built directly from `s_files[]` without a real on-disk directory structure. A future VFS redesign with proper directory inodes will replace this.
-
-**No `O_CLOEXEC` on stat-related opens.** File descriptors used internally by stat (via sys_open) are not automatically closed on exec. Deferred alongside full O_CLOEXEC support.
-
-*Last updated: 2026-03-22 — Phase 17 complete, test_signal.py 1/1 GREEN. sigaction/sigprocmask/sigreturn/kill/setfg; iretq and sysret signal delivery paths; Ctrl-C kills foreground process via kbd_handler→signal_send_pid→signal_deliver. Three scheduler/CR3 bugs fixed: sched_block now leaves tasks in run queue so sched_exit can find blocked parents; CR3 restored to user PML4 after ctx_switch returns in sched_block/sched_yield_to_next; signal_deliver temporarily switches to user PML4 for copy_to_user.*
-
-### Phase 19 forward-looking constraints
-
-**ACPI table access is bounded to the first 4MB.** `acpi.c` uses `phys_accessible()` (4MB limit) to guard RSDP/RSDT/XSDT access. On QEMU q35, ACPI tables may be placed above 4MB. A future phase must replace `phys_accessible()` with a `vmm_map_page`-based accessor so real hardware ACPI tables are reachable.
-
-**ECAM MMIO mapped with PWT+PCD flags (no-cache).** The PCIe config space MMIO is mapped via `kva_alloc_pages + vmm_map_page` with flags `0x1B` (Present|Write|PWT|PCD). This is correct for config space registers. BAR memory resources have their own cacheability requirements and must be mapped separately per device.
-
-**`pcie_find_device()` returns the first match only.** If a system has multiple devices of the same class (e.g. two NVMe controllers), only the first is returned. Phase 20 iterates `pcie_get_devices()` directly for the NVMe driver — this is fine for Phase 20 scope.
-
-**MADT is located but not parsed.** `g_madt_found` is set to 1 but MADT entries (LAPIC, IOAPIC, interrupt source override) are not parsed. SMP and APIC-based interrupt routing require MADT parsing — Phase 22+ work.
-
-*Last updated: 2026-03-23 — Phase 19 complete, make test GREEN. ACPI MCFG+MADT parsing; PCIe ECAM enumeration on q35; graceful fallback on -machine pc.*
-
-### Phase 20 forward-looking constraints
-
-**NVMe I/O is synchronous doorbell+poll.** No interrupt-driven completion. A single shared bounce buffer (`s_iobuf`) handles all reads and writes — no concurrent I/O is possible. MSI/MSI-X and interrupt-driven I/O are Phase 22+ work.
-
-**Single namespace only (NSID=1).** Multi-namespace NVMe devices are not enumerated. NSID=1 is hardcoded throughout the driver.
-
-**Transfer size capped at 4096 bytes (one page).** `nvme_blkdev_read` and `nvme_blkdev_write` reject transfers larger than 4096 bytes (`count × 512 > 4096`). PRP list support for multi-page transfers is Phase 21+ work if needed.
-
-**ECAM bus scan capped at 8 buses (`PCIE_MAX_SCAN_BUSES`).** Full 256-bus ECAM mapping would require 256MB of kernel VA — too large for a 128MB test VM. 8 buses = 8MB is sufficient for QEMU q35 and most desktop hardware. A server with many PCIe bridges may need a larger cap.
-
-**Queue memory is never freed.** Admin and I/O queue pages allocated via `alloc_queue_page` are permanent. NVMe hot-remove is not supported.
-
-**GPT partition parsing complete (Phase 23).** `nvme_init` registers `"nvme0"` as a whole-disk blkdev; `gpt_scan("nvme0")` then registers `"nvme0p1"` and `"nvme0p2"` as child blkdevs. The ext2 filesystem mounts from `"nvme0p1"`.
-
-*Last updated: 2026-03-23 — Phase 20 complete, make test GREEN. NVMe 1.4 driver on q35; blkdev abstraction layer; ACPI kva-window for tables above 4MB; ECAM 8-bus cap; test_nvme.py PASS.*
-
-### Phase 21 forward-looking constraints
-
-**No double/triple indirect blocks.** Files larger than ~268KB (12 direct + 256 indirect blocks at 1024 bytes each, or ~4352 blocks at 4096 bytes) cannot be written. Shell scripts and small binaries are fine; large file transfers require double-indirect support.
-
-**Block cache is 16 slots.** Heavy random I/O will thrash the cache. A page cache is v2.0 work.
-
-**No fsck on mount.** Dirty unmount may leave inconsistent state. `fsck.ext2` from host recovers.
-
-**ext2_unlink only frees direct blocks (i_block[0..11]).** Files with data in the single-indirect block (i_block[12]) will have those data blocks leaked when unlinked. Files in Phase 21 shell workloads are small; this leaks only for files >12 blocks (12KB for 1K block size). Fix when adding double-indirect or adding a block-walk unlink.
-
-**No timestamps.** inode atime/mtime/ctime are always 0. A wall clock source (RTC or TSC calibration) is needed for real timestamps.
-
-**New build dependency: `e2tools` (e2mkdir, e2cp) and `debugfs` (from e2fsprogs).** Used by `make disk` to populate the ext2 image. Install: `apt install e2tools e2fsprogs`.
-
-**ext2_vfs_dup_fn uses ref counting.** `ext2_fd_priv_t` carries a `ref_count`; `ext2_vfs_dup_fn` increments it and `ext2_pool_free` decrements, only clearing `in_use` at zero. The previous use-after-free (UAF on dup) was fixed in the security audit pass following Phase 22.
-
-*Last updated: 2026-03-23 — Phase 21 complete, test_ext2.py PASS. ext2 read-write filesystem on nvme0; 16-slot LRU cache; path walk; create/write/unlink/mkdir/rename; 5 user commands; ext2_sync on sched_exit; SMAP-safe write via copy_from_user bounce.*
-
-*Last updated: 2026-03-23 — Phase 22 complete, test_xhci.py PASS. xHCI USB host controller driver; USB HID boot protocol keyboard; kbd_usb_inject into PS/2 ring buffer; [XHCI] OK confirmed on q35; 100Hz polling via PIT.*
-
-*Last updated: 2026-03-23 — Phase 23 complete, test_gpt.py PASS. GPT partition parsing; nvme0p1/nvme0p2 registered; ext2 mounts nvme0p1; make disk rewritten for GPT layout with sgdisk; make test GREEN.*
-
-*Last updated: 2026-03-23 — Phase 24 complete, test_virtio_net.py PASS. netdev_t abstraction; virtio-net eth0 on q35+SLIRP; VIRTIO_F_VERSION_1 negotiated; 256-slot RX prefill; sfence+doorbell TX; make test GREEN (boot oracle unchanged).*
-
-### Phase 22 forward-looking constraints
-
-**Polling-only at 100Hz.** USB HID reports are polled from the PIT tick handler. This adds ~1-2us per tick when no events are pending. MSI-X driven completion is v2.0 work.
-
-**Single keyboard only.** The first HID boot-protocol keyboard found is used. Additional keyboards on other ports are ignored.
-
-**No USB hub support.** Devices must be connected directly to root hub ports. Hub enumeration is v2.0 work.
-
-**No USB mass storage.** Only HID class devices are handled. USB storage class driver is v2.0 work.
-
-**PS/2 and USB coexist.** Both paths push into the same ring buffer via `kbd_usb_inject`. On real hardware without PS/2, only USB HID provides input.
-
-**Transfer ring memory is never freed.** Each device slot's transfer ring is allocated permanently. USB device disconnect does not reclaim resources.
-
-**QEMU usb-kbd Enable Slot timing.** In Phase 22 testing with QEMU's `usb-kbd`, the Enable Slot command may time out during boot (the USB device appears after the kernel scans ports). Razer BlackWidow V3 real hardware testing is deferred — VFIO passthrough via `-device vfio-pci,host=12:00.4` is documented in project memory.
-
-### Security audit forward-looking constraints (post-Phase 22)
-
-**`sys_lseek` SEEK_CUR negative overflow is now guarded.** The audit initially only added the positive overflow guard; the code review identified the missing negative direction. Both guards are now present: `off > 0 && f->offset > INT64_MAX - off` and `off < 0 && f->offset < INT64_MIN - off`. The downstream `new_off < 0` check provides a second defense but relies on UB arithmetic — both guards are required.
-
-**`VFS_O_CLOEXEC` constant replaces bare `0x80000U` literals.** Defined in `vfs.h` alongside `VFS_FD_CLOEXEC`. Both are `0x80000U` by design — same Linux x86-64 value, no shift needed at fd install time. Do not change one without changing the other.
-
-### Phase 23 forward-looking constraints
-
-**Partition LBA bounds are not enforced on reads/writes.** `gpt_part_read` and
-`gpt_part_write` add `lba_offset` but do not clamp LBA + count to the partition's
-`block_count`. A buggy caller could read past the partition boundary into adjacent
-structures. Add bounds checking when the blkdev interface gains a per-device bounds hook.
-
-**`nvme0p2` is registered but not mounted.** It appears as a blkdev but no
-filesystem driver uses it. A future phase can format and mount it as swap or a
-second ext2 volume.
-
-**Only the primary GPT header is used.** When the primary is valid, the backup is
-not checked for consistency. The UEFI spec recommends verifying both headers match;
-deferred to a future hardening phase.
-
-**Partition count capped at `GPT_MAX_PARTS = 7`.** With `BLKDEV_MAX = 8` and one
-slot for the parent disk. Raise both constants together if more partitions are needed.
-
-**`make disk` rebuilds entirely when any user binary changes.** The `$(DISK)` rule
-lists all user ELFs as prerequisites. A change to any binary triggers a full disk
-rebuild including running `sgdisk`. This is correct but slow. A future optimization
-could separate partition table creation (once) from filesystem population (on change).
-
-### Phase 24 forward-looking constraints
-
-**`netdev_rx_deliver()` is a stub.** Received frames are silently discarded.
-Phase 25 replaces this with `eth_rx()` which dispatches based on EtherType
-(ARP = 0x0806, IPv4 = 0x0800). Do not add any printk to `netdev_rx_deliver()`
-in Phase 24 — SLIRP sends ARP probes and mDNS at boot, which would spam serial.
-
-**Single TX bounce buffer per slot, synchronous poll.** TX is serialized —
-one frame in flight at a time, polled to completion before returning. Concurrent
-sends from multiple processes share the same `tx_head` counter with no locking.
-Correct at Phase 24 (single-threaded kernel). Phase 25+ with a socket layer will
-need either a per-process TX lock or a true TX ring with atomic head/tail.
-
-**RX buffer is never freed.** All 256 RX PMM pages (+ 256 TX bounce pages) are
-allocated at `virtio_net_init()` and held permanently. `kva_free_pages` is not
-called on device reset. Negligible at Phase 24 scale.
-
-**No interrupt-driven RX.** Polling at 100 Hz adds ~1–2µs per tick when no
-frames are pending. MSI-X driven RX requires IOAPIC + vector allocation — Phase
-25+ or v2.0 work.
-
-**`notify_off_mult = 0` edge case.** Some virtio implementations set
-`notify_off_multiplier = 0` to indicate all queues share a single doorbell.
-In that case `p->tx_notify_off * 0 / 4 = 0` and the TX doorbell write lands at
-`notify_base[0]`, which is the single shared doorbell — correct. QEMU virtio-net
-sets the multiplier to 4 (one 32-bit doorbell per queue at offset 0 and 4).
-
-**PCI Enable Bus Master not set.** DMA from the NIC requires PCI command
-register bit 2 (Bus Master Enable) to be set. QEMU's firmware (SeaBIOS) sets
-this for all devices at boot, so Phase 24 works. On bare metal with UEFI that
-does not configure PCIe devices, this bit must be set explicitly via
-`pcie_write32(d->bus, d->dev, d->fn, 0x04, pcie_read32(..., 0x04) | 0x06u)`
-(Bus Master + Memory Space Enable). Add this to `virtio_net_init()` before
-Phase 27 (RTL8125 bare-metal work).
+12. **`sys_nanosleep` busy-waits.** Spins on PIT ticks instead of blocking the task. Should use `sched_block` with a wakeup timer.
 
 ---
 
-## Phase Roadmap (post-Phase 23)
+## Phase Roadmap
 
-The following phases are planned in order. Framebuffer/display work is intentionally
-deferred until the network stack is complete — the server use case takes priority.
+| Phase | Content | Status |
+|-------|---------|--------|
+| 25 | Ethernet/ARP/IPv4/ICMP/TCP/UDP stack | ✅ Done — test_net_stack.py PASS |
+| 26 | POSIX socket API + epoll (`sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*`) | Not started |
+| 27 | RTL8125 2.5GbE driver (PCI 10ec:8125) | Deferred until WiFi confirmed working |
+| 28 | DHCP userspace daemon | Not started |
+| 29 | Framebuffer / VESA | Not started |
+| 30 | AMD Display Core | Not started |
+| 31 | Installable disk | Not started |
+| 32 | Release | Not started |
 
-| Phase | Content | Notes |
-|-------|---------|-------|
-| 24 | `netdev_t` abstraction + virtio-net driver | QEMU-testable via `-netdev user` |
-| 25 | Ethernet/ARP/IP/ICMP/TCP/UDP protocol stack | Kernel-side; ICMP ping CI test |
-| 26 | Full POSIX socket API + epoll | `sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*` |
-| 27 | RTL8125 2.5GbE driver (PCI ID 10ec:8125) | Real hardware only; testing deferred until WiFi is set up |
-| 28 | DHCP userspace daemon | musl binary; uses socket API; QEMU SLIRP built-in DHCP server for CI |
-| 29 | Framebuffer / VESA | Was Phase 23 before network stack inserted |
-| 30 | AMD Display Core | Was Phase 24 |
-| 31 | Installable disk | Was Phase 25 |
-| 32 | Release | Was Phase 26 |
+**RTL8125 testing note:** The machine has RTL8125B (ASUS, PCI 0a:00.0, IOMMU group 18) managed by host `r8169`. WiFi is MT7921K (0b:00.0). Do NOT test RTL8125 until WiFi is confirmed working — you will lose remote access.
 
-**RTL8125 testing note:** The machine has an RTL8125B 2.5GbE (ASUS, PCI 0a:00.0,
-IRQ 24, IOMMU group 18) currently managed by the host `r8169` driver. Testing the
-Aegis RTL8125 driver requires either VFIO passthrough or rebooting into Aegis natively.
-Do NOT attempt to test the RTL8125 driver until a WiFi connection (MT7921K, 0b:00.0)
-is configured and confirmed working, to avoid losing remote access during testing.
+*Last updated: 2026-03-24 — Robustness audit (22 issues) all fixed. Phase 25 network stack complete: test_net_stack.py PASS. Root cause: virtio-net header was 10 bytes, Virtio 1.0 requires 12 (num_buffers field). make test passes boot oracle. Known pre-existing failure: test_ext2_persistence (ext2 write sync across reboots — separate issue from ext2 hardening fixes applied this session).*
