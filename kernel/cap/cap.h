@@ -11,7 +11,7 @@ typedef struct {
     uint32_t rights;  /* CAP_RIGHTS_* bitfield */
 } cap_slot_t;
 
-#define CAP_TABLE_SIZE    8u
+#define CAP_TABLE_SIZE   16u
 
 /* Capability kinds */
 #define CAP_KIND_NULL      0u   /* empty slot */
