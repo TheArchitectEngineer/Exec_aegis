@@ -155,6 +155,7 @@ sched_exit(void)
         s_current->state = TASK_ZOMBIE;
 
         /* Wake blocked parent waiting for this child, if any. */
+        aegis_task_t *woken_parent = (void *)0;
         aegis_task_t *t = s_current->next;
         while (t != s_current) {
             if (t->is_user && t->state == TASK_BLOCKED) {
@@ -162,6 +163,7 @@ sched_exit(void)
                 if (p->pid == dying->ppid &&
                     (t->waiting_for == 0 || t->waiting_for == dying->pid)) {
                     sched_wake(t);
+                    woken_parent = t;
                     break;
                 }
             }
@@ -187,8 +189,28 @@ sched_exit(void)
 
         /* Yield — zombie stays in queue until waitpid reaps.
          * Do NOT use the deferred-cleanup (g_prev_dying_tcb) path; that is
-         * for non-zombie kernel task exits only. */
-        sched_yield_to_next();
+         * for non-zombie kernel task exits only.
+         *
+         * Direct-to-parent switch: if we woke a parent, switch to it
+         * immediately instead of calling sched_yield_to_next().
+         * sched_yield_to_next starts scanning from zombie->next in the
+         * circular queue; when the queue is task_idle→parent→zombie,
+         * zombie->next==task_idle and task_idle is picked first.  On AMD
+         * bare metal the 8259A PIC IRQ0 may never reach the CPU (LAPIC not
+         * in ExtINT/virtual-wire mode), so task_idle's sti+hlt never gets
+         * preempted and the parent is never scheduled.  Switching directly
+         * to the parent eliminates the PIT dependency for this path. */
+        if (woken_parent) {
+            aegis_task_t *zombie_task = s_current;
+            s_current = woken_parent;
+            arch_set_kernel_stack(s_current->kernel_stack_top);
+            if (s_current->is_user)
+                arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+            ctx_switch(zombie_task, s_current);
+            /* unreachable — zombie never resumes after direct switch */
+        } else {
+            sched_yield_to_next();
+        }
         /* unreachable — zombie never resumes */
         for (;;) {}
     }
