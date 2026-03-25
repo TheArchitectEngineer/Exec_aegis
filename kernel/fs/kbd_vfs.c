@@ -6,18 +6,67 @@
 #include "printk.h"
 #include <stdint.h>
 
+/* Simple line discipline — echoes characters as typed, handles backspace.
+ * Buffers one line at a time; returns characters one-by-one to the caller.
+ * No TTY termios layer: Enter → \n, DEL/BS → destructive backspace. */
+#define KBD_LINE_MAX 512
+static char s_linebuf[KBD_LINE_MAX];
+static int  s_linebuf_len = 0;  /* total bytes ready in buffer (incl. \n) */
+static int  s_linebuf_pos = 0;  /* next byte to return to caller */
+
 static int
 kbd_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 {
 	(void)priv; (void)off;
 	if (len == 0) return 0;
 	char *kbuf = (char *)buf;
-	int   interrupted;
-	char  c = kbd_read_interruptible(&interrupted);
-	if (interrupted) {
-		return -4; /* EINTR */
+
+	/* Return buffered bytes from a previously-read line */
+	if (s_linebuf_pos < s_linebuf_len) {
+		kbuf[0] = s_linebuf[s_linebuf_pos++];
+		if (s_linebuf_pos >= s_linebuf_len) {
+			s_linebuf_len = 0;
+			s_linebuf_pos = 0;
+		}
+		return 1;
 	}
-	kbuf[0] = c;
+
+	/* Read and echo characters until Enter */
+	for (;;) {
+		int  interrupted;
+		char c = kbd_read_interruptible(&interrupted);
+		if (interrupted) {
+			s_linebuf_len = 0;
+			s_linebuf_pos = 0;
+			return -4; /* EINTR */
+		}
+
+		if (c == '\r' || c == '\n') {
+			/* Enter: store \n, echo newline, return line */
+			if (s_linebuf_len < KBD_LINE_MAX - 1)
+				s_linebuf[s_linebuf_len++] = '\n';
+			printk("\n");
+			break;
+		} else if (c == '\x7f' || c == '\x08') {
+			/* Backspace / DEL: remove last char, destructive echo */
+			if (s_linebuf_len > 0) {
+				s_linebuf_len--;
+				printk("\b \b");
+			}
+		} else if ((uint8_t)c >= 0x20 && s_linebuf_len < KBD_LINE_MAX - 1) {
+			/* Printable: append and echo */
+			s_linebuf[s_linebuf_len++] = c;
+			printk("%c", c);
+		}
+		/* Ignore other control chars */
+	}
+
+	/* Return first byte of the completed line */
+	kbuf[0] = s_linebuf[s_linebuf_pos++];
+	if (s_linebuf_pos >= s_linebuf_len) {
+		s_linebuf_len = 0;
+		s_linebuf_pos = 0;
+	}
 	return 1;
 }
 

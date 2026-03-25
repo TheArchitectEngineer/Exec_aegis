@@ -286,6 +286,13 @@ static const uint8_t s_font[256 * 16] = {
 int fb_available = 0;
 
 static volatile uint32_t *s_fb_va    = (void *)0;
+/* Shadow buffer: normal WB-cached DRAM copy of the framebuffer.
+ * All pixel writes go to both s_shadow and s_fb_va.
+ * _fb_scroll reads from s_shadow (fast cacheable read), then blits
+ * the whole screen to s_fb_va as sequential WC writes (fast write-combining).
+ * This avoids uncached reads from WC framebuffer memory during scroll,
+ * which is the same strategy Linux vesafb/efifb uses. */
+static uint32_t          *s_shadow   = (void *)0;
 static uint32_t           s_pitch_px = 0;
 static uint32_t           s_cols     = 0;
 static uint32_t           s_rows     = 0;
@@ -304,8 +311,10 @@ _fb_draw_char(uint32_t row, uint32_t col, char c)
     for (y = 0; y < 16u; y++) {
         uint8_t bits = glyph[y];
         for (x = 0; x < 8u; x++) {
-            s_fb_va[base_px + y * s_pitch_px + x] =
-                (bits & (0x80u >> x)) ? FB_FG : FB_BG;
+            uint32_t color = (bits & (0x80u >> x)) ? FB_FG : FB_BG;
+            uint32_t idx   = base_px + y * s_pitch_px + x;
+            if (s_shadow) s_shadow[idx] = color;
+            s_fb_va[idx] = color;
         }
     }
 }
@@ -315,11 +324,28 @@ _fb_scroll(void)
 {
     uint32_t row_pixels = 16u * s_pitch_px;
     uint32_t total      = (s_rows - 1u) * row_pixels;
-    uint32_t i;
-    for (i = 0; i < total; i++)
-        s_fb_va[i] = s_fb_va[i + row_pixels];
-    for (i = 0; i < row_pixels; i++)
-        s_fb_va[(s_rows - 1u) * row_pixels + i] = FB_BG;
+
+    if (s_shadow) {
+        /* Fast path: shift shadow in DRAM (WB-cached, fast reads),
+         * then blit the whole screen to the WC framebuffer as a single
+         * sequential write stream (write-combined, fast).
+         * FB_BG == 0x00000000, so memset-zero clears the last text row. */
+        __builtin_memmove(s_shadow, s_shadow + row_pixels,
+                          total * sizeof(uint32_t));
+        __builtin_memset(s_shadow + (s_rows - 1u) * row_pixels, 0,
+                         row_pixels * sizeof(uint32_t));
+        /* Cast away volatile: we want REP MOVSQ batched WC writes, not
+         * per-element volatile stores which prevent write-combining. */
+        __builtin_memmove((uint32_t *)s_fb_va, s_shadow,
+                          s_rows * row_pixels * sizeof(uint32_t));
+    } else {
+        /* Slow fallback (no shadow): scalar loop over WC reads */
+        uint32_t i;
+        for (i = 0; i < total; i++)
+            s_fb_va[i] = s_fb_va[i + row_pixels];
+        for (i = 0; i < row_pixels; i++)
+            s_fb_va[(s_rows - 1u) * row_pixels + i] = FB_BG;
+    }
     s_row = s_rows - 1u;
 }
 
@@ -361,10 +387,26 @@ fb_init(void)
     s_col      = 0;
     s_row      = 0;
 
+    /* Allocate shadow buffer: same size as framebuffer, backed by normal
+     * WB-cached PMM pages (no remapping needed — kva_alloc_pages uses WB). */
     {
-        uint32_t total_px = (info.pitch / 4u) * info.height;
-        for (i = 0; i < total_px; i++)
-            s_fb_va[i] = FB_BG;
+        uint8_t *shbuf = (uint8_t *)kva_alloc_pages((uint64_t)fb_pages);
+        if (shbuf)
+            s_shadow = (uint32_t *)shbuf;
+        /* Shadow allocation failure is non-fatal; scroll falls back to
+         * the slow scalar loop. */
+    }
+
+    {
+        uint32_t total_px = s_pitch_px * info.height;
+        /* FB_BG == 0x00000000; memset-zero clears to black.
+         * Cast away volatile for batched write-combined writes. */
+        __builtin_memset((uint32_t *)s_fb_va, 0, total_px * sizeof(uint32_t));
+        /* Shadow does not need explicit zeroing: every shadow pixel is written
+         * by _fb_draw_char before _fb_scroll can read it back (the terminal
+         * always fills cells before the first scroll).  Skipping the memset
+         * avoids any risk of overwriting freshly-allocated PMM pages that may
+         * happen to coincide with the multiboot2 RSDP. */
     }
 
     fb_available = 1;
