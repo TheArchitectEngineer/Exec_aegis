@@ -363,15 +363,64 @@ int ext2_file_size(uint32_t inode_num)
 }
 
 /* ------------------------------------------------------------------ */
-/* ext2_readdir — stub (Task 3)                                        */
+/* ext2_readdir — index-based directory iteration                      */
 /* ------------------------------------------------------------------ */
 
-int ext2_readdir(uint32_t dir_inode, void *buf, uint32_t buf_size)
+int ext2_readdir(uint32_t dir_inode, uint64_t index,
+                 char *name_out, uint8_t *type_out)
 {
-    (void)dir_inode;
-    (void)buf;
-    (void)buf_size;
+    if (!s_mounted) return -1;
+    ext2_inode_t inode;
+    if (ext2_read_inode(dir_inode, &inode) < 0) return -1;
+    if ((inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR) return -1;
+
+    uint64_t count = 0;
+    uint32_t file_block_idx = 0;
+    uint32_t bytes_walked = 0;
+
+    while (bytes_walked < inode.i_size) {
+        uint32_t blk = ext2_block_num(&inode, file_block_idx);
+        if (blk == 0) {
+            bytes_walked += s_block_size;
+            file_block_idx++;
+            continue;
+        }
+        uint8_t *data = cache_get_slot(blk);
+        if (!data) return -1;
+        uint32_t block_pos = 0;
+        while (block_pos + 8 <= s_block_size) {
+            ext2_dirent_t *de = (ext2_dirent_t *)(data + block_pos);
+            if (de->rec_len < 8 || block_pos + de->rec_len > s_block_size)
+                break;
+            if (de->inode != 0) {
+                if (count == index) {
+                    uint8_t nlen = de->name_len;
+                    uint32_t k;
+                    for (k = 0; k < nlen; k++) name_out[k] = de->name[k];
+                    name_out[nlen] = '\0';
+                    *type_out = (de->file_type == EXT2_FT_DIR) ? 4u : 8u;
+                    return 0;
+                }
+                count++;
+            }
+            block_pos += de->rec_len;
+        }
+        bytes_walked += s_block_size;
+        file_block_idx++;
+    }
     return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* ext2_is_dir — returns 1 if inode is a directory, 0 otherwise       */
+/* ------------------------------------------------------------------ */
+
+int ext2_is_dir(uint32_t ino)
+{
+    if (!s_mounted) return 0;
+    ext2_inode_t inode;
+    if (ext2_read_inode(ino, &inode) < 0) return 0;
+    return ((inode.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
