@@ -295,6 +295,52 @@ sched_wake(aegis_task_t *task)
 }
 
 void
+sched_stop(aegis_task_t *task)
+{
+    if (task != s_current) {
+        /* Stopping a different task: just flip state. */
+        task->state = TASK_STOPPED;
+        return;
+    }
+
+    /* Self-stop: mirrors sched_block exactly, but sets TASK_STOPPED. */
+    aegis_task_t *old = s_current;
+    old->state = TASK_STOPPED;
+
+    /* Advance s_current past the stopped task; skip non-RUNNING tasks.
+     * task_idle guarantees the loop terminates. */
+    s_current = old->next;
+    while (s_current->state != TASK_RUNNING)
+        s_current = s_current->next;
+
+    arch_set_kernel_stack(s_current->kernel_stack_top);
+
+    if (s_current->is_user)
+        arch_set_fs_base(((aegis_process_t *)s_current)->fs_base);
+
+    ctx_switch(old, s_current);
+
+    /* After ctx_switch returns (SIGCONT has resumed us), restore CR3 + FS.base.
+     * Mirrors sched_block tail exactly. */
+    if (s_current->is_user)
+        vmm_switch_to(((aegis_process_t *)s_current)->pml4_phys);
+
+    if (s_current->is_user) {
+        aegis_process_t *p = (aegis_process_t *)s_current;
+        arch_set_fs_base(p->fs_base);
+    }
+}
+
+void
+sched_resume(aegis_task_t *task)
+{
+    /* Mirrors sched_wake: flip state back to RUNNING.
+     * Works for both TASK_STOPPED and TASK_BLOCKED (SIGCONT while blocked
+     * on a read must also let the read return EINTR). */
+    task->state = TASK_RUNNING;
+}
+
+void
 sched_yield_to_next(void)
 {
     aegis_task_t *old = s_current;
