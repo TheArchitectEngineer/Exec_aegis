@@ -36,10 +36,16 @@ signal_deliver(cpu_state_t *s)
     k_sigaction_t *sa = &proc->sigactions[signum];
 
     if (sa->sa_handler == SIG_DFL) {
-        /* Default action */
-        if (signum == SIGCHLD) return; /* default for SIGCHLD = ignore */
-        /* All other defaults: terminate the process */
-        sched_exit();  /* never returns */
+        if (signum == SIGCHLD || signum == SIGCONT) return; /* ignore */
+        if (signum == SIGTSTP || signum == SIGSTOP ||
+            signum == SIGTTIN || signum == SIGTTOU) {
+            proc->stop_signum = (uint32_t)signum;
+            /* Notify parent in case it's blocked in waitpid(WUNTRACED) */
+            signal_send_pid(proc->ppid, SIGCHLD);
+            sched_stop((aegis_task_t *)task);  /* yields; returns on SIGCONT */
+            return;
+        }
+        sched_exit();  /* terminate — all other SIG_DFL signals */
     }
 
     if (sa->sa_handler == SIG_IGN) return;
@@ -145,7 +151,14 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
     k_sigaction_t *sa = &proc->sigactions[signum];
 
     if (sa->sa_handler == SIG_DFL) {
-        if (signum == SIGCHLD) return 0; /* ignore */
+        if (signum == SIGCHLD || signum == SIGCONT) return 0; /* ignore */
+        if (signum == SIGTSTP || signum == SIGSTOP ||
+            signum == SIGTTIN || signum == SIGTTOU) {
+            proc->stop_signum = (uint32_t)signum;
+            signal_send_pid(proc->ppid, SIGCHLD);
+            sched_stop((aegis_task_t *)task);  /* yields; returns on SIGCONT */
+            return 0;
+        }
         sched_exit();  /* never returns */
     }
 
@@ -216,6 +229,28 @@ signal_send_pid(uint32_t pid, int signum)
                 if (t->state == TASK_BLOCKED)
                     sched_wake(t);
                 return;
+            }
+        }
+        t = t->next;
+    } while (t != cur);
+}
+
+void
+signal_send_pgrp(uint32_t pgid, int signum)
+{
+    if (pgid == 0 || signum <= 0 || signum >= 64) return;
+
+    aegis_task_t *cur = sched_current();
+    if (!cur) return;
+    aegis_task_t *t = cur;
+    do {
+        if (t->is_user) {
+            aegis_process_t *p = (aegis_process_t *)t;
+            if (p->pgid == pgid && p->pid != 1) {
+                p->pending_signals |= (1ULL << (uint32_t)signum);
+                /* Wake stopped/blocked task so it can deliver the signal */
+                if (t->state == TASK_BLOCKED || t->state == TASK_STOPPED)
+                    sched_resume(t);
             }
         }
         t = t->next;

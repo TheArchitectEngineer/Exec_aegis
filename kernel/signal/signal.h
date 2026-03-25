@@ -131,6 +131,12 @@ int signal_deliver_sysret(struct syscall_frame *frame, uint64_t *saved_rdi_ptr);
  * Calls sched_wake if target is TASK_BLOCKED. */
 void signal_send_pid(uint32_t pid, int signum);
 
+/* Send signal signum to all processes in process group pgid.
+ * Skips PID 1. Also calls sched_resume on stopped/blocked targets
+ * so they can return to the run queue and deliver the signal.
+ * Safe to call from ISR context (IF=0, no allocation). */
+void signal_send_pgrp(uint32_t pgid, int signum);
+
 /* Return 1 if the current process has deliverable pending signals. */
 int signal_check_pending(void);
 
