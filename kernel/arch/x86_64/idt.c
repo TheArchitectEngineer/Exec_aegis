@@ -142,5 +142,13 @@ isr_dispatch(cpu_state_t *s)
             for (;;) {}
         }
     }
+    /* Normalize SS RPL=3 for iretq back to ring-3.
+     * AMD CPUs in 64-bit mode strip SS RPL bits on ring-3 interrupt entry,
+     * pushing SS=0x18 (RPL=0) instead of SS=0x1B (RPL=3).  iretq to ring-3
+     * (CPL=3) requires SS.RPL == CPL=3; without normalization the iretq
+     * faults #GP(SS) on AMD.  Force RPL=3 unconditionally on the return
+     * path — harmless on Intel (which already pushes RPL=3), required on AMD. */
+    if (s->cs == 0x23)
+        s->ss |= 3;
     /* vectors >= 0x30: not installed, ignored */
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_nvme.py — verify NVMe driver initializes on q35 with NVMe disk."""
 
-import subprocess, sys, os, tempfile, re
+import subprocess, sys, os, tempfile, re, select, fcntl, time
 
 BOOT_TIMEOUT = int(os.environ.get('BOOT_TIMEOUT', '900'))
 BUILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'build')
@@ -44,23 +44,44 @@ def main():
             '-device', 'isa-debug-exit,iobase=0xf4,iosize=0x04',
         ]
 
-        proc = subprocess.Popen(qemu_cmd, stdout=subprocess.PIPE,
+        proc = subprocess.Popen(qemu_cmd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL)
+        fd = proc.stdout.fileno()
+        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
+        output = ''
+        found  = False
+        start  = time.time()
         try:
-            stdout, _ = proc.communicate(timeout=BOOT_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, _ = proc.communicate()
+            while time.time() - start < BOOT_TIMEOUT:
+                r, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if r:
+                    try:
+                        chunk = os.read(fd, 4096)
+                    except BlockingIOError:
+                        chunk = b''
+                    if chunk:
+                        output += chunk.decode('utf-8', errors='replace')
+                        if '[NVME] OK:' in output:
+                            found = True
+                            break
+                if proc.poll() is not None:
+                    break
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
-        output = stdout.decode('utf-8', errors='replace')
-        lines  = [l for l in strip_ansi(output).splitlines()
-                  if l.startswith('[')]
-
-        nvme_ok = any('[NVME] OK:' in l for l in lines)
-        if nvme_ok:
+        if found:
             print('PASS: [NVME] OK: found in serial output')
             sys.exit(0)
         else:
+            lines = [l for l in strip_ansi(output).splitlines()
+                     if l.startswith('[')]
             print('FAIL: [NVME] OK: not found in serial output')
             print('--- kernel lines ---')
             for l in lines:
