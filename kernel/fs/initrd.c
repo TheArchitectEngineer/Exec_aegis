@@ -72,6 +72,10 @@ extern const unsigned char oksh_elf[];
 extern const unsigned int  oksh_elf_len;
 extern const unsigned char login_elf[];
 extern const unsigned int  login_elf_len;
+extern const unsigned char vigil_elf[];
+extern const unsigned int  vigil_elf_len;
+extern const unsigned char vigictl_elf[];
+extern const unsigned int  vigictl_elf_len;
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -104,14 +108,16 @@ static const initrd_entry_t s_files[] = {
     { "/bin/mv",     (const char *)mv_elf,        &mv_elf_len        },
     { "/bin/whoami", (const char *)whoami_elf,   &whoami_elf_len    },
     { "/bin/oksh",   (const char *)oksh_elf,     &oksh_elf_len      },
-    { "/bin/login",  (const char *)login_elf,    &login_elf_len     },
+    { "/bin/login",   (const char *)login_elf,    &login_elf_len     },
+    { "/bin/vigil",   (const char *)vigil_elf,   &vigil_elf_len   },
+    { "/bin/vigictl", (const char *)vigictl_elf, &vigictl_elf_len },
     { "/etc/passwd",  s_passwd,                   &s_passwd_size  },
     { "/etc/shadow",  s_shadow,                   &s_shadow_size  },
     { "/etc/profile", s_profile,                  &s_profile_size },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
-static const uint32_t s_nfiles = 24;
+static const uint32_t s_nfiles = 26;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -208,6 +214,7 @@ static const dir_entry_t s_bin_entries[] = {
     { "false",  8 }, { "wc",     8 }, { "grep",   8 }, { "sort",   8 },
     { "mkdir",  8 }, { "touch",  8 }, { "rm",     8 }, { "cp",     8 },
     { "mv",     8 }, { "whoami", 8 }, { "oksh",   8 }, { "login",  8 },
+    { "vigil",  8 }, { "vigictl", 8 },
     { (const char *)0, 0 }
 };
 

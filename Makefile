@@ -52,6 +52,8 @@ else ifeq ($(INIT),oksh)
 INIT_ELF_SRC = user/oksh/oksh.elf
 else ifeq ($(INIT),login)
 INIT_ELF_SRC = user/login/login.elf
+else ifeq ($(INIT),vigil)
+INIT_ELF_SRC = user/vigil/vigil
 else
 INIT_ELF_SRC = user/hello/hello.elf
 endif
@@ -156,7 +158,9 @@ PROG_BIN_SRCS = \
     kernel/mv_bin.c \
     kernel/whoami_bin.c \
     kernel/oksh_bin.c \
-    kernel/login_bin.c
+    kernel/login_bin.c \
+    kernel/vigil_bin.c \
+    kernel/vigictl_bin.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -216,7 +220,7 @@ $(INIT_BIN_C): $(INIT_STAMP) $(INIT_ELF_SRC)
 	@ELF=$(notdir $(INIT_ELF_SRC)); \
 	 NAME=$$(basename $$ELF .elf); \
 	 cd $(dir $(INIT_ELF_SRC)) && xxd -i $$ELF | \
-	 sed "s/$${NAME}_elf/init_elf/g" > ../../$(INIT_BIN_C) && \
+	 sed "s/$${NAME}_elf/init_elf/g; s/unsigned char $${NAME}\b/unsigned char init_elf/g; s/unsigned int $${NAME}_len/unsigned int init_elf_len/g" > ../../$(INIT_BIN_C) && \
 	 echo "const char init_name[] = \"$$NAME\";" >> ../../$(INIT_BIN_C)
 
 # ── Program ELF binaries ──────────────────────────────────────────────────────
@@ -276,6 +280,12 @@ user/oksh/oksh.elf:
 
 user/login/login.elf:
 	$(MAKE) -C user/login
+
+user/vigil/vigil:
+	$(MAKE) -C user/vigil
+
+user/vigictl/vigictl:
+	$(MAKE) -C user/vigictl
 
 # ── Program binary C arrays ───────────────────────────────────────────────────
 kernel/shell_bin.c: user/shell/shell.elf
@@ -344,6 +354,16 @@ kernel/oksh_bin.c: user/oksh/oksh.elf
 
 kernel/login_bin.c: user/login/login.elf
 	cd user/login && xxd -i login.elf > ../../kernel/login_bin.c
+
+kernel/vigil_bin.c: user/vigil/vigil
+	cd user/vigil && xxd -i vigil | \
+	  sed 's/unsigned char vigil/unsigned char vigil_elf/g; s/unsigned int vigil_len/unsigned int vigil_elf_len/g' \
+	  > ../../kernel/vigil_bin.c
+
+kernel/vigictl_bin.c: user/vigictl/vigictl
+	cd user/vigictl && xxd -i vigictl | \
+	  sed 's/unsigned char vigictl/unsigned char vigictl_elf/g; s/unsigned int vigictl_len/unsigned int vigictl_elf_len/g' \
+	  > ../../kernel/vigictl_bin.c
 
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
