@@ -118,6 +118,7 @@ uint64_t sys_fork(syscall_frame_t *frame);
 uint64_t sys_waitpid(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_execve(syscall_frame_t *frame,
                     uint64_t a1, uint64_t a2, uint64_t a3);
+uint64_t sys_cap_grant_exec(uint64_t kind, uint64_t rights);
 
 /* ── sys_file.c ─────────────────────────────────────────────────────────── */
 uint64_t sys_open(uint64_t a1, uint64_t a2, uint64_t a3);
