@@ -124,7 +124,8 @@ FS_SRCS = \
     kernel/fs/gpt.c \
     kernel/fs/ext2.c \
     kernel/fs/ext2_cache.c \
-    kernel/fs/ext2_dir.c
+    kernel/fs/ext2_dir.c \
+    kernel/fs/ramfs.c \
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
