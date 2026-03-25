@@ -23,6 +23,11 @@ int vga_available = 0;
 static int s_row = 0;
 static int s_col = 0;
 
+/* ANSI CSI escape-sequence state machine — mirrors fb.c. */
+static int  s_esc_state = 0;
+static char s_esc_buf[16];
+static int  s_esc_len   = 0;
+
 /* vga_cell — encode a character + attribute as a 16-bit VGA cell. */
 static inline uint16_t
 vga_cell(char c, uint8_t attr)
@@ -39,6 +44,43 @@ vga_set_cursor(int row, int col)
     uint16_t pos = (uint16_t)(row * VGA_COLS + col);
     outb(0x3D4, 0x0F); outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E); outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+static void
+_vga_clear_screen(void)
+{
+    volatile uint16_t *vga = (volatile uint16_t *)VGA_PHYS;
+    int i;
+    for (i = 0; i < VGA_ROWS * VGA_COLS; i++)
+        vga[i] = vga_cell(' ', VGA_ATTR);
+    s_row = 0;
+    s_col = 0;
+    if (vga_available)
+        vga_set_cursor(0, 0);
+}
+
+static void
+_vga_dispatch_csi(char cmd)
+{
+    if (cmd == 'J') {
+        if (s_esc_len == 1 && s_esc_buf[0] == '2')
+            _vga_clear_screen();
+    } else if (cmd == 'H' || cmd == 'f') {
+        int row = 0, col = 0, i = 0;
+        while (i < s_esc_len && s_esc_buf[i] >= '0' && s_esc_buf[i] <= '9')
+            row = row * 10 + (s_esc_buf[i++] - '0');
+        if (row > 0) row--;
+        if (i < s_esc_len && s_esc_buf[i] == ';') {
+            i++;
+            while (i < s_esc_len && s_esc_buf[i] >= '0' && s_esc_buf[i] <= '9')
+                col = col * 10 + (s_esc_buf[i++] - '0');
+            if (col > 0) col--;
+        }
+        s_row = (row < VGA_ROWS) ? row : VGA_ROWS - 1;
+        s_col = (col < VGA_COLS) ? col : VGA_COLS - 1;
+        if (vga_available)
+            vga_set_cursor(s_row, s_col);
+    }
 }
 
 /* vga_scroll — shift rows 1-24 up to rows 0-23, clear the bottom row. */
@@ -69,6 +111,36 @@ vga_putchar(char c)
      */
     uint64_t flags;
     __asm__ volatile ("pushfq; cli; popq %0" : "=r"(flags) : : "memory");
+
+    /* ANSI CSI state machine */
+    if (s_esc_state == 1) {
+        if (c == '[') {
+            s_esc_state = 2;
+            s_esc_len   = 0;
+        } else {
+            s_esc_state = 0;
+        }
+        __asm__ volatile ("pushq %0; popfq" : : "r"(flags) : "memory");
+        return;
+    }
+    if (s_esc_state == 2) {
+        if ((c >= '0' && c <= '9') || c == ';') {
+            if (s_esc_len < 15)
+                s_esc_buf[s_esc_len++] = c;
+            __asm__ volatile ("pushq %0; popfq" : : "r"(flags) : "memory");
+            return;
+        }
+        s_esc_state          = 0;
+        s_esc_buf[s_esc_len] = '\0';
+        _vga_dispatch_csi(c);
+        __asm__ volatile ("pushq %0; popfq" : : "r"(flags) : "memory");
+        return;
+    }
+    if (c == '\033') {
+        s_esc_state = 1;
+        __asm__ volatile ("pushq %0; popfq" : : "r"(flags) : "memory");
+        return;
+    }
 
     volatile uint16_t *vga = (volatile uint16_t *)VGA_PHYS;
 
