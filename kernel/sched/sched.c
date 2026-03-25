@@ -154,15 +154,25 @@ sched_exit(void)
         /* Mark self zombie — stays in run queue until waitpid reaps. */
         s_current->state = TASK_ZOMBIE;
 
-        /* Wake blocked parent waiting for this child, if any. */
+        /* Notify parent of child exit via SIGCHLD.
+         * signal_send_pid sets SIGCHLD pending on the parent and calls
+         * sched_wake() if the parent is TASK_BLOCKED (sigsuspend path or
+         * blocking waitpid path), transitioning it to TASK_RUNNING.
+         * Must run before the woken_parent scan so the scan finds the
+         * parent in TASK_RUNNING state. */
+        if (dying->ppid != 0)
+            signal_send_pid(dying->ppid, SIGCHLD);
+
+        /* Find parent for direct ctx_switch (avoids PIT dependency).
+         * signal_send_pid may have transitioned the parent BLOCKED→RUNNING;
+         * check TASK_RUNNING here. */
         aegis_task_t *woken_parent = (void *)0;
         aegis_task_t *t = s_current->next;
         while (t != s_current) {
-            if (t->is_user && t->state == TASK_BLOCKED) {
+            if (t->is_user && t->state == TASK_RUNNING) {
                 aegis_process_t *p = (aegis_process_t *)t;
                 if (p->pid == dying->ppid &&
                     (t->waiting_for == 0 || t->waiting_for == dying->pid)) {
-                    sched_wake(t);
                     woken_parent = t;
                     break;
                 }

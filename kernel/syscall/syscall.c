@@ -31,6 +31,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 13: return sys_rt_sigaction(arg1, arg2, arg3, arg4);
     case 14: return sys_rt_sigprocmask(arg1, arg2, arg3, arg4);
     case 15: return sys_rt_sigreturn(frame);
+    case 130: return sys_rt_sigsuspend(arg1, arg2);
     case 20: return sys_writev(arg1, arg2, arg3);
     case 39: return sys_getpid();
     case 57: return sys_fork(frame);
