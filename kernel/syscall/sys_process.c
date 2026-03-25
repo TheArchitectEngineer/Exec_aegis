@@ -145,6 +145,8 @@ sys_fork(syscall_frame_t *frame)
     child->pid             = proc_alloc_pid();
     child->ppid            = parent->pid;
     child->pgid            = parent->pgid;
+    child->uid             = parent->uid;
+    child->gid             = parent->gid;
     child->umask           = parent->umask;
     child->stop_signum     = 0;
     child->exit_status     = 0;
@@ -730,5 +732,29 @@ sys_getrlimit(uint64_t resource, uint64_t rlim_ptr)
         return (uint64_t)-(int64_t)14; /* EFAULT */
     uint64_t inf[2] = { ~0ULL, ~0ULL };
     copy_to_user((void *)(uintptr_t)rlim_ptr, inf, 16);
+    return 0;
+}
+
+/*
+ * sys_uname — syscall 63
+ * arg1 = user pointer to struct utsname (6 x 65-byte char arrays).
+ * Returns kernel identity strings; oksh uses these for $HOSTNAME and PS1.
+ */
+uint64_t
+sys_uname(uint64_t buf_uptr)
+{
+    /* struct utsname: sysname[65] nodename[65] release[65]
+     *                 version[65] machine[65] domainname[65] */
+    char uts[6 * 65];
+    if (!user_ptr_valid(buf_uptr, sizeof(uts)))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+    __builtin_memset(uts, 0, sizeof(uts));
+    __builtin_memcpy(uts + 0*65,  "Aegis",   5); /* sysname    */
+    __builtin_memcpy(uts + 1*65,  "aegis",   5); /* nodename   */
+    __builtin_memcpy(uts + 2*65,  "1.0.0",   5); /* release    */
+    __builtin_memcpy(uts + 3*65,  "#1",      2); /* version    */
+    __builtin_memcpy(uts + 4*65,  "x86_64",  6); /* machine    */
+    __builtin_memcpy(uts + 5*65,  "(none)",  6); /* domainname */
+    copy_to_user((void *)(uintptr_t)buf_uptr, uts, sizeof(uts));
     return 0;
 }
