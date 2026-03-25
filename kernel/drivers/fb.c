@@ -299,6 +299,12 @@ static uint32_t           s_rows     = 0;
 static uint32_t           s_col      = 0;
 static uint32_t           s_row      = 0;
 
+/* ANSI CSI escape-sequence state machine.
+ * Handles the two sequences emitted by /bin/clear: \033[2J and \033[H. */
+static int  s_esc_state = 0;    /* 0=normal 1=saw_ESC 2=in_CSI */
+static char s_esc_buf[16];
+static int  s_esc_len   = 0;
+
 #define FB_FG  0x00FFFFFFu
 #define FB_BG  0x00000000u
 
@@ -413,10 +419,78 @@ fb_init(void)
     printk("[FB] OK: %ux%ux%u\n", info.width, info.height, (uint32_t)info.bpp);
 }
 
+static void
+_fb_clear_screen(void)
+{
+    uint32_t total_px = s_pitch_px * s_rows * 16u;
+    __builtin_memset((uint32_t *)s_fb_va, 0, total_px * sizeof(uint32_t));
+    if (s_shadow)
+        __builtin_memset(s_shadow, 0, total_px * sizeof(uint32_t));
+    s_row = 0;
+    s_col = 0;
+}
+
+/* _fb_dispatch_csi — called when a CSI sequence final-byte is received.
+ * s_esc_buf[0..s_esc_len-1] holds the parameter string; cmd is the
+ * final byte ('J', 'H', 'K', …). */
+static void
+_fb_dispatch_csi(char cmd)
+{
+    if (cmd == 'J') {
+        /* Erase in display.  Only param=2 (whole screen) is handled. */
+        if (s_esc_len == 1 && s_esc_buf[0] == '2')
+            _fb_clear_screen();
+        /* params 0, 1, or anything else: no-op for now */
+    } else if (cmd == 'H' || cmd == 'f') {
+        /* Cursor position: \033[row;colH (1-indexed, defaults to 1). */
+        uint32_t row = 0, col = 0;
+        int i = 0;
+        /* Parse first number (row) */
+        while (i < s_esc_len && s_esc_buf[i] >= '0' && s_esc_buf[i] <= '9')
+            row = row * 10u + (uint32_t)(s_esc_buf[i++] - '0');
+        if (row > 0) row--;  /* convert 1-indexed to 0-indexed */
+        if (i < s_esc_len && s_esc_buf[i] == ';') {
+            i++;
+            while (i < s_esc_len && s_esc_buf[i] >= '0' && s_esc_buf[i] <= '9')
+                col = col * 10u + (uint32_t)(s_esc_buf[i++] - '0');
+            if (col > 0) col--;
+        }
+        s_row = (row < s_rows) ? row : s_rows - 1u;
+        s_col = (col < s_cols) ? col : s_cols - 1u;
+    }
+    /* All other sequences are silently ignored. */
+}
+
 void
 fb_putchar(char c)
 {
     if (!fb_available) return;
+
+    /* ANSI CSI state machine */
+    if (s_esc_state == 1) {
+        if (c == '[') {
+            s_esc_state = 2;
+            s_esc_len   = 0;
+        } else {
+            s_esc_state = 0;
+        }
+        return;
+    }
+    if (s_esc_state == 2) {
+        if ((c >= '0' && c <= '9') || c == ';') {
+            if (s_esc_len < 15)
+                s_esc_buf[s_esc_len++] = c;
+            return;
+        }
+        s_esc_state     = 0;
+        s_esc_buf[s_esc_len] = '\0';
+        _fb_dispatch_csi(c);
+        return;
+    }
+    if (c == '\033') {
+        s_esc_state = 1;
+        return;
+    }
 
     if (c == '\n') {
         s_col = 0;
