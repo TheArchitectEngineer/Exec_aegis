@@ -749,3 +749,37 @@ sys_rename(uint64_t arg1, uint64_t arg2)
     int r = ext2_rename(kold, knew);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }
+
+/*
+ * sys_sync — syscall 162
+ *
+ * Flush all dirty ext2 blocks to disk.
+ * Matches POSIX sync(2): no arguments, no return value besides 0.
+ */
+uint64_t
+sys_sync(void)
+{
+    ext2_sync();
+    return 0;
+}
+
+/*
+ * sys_clock_gettime — syscall 228
+ *
+ * arg1 = clk_id  (CLOCK_REALTIME=0, CLOCK_MONOTONIC=1; both return PIT ticks)
+ * arg2 = user pointer to struct timespec { int64_t tv_sec; int64_t tv_nsec; }
+ *
+ * Returns 0 on success, negative errno on failure.
+ */
+uint64_t
+sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr)
+{
+    if (clk_id != 0 && clk_id != 1) return (uint64_t)-(int64_t)22; /* EINVAL */
+    if (!user_ptr_valid(timespec_uptr, 16)) return (uint64_t)-(int64_t)14; /* EFAULT */
+    uint64_t ticks = arch_get_ticks();
+    int64_t tv_sec  = (int64_t)(ticks / 100ULL);
+    int64_t tv_nsec = (int64_t)((ticks % 100ULL) * 10000000ULL);
+    copy_to_user((void *)(uintptr_t)timespec_uptr,       &tv_sec,  8);
+    copy_to_user((void *)(uintptr_t)(timespec_uptr + 8), &tv_nsec, 8);
+    return 0;
+}
