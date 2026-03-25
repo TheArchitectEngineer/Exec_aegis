@@ -77,6 +77,22 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (fd == PROC_MAX_FDS)
         return (uint64_t)-24;  /* EMFILE */
 
+    /* /etc/shadow gate: requires CAP_KIND_AUTH regardless of uid.
+     * There is no ambient root authority on Aegis — uid=0 is cosmetic.
+     * Use memcmp against the known path — no libc strcmp available. */
+    {
+        static const char shadow_path[] = "/etc/shadow";
+        int shadow_match = 1;
+        for (uint64_t si = 0; si < sizeof(shadow_path); si++) {
+            if (kpath[si] != shadow_path[si]) { shadow_match = 0; break; }
+        }
+        if (shadow_match) {
+            if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                          CAP_KIND_AUTH, CAP_RIGHTS_READ) != 0)
+                return (uint64_t)-(int64_t)13; /* EACCES */
+        }
+    }
+
     int r = vfs_open(kpath, (int)arg2, &proc->fds[fd]);
     if (r < 0)
         return (uint64_t)(int64_t)r;

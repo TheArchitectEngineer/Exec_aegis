@@ -761,14 +761,14 @@ sys_uname(uint64_t buf_uptr)
 
 /*
  * sys_setuid — syscall 105
- * Phase 25.6: requires proc->uid == 0.
- * Phase 25.7: gate replaced with cap_check(CAP_KIND_SETUID).
+ * Phase 25.7: gate uses CAP_KIND_SETUID — uid=0 has no ambient authority.
  */
 uint64_t
 sys_setuid(uint64_t uid_arg)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    if (proc->uid != 0)
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) != 0)
         return (uint64_t)-(int64_t)13; /* EACCES */
     proc->uid = (uint32_t)uid_arg;
     return 0;
@@ -776,12 +776,14 @@ sys_setuid(uint64_t uid_arg)
 
 /*
  * sys_setgid — syscall 106
+ * Phase 25.7: gate uses CAP_KIND_SETUID — uid=0 has no ambient authority.
  */
 uint64_t
 sys_setgid(uint64_t gid_arg)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    if (proc->uid != 0)
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_SETUID, CAP_RIGHTS_WRITE) != 0)
         return (uint64_t)-(int64_t)13; /* EACCES */
     proc->gid = (uint32_t)gid_arg;
     return 0;
