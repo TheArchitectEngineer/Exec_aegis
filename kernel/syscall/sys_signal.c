@@ -139,6 +139,49 @@ sys_rt_sigreturn(syscall_frame_t *frame)
 }
 
 /*
+ * sys_rt_sigsuspend — syscall 130
+ *
+ * arg1 = user pointer to sigset_t (uint64_t mask)
+ * arg2 = sigset size in bytes (must be 8)
+ *
+ * Atomically replaces the signal mask, blocks until a signal arrives, then
+ * restores the original mask and returns -EINTR.  If a signal is already
+ * pending and unmasked when sigsuspend is called, skips the block and returns
+ * immediately so signal_deliver_sysret can run the handler.
+ *
+ * oksh's j_waitj() uses this to wait for foreground job completion:
+ *   while (j->state == PRUNNING) sigsuspend(&sm_default);
+ * SIGCHLD delivery (from sched_exit) wakes the block; the handler
+ * j_sigchld() calls waitpid(-1, WNOHANG) and sets j->state = PEXITED.
+ */
+uint64_t
+sys_rt_sigsuspend(uint64_t arg1, uint64_t arg2)
+{
+    if (arg2 != 8) return (uint64_t)-(int64_t)22; /* EINVAL */
+    if (!user_ptr_valid(arg1, sizeof(uint64_t)))
+        return (uint64_t)-(int64_t)14; /* EFAULT */
+
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+
+    uint64_t newmask;
+    copy_from_user(&newmask, (const void *)(uintptr_t)arg1, sizeof(uint64_t));
+    /* SIGKILL and SIGSTOP cannot be masked */
+    newmask &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+
+    uint64_t old_mask = proc->signal_mask;
+    proc->signal_mask = newmask;
+
+    /* Block only if no unmasked signal is already pending. */
+    if (!(proc->pending_signals & ~newmask))
+        sched_block();
+
+    /* Restore original mask before returning — signal_deliver_sysret then
+     * fires the pending handler (e.g. j_sigchld for SIGCHLD). */
+    proc->signal_mask = old_mask;
+    return (uint64_t)-(int64_t)4; /* EINTR */
+}
+
+/*
  * sys_kill — syscall 62
  *
  * arg1 = pid (target process ID), arg2 = signum

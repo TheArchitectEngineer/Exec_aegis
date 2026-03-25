@@ -152,6 +152,7 @@ uint64_t sys_clock_gettime(uint64_t clk_id, uint64_t timespec_uptr);
 uint64_t sys_rt_sigaction(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
 uint64_t sys_rt_sigprocmask(uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4);
 uint64_t sys_rt_sigreturn(syscall_frame_t *frame);
+uint64_t sys_rt_sigsuspend(uint64_t a1, uint64_t a2);
 uint64_t sys_kill(uint64_t a1, uint64_t a2);
 uint64_t sys_setfg(uint64_t a1);
 
