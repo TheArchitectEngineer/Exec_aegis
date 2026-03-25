@@ -21,11 +21,18 @@ static const char s_profile[] =
     "PATH=/bin\n"
     "export PATH\n";
 
+/* Default vigil service config — allows vigil to find its getty service even
+ * on a disk that was built before vigil was added (or on no disk at all). */
+static const char s_vigil_run[]    = "exec /bin/login\n";
+static const char s_vigil_policy[] = "respawn\nmax_restarts=5\n";
+
 /* Compile-time size constants for static string entries. */
-static const uint32_t     s_motd_size    = sizeof(s_motd)    - 1;
-static const unsigned int s_passwd_size  = sizeof(s_passwd)  - 1;
-static const unsigned int s_shadow_size  = sizeof(s_shadow)  - 1;
-static const unsigned int s_profile_size = sizeof(s_profile) - 1;
+static const uint32_t     s_motd_size          = sizeof(s_motd)          - 1;
+static const unsigned int s_passwd_size        = sizeof(s_passwd)        - 1;
+static const unsigned int s_shadow_size        = sizeof(s_shadow)        - 1;
+static const unsigned int s_profile_size       = sizeof(s_profile)       - 1;
+static const unsigned int s_vigil_run_size     = sizeof(s_vigil_run)     - 1;
+static const unsigned int s_vigil_policy_size  = sizeof(s_vigil_policy)  - 1;
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
  * These symbols are resolved at link time; their lengths are not
@@ -114,10 +121,12 @@ static const initrd_entry_t s_files[] = {
     { "/etc/passwd",  s_passwd,                   &s_passwd_size  },
     { "/etc/shadow",  s_shadow,                   &s_shadow_size  },
     { "/etc/profile", s_profile,                  &s_profile_size },
+    { "/etc/vigil/services/getty/run",    s_vigil_run,    &s_vigil_run_size    },
+    { "/etc/vigil/services/getty/policy", s_vigil_policy, &s_vigil_policy_size },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
-static const uint32_t s_nfiles = 26;
+static const uint32_t s_nfiles = 28;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -206,7 +215,17 @@ static const dir_entry_t s_root_entries[] = {
     { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
-    { "motd", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 }, { (const char *)0, 0 }
+    { "motd", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 },
+    { "vigil", 4 }, { (const char *)0, 0 }
+};
+static const dir_entry_t s_vigil_entries[] = {
+    { "services", 4 }, { (const char *)0, 0 }
+};
+static const dir_entry_t s_vigil_services_entries[] = {
+    { "getty", 4 }, { (const char *)0, 0 }
+};
+static const dir_entry_t s_vigil_getty_entries[] = {
+    { "run", 8 }, { "policy", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_bin_entries[] = {
     { "sh",     8 }, { "ls",     8 }, { "cat",    8 }, { "echo",   8 },
@@ -279,12 +298,18 @@ initrd_open(const char *path, vfs_file_t *out)
 
     /* Check for directory paths first */
     {
-        const char *dirs[4] = { "/", "/etc", "/bin", "/dev" };
-        const dir_entry_t *dir_tables[4] = {
-            s_root_entries, s_etc_entries, s_bin_entries, s_dev_entries
+        const char *dirs[8] = {
+            "/", "/etc", "/bin", "/dev",
+            "/etc/vigil", "/etc/vigil/services", "/etc/vigil/services/getty",
+            (const char *)0
+        };
+        const dir_entry_t *dir_tables[8] = {
+            s_root_entries, s_etc_entries, s_bin_entries, s_dev_entries,
+            s_vigil_entries, s_vigil_services_entries, s_vigil_getty_entries,
+            (const dir_entry_t *)0
         };
         uint32_t d;
-        for (d = 0; d < 4; d++) {
+        for (d = 0; d < 7; d++) {
             const char *a = path, *b = dirs[d];
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a == *b) {
