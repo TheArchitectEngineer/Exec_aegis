@@ -195,6 +195,15 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         }
     }
 
+    /* Zero exec_caps — pre-registered caps that will be applied by execve. */
+    {
+        uint32_t ci;
+        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+            proc->exec_caps[ci].kind   = CAP_KIND_NULL;
+            proc->exec_caps[ci].rights = 0;
+        }
+    }
+
     proc->pid              = proc_alloc_pid();   /* 1 for init */
     proc->ppid             = 0;
     proc->uid              = 0;

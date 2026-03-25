@@ -122,8 +122,6 @@ sys_fork(syscall_frame_t *frame)
     aegis_task_t    *parent_task = sched_current();
     if (!parent_task || !parent_task->is_user) return (uint64_t)-(int64_t)1; /* EPERM */
     aegis_process_t *parent      = (aegis_process_t *)parent_task;
-
-
     /* 1. Allocate child PCB */
     aegis_process_t *child = kva_alloc_pages(1);
     if (!child)
@@ -146,6 +144,13 @@ sys_fork(syscall_frame_t *frame)
 
     for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
         child->caps[ci] = parent->caps[ci];
+
+    /* exec_caps are not inherited by fork — child starts with an empty exec_caps table */
+    for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+        child->exec_caps[ci].kind   = CAP_KIND_NULL;
+        child->exec_caps[ci].rights = 0;
+    }
+
     child->brk             = parent->brk;
     child->mmap_base       = parent->mmap_base;
     child->fs_base         = parent->fs_base;
@@ -403,7 +408,6 @@ sys_execve(syscall_frame_t *frame,
     (void)envp_uptr;  /* Phase 15: empty environment */
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-
     /* Allocate argv working area from kva — too large for kernel stack. */
     execve_argbuf_t *abuf = kva_alloc_pages(EXECVE_ARGBUF_PAGES);
     if (!abuf)
@@ -485,6 +489,20 @@ sys_execve(syscall_frame_t *frame,
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,  CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,  CAP_RIGHTS_READ);
+
+        /* Apply pre-registered exec caps, then zero them (consumed on exec). */
+        {
+            uint32_t ci;
+            for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+                if (proc->exec_caps[ci].kind != CAP_KIND_NULL) {
+                    cap_grant(proc->caps, CAP_TABLE_SIZE,
+                              proc->exec_caps[ci].kind,
+                              proc->exec_caps[ci].rights);
+                    proc->exec_caps[ci].kind   = CAP_KIND_NULL;
+                    proc->exec_caps[ci].rights = 0;
+                }
+            }
+        }
     }
 
     /* 6. Load new ELF */
@@ -807,5 +825,32 @@ sys_setgid(uint64_t gid_arg)
                   CAP_KIND_SETUID, CAP_RIGHTS_WRITE) != 0)
         return (uint64_t)-(int64_t)13; /* EACCES */
     proc->gid = (uint32_t)gid_arg;
+    return 0;
+}
+
+/*
+ * sys_cap_grant_exec — syscall 361
+ *
+ * Pre-registers a capability in exec_caps[].  When the calling process
+ * subsequently calls sys_execve, the exec_caps are applied to the new
+ * image's cap table after the baseline (VFS_OPEN/READ/WRITE) is set,
+ * then exec_caps[] is zeroed.  Allows a parent to delegate extra caps
+ * (e.g. CAP_KIND_AUTH) to a child that will exec a service binary.
+ *
+ * Requires: CAP_KIND_CAP_GRANT with CAP_RIGHTS_READ in caller's cap table.
+ */
+uint64_t
+sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_CAP_GRANT, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+    uint32_t kind   = (uint32_t)kind_arg;
+    uint32_t rights = (uint32_t)rights_arg;
+    if (kind == CAP_KIND_NULL || kind >= 16u)
+        return (uint64_t)-(int64_t)22; /* EINVAL */
+    int r = cap_grant(proc->exec_caps, CAP_TABLE_SIZE, kind, rights);
+    if (r < 0) return (uint64_t)-(int64_t)12; /* ENOMEM/table full */
     return 0;
 }
