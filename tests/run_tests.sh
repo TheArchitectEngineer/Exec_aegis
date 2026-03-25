@@ -109,3 +109,8 @@ python3 tests/test_net_stack.py || exit 1
 # Skipped automatically if build/disk.img is not present.
 echo "--- test_login ---"
 python3 tests/test_login.py
+
+# Vigil init system test — boots INIT=vigil on q35 + NVMe disk.
+# Skipped automatically if build/disk.img is not present.
+echo "--- test_vigil ---"
+python3 tests/test_vigil.py
