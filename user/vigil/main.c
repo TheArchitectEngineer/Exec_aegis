@@ -17,6 +17,10 @@
 
 typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 
+/* Cap kind constants — must match kernel/cap/cap.h */
+#define SVC_CAP_AUTH    4u
+#define SVC_CAP_RIGHTS_READ 1u
+
 typedef struct {
     char     name[64];
     char     run_cmd[256];
@@ -25,6 +29,7 @@ typedef struct {
     pid_t    pid;
     int      restarts;
     int      active;
+    int      needs_auth;   /* 1 if caps file listed AUTH */
 } service_t;
 
 static service_t s_svcs[VIGIL_MAX_SERVICES];
@@ -90,6 +95,11 @@ load_service(const char *name)
     char *p = strstr(pol, "max_restarts=");
     if (p) s->max_restarts = atoi(p + 13);
 
+    char caps_buf[128] = "";
+    snprintf(path, sizeof(path), "%s/%s/caps", VIGIL_SERVICES_DIR, name);
+    read_file(path, caps_buf, sizeof(caps_buf));
+    s->needs_auth = (strstr(caps_buf, "AUTH") != NULL);
+
     s->pid      = -1;
     s->restarts = 0;
     s->active   = 1;
@@ -103,8 +113,24 @@ start_service(service_t *s)
     if (s->pid > 0) return;
     pid_t pid = fork();
     if (pid == 0) {
-        char *argv[] = { "/bin/sh", "-c", s->run_cmd, NULL };
-        execv("/bin/sh", argv);
+        /* Grant AUTH exec_cap before exec so login can read /etc/shadow.
+         * exec_caps are zeroed on fork; the child re-registers them here.
+         * sys_cap_grant_exec (361) succeeds because the fork child inherits
+         * vigil's caps[], which include CAP_KIND_CAP_GRANT. */
+        if (s->needs_auth)
+            syscall(361, (long)SVC_CAP_AUTH, (long)SVC_CAP_RIGHTS_READ);
+
+        /* Exec the binary directly when run_cmd is an absolute path — this
+         * ensures exec_caps are applied to the target binary, not consumed
+         * by a shell intermediary.  Shell commands (metacharacters, pipes)
+         * still go through sh -c. */
+        if (s->run_cmd[0] == '/') {
+            char *argv[] = { s->run_cmd, NULL };
+            execv(s->run_cmd, argv);
+        } else {
+            char *argv[] = { "/bin/sh", "-c", s->run_cmd, NULL };
+            execv("/bin/sh", argv);
+        }
         _exit(127);
     }
     if (pid > 0) s->pid = pid;
@@ -221,11 +247,12 @@ main(void)
         service_t *s = &s_svcs[s_nsvc++];
         memset(s, 0, sizeof(*s));
         memcpy(s->name, "getty", 5);
-        memcpy(s->run_cmd, "exec /bin/login", 15);
+        memcpy(s->run_cmd, "/bin/login", 10);
         s->policy       = POLICY_RESPAWN;
         s->max_restarts = 5;
         s->pid          = -1;
         s->active       = 1;
+        s->needs_auth   = 1;
     }
 
     int i;
