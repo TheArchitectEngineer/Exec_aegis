@@ -47,6 +47,12 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 107: return sys_geteuid();
     case 108: return sys_getegid();
     case 110: return sys_getppid();
+    case  95: return sys_umask(arg1);
+    case  97: return sys_getrlimit(arg1, arg2);
+    case 109: return sys_setpgid(arg1, arg2);
+    case 111: return sys_getpgrp();
+    case 112: return sys_setsid();
+    case 121: return sys_getpgid(arg1);
     case 158: return sys_arch_prctl(arg1, arg2);
     case 218: return sys_set_tid_address(arg1);
     case 231: return sys_exit_group(arg1);
