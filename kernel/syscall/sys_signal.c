@@ -114,12 +114,18 @@ sys_rt_sigreturn(syscall_frame_t *frame)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
-    if (!user_ptr_valid(frame->user_rsp, sizeof(rt_sigframe_t))) {
+    /* musl's __restore_rt calls sys_rt_sigreturn via SYSCALL with RSP still
+     * pointing past the pretcode slot — the signal handler's `ret` already
+     * popped pretcode (8 bytes) before jumping to __restore_rt.  Linux
+     * compensates with `frame = regs->sp - sizeof(long)`.  Do the same: the
+     * actual rt_sigframe_t starts at frame->user_rsp - 8. */
+    uint64_t sigframe_addr = frame->user_rsp - sizeof(uint64_t);
+    if (!user_ptr_valid(sigframe_addr, sizeof(rt_sigframe_t))) {
         sched_exit(); /* signal frame corrupted — terminate */
         __builtin_unreachable();
     }
     rt_sigframe_t sf;
-    copy_from_user(&sf, (const void *)(uintptr_t)frame->user_rsp,
+    copy_from_user(&sf, (const void *)(uintptr_t)sigframe_addr,
                    sizeof(sf));
 
     /* Restore interrupted execution context into sysret frame slots */
