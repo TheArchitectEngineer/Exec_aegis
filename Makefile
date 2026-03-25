@@ -398,6 +398,16 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'write /tmp/aegis-passwd /etc/passwd\nwrite /tmp/aegis-shadow /etc/shadow\nwrite /tmp/aegis-group /etc/group\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	rm -f /tmp/aegis-passwd /tmp/aegis-shadow /tmp/aegis-group
+	# Vigil init directories and service declarations
+	printf 'mkdir /var\nmkdir /run\nmkdir /etc/vigil\nmkdir /etc/vigil/services\nmkdir /etc/vigil/services/getty\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	printf 'exec /bin/login\n' > /tmp/aegis-vigil-run
+	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-vigil-policy
+	printf 'VFS_OPEN VFS_READ VFS_WRITE AUTH\n' > /tmp/aegis-vigil-caps
+	printf 'root\n' > /tmp/aegis-vigil-user
+	printf 'write /tmp/aegis-vigil-run /etc/vigil/services/getty/run\nwrite /tmp/aegis-vigil-policy /etc/vigil/services/getty/policy\nwrite /tmp/aegis-vigil-caps /etc/vigil/services/getty/caps\nwrite /tmp/aegis-vigil-user /etc/vigil/services/getty/user\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	rm -f /tmp/aegis-vigil-run /tmp/aegis-vigil-policy /tmp/aegis-vigil-caps /tmp/aegis-vigil-user
 	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"
