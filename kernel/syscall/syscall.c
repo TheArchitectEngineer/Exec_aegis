@@ -65,6 +65,8 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  83: return sys_mkdir(arg1, arg2);
     case  87: return sys_unlink(arg1);
     case 257: return sys_openat(arg1, arg2, arg3, arg4);
+    case 162: return sys_sync();
+    case 228: return sys_clock_gettime(arg1, arg2);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

@@ -13,6 +13,10 @@ sys_exit(uint64_t arg1)
     if (sched_current()->is_user) {
         aegis_process_t *proc = (aegis_process_t *)sched_current();
         proc->exit_status = arg1 & 0xFF;
+        if (proc->pid == 1) {
+            printk("[INIT] PID 1 exited with status %d — halting\n", (int)(int64_t)arg1);
+            arch_request_shutdown();
+        }
     }
     sched_exit();
     __builtin_unreachable();
@@ -27,6 +31,10 @@ uint64_t sys_exit_group(uint64_t arg1)
     if (sched_current()->is_user) {
         aegis_process_t *proc = (aegis_process_t *)sched_current();
         proc->exit_status = arg1 & 0xFF;
+        if (proc->pid == 1) {
+            printk("[INIT] PID 1 exited with status %d — halting\n", (int)(int64_t)arg1);
+            arch_request_shutdown();
+        }
     }
     sched_exit();
     __builtin_unreachable();
