@@ -21,6 +21,8 @@ typedef struct {
 #define CAP_KIND_AUTH      4u   /* may open /etc/shadow for reading */
 #define CAP_KIND_CAP_GRANT 5u   /* may delegate caps to child processes (reserved) */
 #define CAP_KIND_SETUID    6u   /* may call sys_setuid / sys_setgid */
+#define CAP_KIND_NET_SOCKET 7u   /* may call sys_socket / socket syscalls */
+#define CAP_KIND_NET_ADMIN  8u   /* may call sys_netcfg (set IP/mask/gw) */
 
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)

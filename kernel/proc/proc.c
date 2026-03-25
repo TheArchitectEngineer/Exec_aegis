@@ -222,7 +222,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 
     /* Grant initial capabilities to this user process.
      * cap_grant returns the slot index (>= 0) on success or -ENOCAP if the
-     * table is full. With CAP_TABLE_SIZE = 8 and two grants, this cannot fail. */
+     * table is full. With CAP_TABLE_SIZE = 16 and 8 grants, this cannot fail. */
 
     /* Grant open capability. */
     if (cap_grant(proc->caps, CAP_TABLE_SIZE,
@@ -266,6 +266,20 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         for (;;) {}
     }
 
+    /* Grant network socket capability — required for sys_socket. */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ) < 0) {
+        printk("[CAP] FAIL: cap_grant NET_SOCKET returned -ENOCAP\n");
+        for (;;) {}
+    }
+
+    /* Grant network admin capability — required for sys_netcfg (DHCP daemon). */
+    if (cap_grant(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_NET_ADMIN, CAP_RIGHTS_WRITE) < 0) {
+        printk("[CAP] FAIL: cap_grant NET_ADMIN returned -ENOCAP\n");
+        for (;;) {}
+    }
+
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
     proc->fds[1] = *console_open();
@@ -291,7 +305,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * pgid and sends itself SIGTTIN repeatedly. */
     kbd_set_tty_pgrp(proc->pgid);
 
-    printk("[CAP] OK: 6 capabilities granted to init\n");
+    printk("[CAP] OK: 8 capabilities granted to init\n");
 
     sched_add(&proc->task);
 }

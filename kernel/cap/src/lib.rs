@@ -17,7 +17,7 @@ pub struct CapSlot {
 const ENOCAP: u32 = 130;
 
 /* Must match CAP_TABLE_SIZE in kernel/cap/cap.h */
-const CAP_TABLE_SIZE: u32 = 8;
+const CAP_TABLE_SIZE: u32 = 16;
 
 /// Initialize the capability subsystem.
 ///
