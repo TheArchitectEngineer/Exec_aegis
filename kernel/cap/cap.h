@@ -18,6 +18,9 @@ typedef struct {
 #define CAP_KIND_VFS_OPEN  1u   /* permission to call sys_open */
 #define CAP_KIND_VFS_WRITE 2u   /* permission to call sys_write */
 #define CAP_KIND_VFS_READ  3u   /* permission to call sys_read */
+#define CAP_KIND_AUTH      4u   /* may open /etc/shadow for reading */
+#define CAP_KIND_CAP_GRANT 5u   /* may delegate caps to child processes (reserved) */
+#define CAP_KIND_SETUID    6u   /* may call sys_setuid / sys_setgid */
 
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)
