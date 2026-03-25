@@ -120,7 +120,9 @@ int ext2_unlink(const char *path);
 int ext2_mkdir(const char *path, uint16_t mode);
 int ext2_rename(const char *old_path, const char *new_path);
 int ext2_file_size(uint32_t inode_num);
-int ext2_readdir(uint32_t dir_inode, void *buf, uint32_t buf_size);
+int ext2_readdir(uint32_t dir_inode, uint64_t index,
+                 char *name_out, uint8_t *type_out);
+int ext2_is_dir(uint32_t ino);
 
 /* Flush all dirty cache slots to disk */
 void ext2_sync(void);

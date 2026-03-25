@@ -131,6 +131,14 @@ ext2_vfs_dup_fn(void *priv)
 }
 
 static int
+ext2_vfs_readdir_fn(void *priv, uint64_t index,
+                    char *name_out, uint8_t *type_out)
+{
+    ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
+    return ext2_readdir(p->ino, index, name_out, type_out);
+}
+
+static int
 ext2_vfs_stat_fn(void *priv, k_stat_t *st)
 {
     ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
@@ -140,7 +148,10 @@ ext2_vfs_stat_fn(void *priv, k_stat_t *st)
     st->st_dev     = 2;           /* device 2 = nvme0 */
     st->st_ino     = (uint64_t)p->ino;
     st->st_nlink   = 1;
-    st->st_mode    = S_IFREG | 0644;
+    if (ext2_is_dir(p->ino))
+        st->st_mode = S_IFDIR | 0755;
+    else
+        st->st_mode = S_IFREG | 0644;
     st->st_size    = (int64_t)sz;
     st->st_blksize = 4096;
     st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
@@ -151,7 +162,7 @@ static const vfs_ops_t s_ext2_ops = {
     .read    = ext2_vfs_read_fn,
     .write   = ext2_vfs_write_fn,
     .close   = ext2_vfs_close_fn,
-    .readdir = (void *)0,
+    .readdir = ext2_vfs_readdir_fn,
     .dup     = ext2_vfs_dup_fn,
     .stat    = ext2_vfs_stat_fn,
 };
@@ -284,7 +295,10 @@ vfs_stat_path(const char *path, k_stat_t *out)
             out->st_dev     = 2;
             out->st_ino     = (uint64_t)ino;
             out->st_nlink   = 1;
-            out->st_mode    = S_IFREG | 0644;
+            if (ext2_is_dir(ino))
+                out->st_mode = S_IFDIR | 0755;
+            else
+                out->st_mode = S_IFREG | 0644;
             out->st_size    = (int64_t)sz;
             out->st_blksize = 4096;
             out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
