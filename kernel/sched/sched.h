@@ -6,6 +6,7 @@
 #define TASK_RUNNING  0U
 #define TASK_BLOCKED  1U
 #define TASK_ZOMBIE   2U
+#define TASK_STOPPED  3U
 
 typedef struct aegis_task_t {
     uint64_t             rsp;              /* MUST be first — ctx_switch reads [rdi+0] */
@@ -57,6 +58,19 @@ void sched_block(void);
  * Inserts before s_current so the woken task runs next tick.
  * Called from sched_exit when the parent is found waiting. IF=0. */
 void sched_wake(aegis_task_t *task);
+
+/* sched_stop — transition a task to TASK_STOPPED.
+ * If task == sched_current() (self-stop): mirrors sched_block exactly —
+ * sets state, advances s_current to next TASK_RUNNING, updates TSS/FS.base,
+ * calls ctx_switch. Execution resumes when SIGCONT calls sched_resume and
+ * sched_tick next schedules this task.
+ * If task != sched_current(): sets task->state = TASK_STOPPED only;
+ * sched_tick will skip it on next preemption. Must be called with IF=0. */
+void sched_stop(aegis_task_t *task);
+
+/* sched_resume — transition TASK_STOPPED (or TASK_BLOCKED) back to TASK_RUNNING.
+ * Mirrors sched_wake: task->state = TASK_RUNNING. No list re-insertion needed. */
+void sched_resume(aegis_task_t *task);
 
 /* sched_yield_to_next — advance s_current to the next RUNNING task
  * and ctx_switch. Used by the zombie path in sched_exit.
