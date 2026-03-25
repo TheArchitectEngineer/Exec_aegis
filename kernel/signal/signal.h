@@ -80,9 +80,11 @@ _Static_assert(sizeof(k_sigaction_t) == 32, "k_sigaction_t must be 32 bytes (mus
  *   offset 440: _pad[120]    (120)  — pad sigset_t to 128 bytes
  *   total: 560 bytes
  *
- * musl's __restore_rt calls sys_rt_sigreturn (syscall 15) with RSP pointing
- * at the pretcode slot (offset 0). sys_rt_sigreturn reads the frame from
- * frame->user_rsp (the user stack pointer saved at syscall entry).
+ * musl's __restore_rt calls sys_rt_sigreturn (syscall 15) after the signal
+ * handler returns via `ret`, which pops pretcode from the stack.  RSP at
+ * SYSCALL time is therefore new_rsp+8 (past pretcode).  sys_rt_sigreturn
+ * recovers the frame base by subtracting 8 (sizeof pretcode), matching
+ * the Linux kernel: frame = regs->sp - sizeof(long).
  */
 typedef struct {
     uint64_t pretcode;              /* 0:   &__restore_rt (sa_restorer) */
