@@ -22,9 +22,12 @@ static const char s_profile[] =
     "export PATH\n";
 
 /* Default vigil service config — allows vigil to find its getty service even
- * on a disk that was built before vigil was added (or on no disk at all). */
-static const char s_vigil_run[]    = "exec /bin/login\n";
+ * on a disk that was built before vigil was added (or on no disk at all).
+ * run: direct path so start_service execs login without a shell intermediary,
+ * ensuring exec_caps (AUTH) are applied to login, not consumed by sh. */
+static const char s_vigil_run[]    = "/bin/login\n";
 static const char s_vigil_policy[] = "respawn\nmax_restarts=5\n";
+static const char s_vigil_caps[]   = "AUTH\n";
 
 /* Compile-time size constants for static string entries. */
 static const uint32_t     s_motd_size          = sizeof(s_motd)          - 1;
@@ -33,6 +36,7 @@ static const unsigned int s_shadow_size        = sizeof(s_shadow)        - 1;
 static const unsigned int s_profile_size       = sizeof(s_profile)       - 1;
 static const unsigned int s_vigil_run_size     = sizeof(s_vigil_run)     - 1;
 static const unsigned int s_vigil_policy_size  = sizeof(s_vigil_policy)  - 1;
+static const unsigned int s_vigil_caps_size    = sizeof(s_vigil_caps)    - 1;
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
  * These symbols are resolved at link time; their lengths are not
@@ -123,10 +127,11 @@ static const initrd_entry_t s_files[] = {
     { "/etc/profile", s_profile,                  &s_profile_size },
     { "/etc/vigil/services/getty/run",    s_vigil_run,    &s_vigil_run_size    },
     { "/etc/vigil/services/getty/policy", s_vigil_policy, &s_vigil_policy_size },
+    { "/etc/vigil/services/getty/caps",   s_vigil_caps,   &s_vigil_caps_size   },
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
-static const uint32_t s_nfiles = 28;
+static const uint32_t s_nfiles = 29;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -225,7 +230,7 @@ static const dir_entry_t s_vigil_services_entries[] = {
     { "getty", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_vigil_getty_entries[] = {
-    { "run", 8 }, { "policy", 8 }, { (const char *)0, 0 }
+    { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_bin_entries[] = {
     { "sh",     8 }, { "ls",     8 }, { "cat",    8 }, { "echo",   8 },
