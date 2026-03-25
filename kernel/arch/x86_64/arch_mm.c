@@ -64,6 +64,16 @@ static uint64_t s_rsdp_v1_phys = 0;   /* ACPI 1.0 RSDP (type-14 tag) */
 static uint64_t s_rsdp_v2_phys = 0;   /* ACPI 2.0+ RSDP (type-15 tag) */
 static arch_fb_info_t s_fb_info;       /* zeroed at startup; addr==0 means absent */
 
+/* Two static entries: first 1MB + multiboot2 info region.
+ * Slot [1] is filled in arch_mm_init once mb_info address is known.
+ * GRUB may place the multiboot2 info above 1MB (in allocatable RAM), so
+ * we must reserve those pages before the PMM marks them free.
+ * If mb_info is already below 1MB the slot [1] has len=0 and is a no-op. */
+static aegis_mem_region_t x86_reserved[2] = {
+    { 0x0UL, 0x100000UL },  /* first 1MB: BIOS data, VGA hole, ISA ROMs */
+    { 0x0UL, 0x0UL },       /* multiboot2 info — filled by arch_mm_init */
+};
+
 void arch_mm_init(void *mb_info)
 {
     /* SAFETY: mb_info is a physical address equal to the virtual address
@@ -72,6 +82,12 @@ void arch_mm_init(void *mb_info)
     const mb2_info_t *info = (const mb2_info_t *)mb_info;
     const uint8_t *p   = (const uint8_t *)mb_info + sizeof(mb2_info_t);
     const uint8_t *end = (const uint8_t *)mb_info + info->total_size;
+
+    /* Reserve the multiboot2 info structure so the PMM never reuses its pages.
+     * GRUB may place this above 1MB; the inline RSDP (used by acpi_init) would
+     * be silently corrupted if a PMM allocation overwrote those pages. */
+    x86_reserved[1].base = (uint64_t)(uintptr_t)mb_info;
+    x86_reserved[1].len  = info->total_size;
 
     while (p < end) {
         const mb2_tag_t *tag = (const mb2_tag_t *)p;
@@ -143,9 +159,6 @@ const aegis_mem_region_t *arch_mm_get_regions(void)
  * ARM64's arch_mm.c returns a different (or empty) table.
  * -------------------------------------------------------------------------- */
 
-static const aegis_mem_region_t x86_reserved[] = {
-    { 0x0UL, 0x100000UL },  /* first 1MB: BIOS data, VGA hole, ISA ROMs */
-};
 
 uint32_t arch_mm_reserved_region_count(void)
 {

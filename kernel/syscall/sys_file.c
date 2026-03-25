@@ -39,6 +39,30 @@ sys_open(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         }
         kpath[255] = '\0';
     }
+    /* Resolve relative paths against proc->cwd.
+     * "."       → cwd itself (e.g. "/")
+     * "bin"     → cwd + "/" + "bin" (e.g. "/bin")
+     * Absolute paths (start with '/') pass through unchanged. */
+    if (kpath[0] != '/') {
+        char resolved[256];
+        uint64_t cwdlen = 0;
+        while (proc->cwd[cwdlen]) cwdlen++;
+        if (kpath[0] == '.' && kpath[1] == '\0') {
+            /* "." — use cwd directly */
+            __builtin_memcpy(resolved, proc->cwd, cwdlen + 1);
+        } else {
+            uint64_t pathlen = 0;
+            while (kpath[pathlen]) pathlen++;
+            /* Insert separator unless cwd already ends with '/' */
+            uint64_t sep = (cwdlen > 0 && proc->cwd[cwdlen - 1] == '/') ? 0u : 1u;
+            if (cwdlen + sep + pathlen >= 256)
+                return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+            __builtin_memcpy(resolved, proc->cwd, cwdlen);
+            if (sep) resolved[cwdlen] = '/';
+            __builtin_memcpy(resolved + cwdlen + sep, kpath, pathlen + 1);
+        }
+        __builtin_memcpy(kpath, resolved, sizeof(kpath));
+    }
     uint64_t fd;
     for (fd = 0; fd < PROC_MAX_FDS; fd++)
         if (!proc->fds[fd].ops) break;
