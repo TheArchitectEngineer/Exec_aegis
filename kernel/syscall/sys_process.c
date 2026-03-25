@@ -466,6 +466,19 @@ sys_execve(syscall_frame_t *frame,
     proc->mmap_base = 0x0000700000000000ULL;
     proc->fs_base   = 0;
 
+    /* Reset capability table to baseline on exec — exec is a capability boundary.
+     * Login's AUTH/SETUID caps must not propagate to the exec'd shell. */
+    {
+        uint32_t ci;
+        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+            proc->caps[ci].kind   = CAP_KIND_NULL;
+            proc->caps[ci].rights = 0;
+        }
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,  CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE, CAP_RIGHTS_WRITE);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,  CAP_RIGHTS_READ);
+    }
+
     /* 6. Load new ELF */
     elf_load_result_t er;
     if (elf_load(proc->pml4_phys,
