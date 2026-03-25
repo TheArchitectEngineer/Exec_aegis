@@ -95,17 +95,22 @@ kbd_handler(void)
     /* Ctrl-C = Ctrl held + scancode 0x2E ('c') */
     if (s_ctrl && sc == 0x2E) {
         if (s_tty_pgrp != 0)
-            signal_send_pgrp(s_tty_pgrp, SIGINT);
+            signal_send_pid(s_tty_pgrp, SIGINT);
         return;
     }
     if (s_ctrl && sc == 0x2C) {
         if (s_tty_pgrp != 0)
-            signal_send_pgrp(s_tty_pgrp, SIGTSTP);
+            signal_send_pid(s_tty_pgrp, SIGTSTP);
         return;
     }
     if (s_ctrl && sc == 0x2B) {
         if (s_tty_pgrp != 0)
-            signal_send_pgrp(s_tty_pgrp, SIGQUIT);
+            signal_send_pid(s_tty_pgrp, SIGQUIT);
+        return;
+    }
+    /* Ctrl-D = EOF: push 0x04 (EOT) into ring buffer for line discipline */
+    if (s_ctrl && sc == 0x20) {
+        buf_push(0x04);
         return;
     }
 
@@ -166,17 +171,17 @@ kbd_usb_inject(uint8_t ascii)
     /* Intercept Ctrl-C (ETX=0x03), Ctrl-Z (SUB=0x1A), Ctrl-\ (FS=0x1C) */
     if (ascii == 0x03) {
         if (s_tty_pgrp != 0)
-            signal_send_pgrp(s_tty_pgrp, SIGINT);
+            signal_send_pid(s_tty_pgrp, SIGINT);
         return;
     }
     if (ascii == 0x1A) {
         if (s_tty_pgrp != 0)
-            signal_send_pgrp(s_tty_pgrp, SIGTSTP);
+            signal_send_pid(s_tty_pgrp, SIGTSTP);
         return;
     }
     if (ascii == 0x1C) {
         if (s_tty_pgrp != 0)
-            signal_send_pgrp(s_tty_pgrp, SIGQUIT);
+            signal_send_pid(s_tty_pgrp, SIGQUIT);
         return;
     }
     buf_push((char)ascii);

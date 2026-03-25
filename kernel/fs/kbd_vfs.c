@@ -97,6 +97,14 @@ kbd_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 				s_linebuf[s_linebuf_len++] = '\n';
 			printk("\n");
 			break;
+		} else if (c == '\x04') { /* Ctrl-D / EOT: EOF */
+			printk("\n");
+			if (s_linebuf_len == 0) {
+				/* Empty line: signal EOF */
+				return 0;
+			}
+			/* Pending input: flush it without a newline */
+			break;
 		} else if (c == '\x7f' || c == '\x08') {
 			if (s_linebuf_len > 0) {
 				s_linebuf_len--;
