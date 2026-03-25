@@ -237,6 +237,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | GPT partitions | ✅ | CRC32 + primary header; nvme0p1/nvme0p2 registered; ext2 on nvme0p1 |
 | virtio-net + netdev_t | ✅ | netdev_t registry; virtio-net eth0; VIRTIO_F_VERSION_1; 256-slot RX; test_virtio_net.py PASS |
 | Net stack (Phase 25) | ✅ | Ethernet/ARP/IPv4/ICMP/TCP/UDP; arp_resolve uses sti+hlt; 12-byte virtio header; test_net_stack.py PASS |
+| Vigil init system | ✅ | INIT=vigil; service supervision + respawn; exec_caps; test_vigil.py PASS |
 
 ### Known deviations
 
@@ -297,7 +298,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Phase | Content | Status |
 |-------|---------|--------|
 | 25 | Ethernet/ARP/IPv4/ICMP/TCP/UDP stack | ✅ Done — test_net_stack.py PASS |
-| 26 | POSIX socket API + epoll (`sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*`) | Not started |
+| 26 | POSIX socket API + epoll + Vigil AF_UNIX IPC (`sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*`) | Not started |
 | 27 | RTL8125 2.5GbE driver (PCI 10ec:8125) | Deferred until WiFi confirmed working |
 | 28 | DHCP userspace daemon | Not started |
 | 29 | Framebuffer / VESA | Not started |
@@ -313,4 +314,4 @@ A subsystem is ✅ only when `make test` passes with it included.
 - **Test machine B (ThinkPad X13 Gen 1):** Ryzen 7 Pro 4750U (Zen 2 / Renoir)
 - **Shared panic (both test machines A and B) — FIXED 2026-03-24:** `[PANIC] corrupt ring-3 iretq frame vec=32 ss=0x18 rsp=0x7ffffffe7d0` after `[SHELL] Aegis shell ready`. Root cause: AMD CPUs in 64-bit long mode strip RPL bits from SS (pushing 0x18 instead of 0x1B on interrupt entry) since SS is unused for addressing in 64-bit mode. Two-part fix: (1) relaxed panic check from `ss != 0x1B` to `(ss & ~3) != 0x18`; (2) added SS RPL normalization in `isr_dispatch` — `if (s->cs == 0x23) s->ss |= 3;` forces RPL=3 before iretq so AMD machines don't #GP. **AMD 64-bit behavior: SS RPL bits are not maintained; expect ss=0x18 on interrupt from ring-3 on AMD, ss=0x1B on Intel/QEMU.**
 
-*Last updated: 2026-03-24 — ext2 persistence fixed (stale shell binary); AMD ring-3 SS panic fixed (two-part: relaxed check + SS RPL normalization in isr_dispatch). make test 15/15 PASS.*
+*Last updated: 2026-03-25 — Vigil init system (Phase 25.8): ext2 readdir, sys_clock_gettime(228)/sys_sync(162)/sys_cap_grant_exec(361), vigil+vigictl binaries, INIT=vigil, test_vigil.py PASS.*
