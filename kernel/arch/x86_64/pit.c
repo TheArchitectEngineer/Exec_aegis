@@ -2,6 +2,7 @@
 #include "pic.h"
 #include "arch.h"
 #include "printk.h"
+#include "random.h"
 #include "../drivers/xhci.h"
 #include "netdev.h"
 #include "../../net/tcp.h"
@@ -47,6 +48,7 @@ void
 pit_handler(void)
 {
     s_ticks++;
+    random_add_interrupt_entropy();
     sched_tick();
     xhci_poll();    /* poll USB event ring for HID reports (no-op if inactive) */
     netdev_poll_all();  /* poll registered network devices (virtio-net etc.) */

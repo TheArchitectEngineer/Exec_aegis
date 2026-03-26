@@ -14,6 +14,7 @@
 
 #include "arch.h"
 #include "printk.h"
+#include "random.h"
 #include <stdint.h>
 
 /* GICv2 MMIO at high VA via TTBR1 kernel mapping */
@@ -118,6 +119,7 @@ void
 timer_handler(void)
 {
     s_ticks++;
+    random_add_interrupt_entropy();
     /* Re-arm timer for next tick */
     timer_set_next(s_timer_freq / 100);
     /* Drive preemptive scheduling */

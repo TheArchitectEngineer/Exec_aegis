@@ -531,18 +531,15 @@ sys_execve(syscall_frame_t *frame,
     } else {
         vfs_file_t vf;
         int vr = vfs_open(path, 0, &vf);
-        printk("[EXEC] vfs_open(%s)=%d size=%u\n", path, vr, (unsigned)vf.size);
         if (vr != 0)
             { ret = (uint64_t)-(int64_t)2; goto done; }  /* ENOENT */
         if (vf.size == 0)
             { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
         ext2_pages = (vf.size + 4095ULL) / 4096ULL;
         ext2_buf = kva_alloc_pages(ext2_pages);
-        printk("[EXEC] kva_alloc %u pages -> %p\n", (unsigned)ext2_pages, ext2_buf);
         if (!ext2_buf)
             { ret = (uint64_t)-(int64_t)12; goto done; }  /* ENOMEM */
         int rr = vf.ops->read(vf.priv, ext2_buf, 0, vf.size);
-        printk("[EXEC] ext2 read -> %d\n", rr);
         if (rr < 0)
             { ret = (uint64_t)-(int64_t)5; goto done; }   /* EIO */
         elf_data = (const uint8_t *)ext2_buf;

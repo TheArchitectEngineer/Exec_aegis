@@ -83,6 +83,7 @@ ARCH_SRCS = \
 CORE_SRCS = \
     kernel/core/main.c \
     kernel/core/printk.c \
+    kernel/core/random.c \
     kernel/signal/signal.c
 
 MM_SRCS = \
@@ -137,6 +138,7 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_file.c \
     kernel/syscall/sys_signal.c \
     kernel/syscall/sys_socket.c \
+    kernel/syscall/sys_random.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
     $(INIT_BIN_C)

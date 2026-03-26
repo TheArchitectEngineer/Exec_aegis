@@ -1,5 +1,6 @@
 #include "initrd.h"
 #include "kbd_vfs.h"
+#include "random.h"
 #include "printk.h"
 #include <stdint.h>
 
@@ -259,7 +260,8 @@ static const vfs_ops_t initrd_ops = {
 typedef struct { const char *name; uint8_t type; } dir_entry_t;
 
 static const dir_entry_t s_dev_entries[] = {
-    { "tty",    8 }, { (const char *)0, 0 }
+    { "tty",     8 }, { "urandom", 8 }, { "random", 8 },
+    { (const char *)0, 0 }
 };
 static const dir_entry_t s_root_dir_entries[] = {
     { (const char *)0, 0 }   /* /root is empty */
@@ -334,6 +336,62 @@ static const vfs_ops_t dir_ops = {
     .stat    = dir_stat_fn,
 };
 
+/* ── /dev/urandom VFS device ────────────────────────────────────────────── */
+
+static int
+urandom_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
+{
+    (void)priv; (void)off;
+    if (len > 4096) len = 4096;
+    random_get_bytes(buf, (size_t)len);
+    return (int)len;
+}
+
+static int
+urandom_write_fn(void *priv, const void *buf, uint64_t len)
+{
+    /* Writes to urandom are accepted but not mixed into the pool.
+     * buf is a user-space pointer (SMAP-protected); a proper implementation
+     * would copy_from_user first. For now, just acknowledge the write. */
+    (void)priv; (void)buf;
+    return (int)(len > 256 ? 256 : len);
+}
+
+static void
+urandom_close_fn(void *priv)
+{
+    (void)priv;
+}
+
+static int
+urandom_stat_fn(void *priv, k_stat_t *st)
+{
+    (void)priv;
+    __builtin_memset(st, 0, sizeof(*st));
+    st->st_mode  = S_IFCHR | 0666;
+    st->st_ino   = 5;
+    st->st_rdev  = makedev(1, 9);   /* Linux: /dev/urandom = 1:9 */
+    st->st_dev   = 1;
+    st->st_nlink = 1;
+    return 0;
+}
+
+static const vfs_ops_t s_urandom_ops = {
+    .read    = urandom_read_fn,
+    .write   = urandom_write_fn,
+    .close   = urandom_close_fn,
+    .readdir = (void *)0,
+    .dup     = (void *)0,
+    .stat    = urandom_stat_fn,
+};
+
+static vfs_file_t s_urandom_file = {
+    .ops    = &s_urandom_ops,
+    .priv   = (void *)0,
+    .offset = 0,
+    .size   = 0,
+};
+
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
 void
@@ -352,6 +410,24 @@ initrd_open(const char *path, vfs_file_t *out)
         if (*a == *b) {
             vfs_file_t *tty = kbd_vfs_open();
             *out = *tty;
+            return 0;
+        }
+    }
+
+    /* /dev/urandom and /dev/random: CSPRNG device */
+    {
+        const char *a = path, *b = "/dev/urandom";
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == *b) {
+            *out = s_urandom_file;
+            return 0;
+        }
+    }
+    {
+        const char *a = path, *b = "/dev/random";
+        while (*a && *b && *a == *b) { a++; b++; }
+        if (*a == *b) {
+            *out = s_urandom_file;  /* same backing — modern Linux semantics */
             return 0;
         }
     }

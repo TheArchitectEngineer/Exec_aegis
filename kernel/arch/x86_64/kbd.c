@@ -2,6 +2,7 @@
 #include "pic.h"
 #include "arch.h"
 #include "printk.h"
+#include "random.h"
 #include "signal.h"
 #include "proc.h"
 #include "sched.h"
@@ -68,6 +69,7 @@ void
 kbd_handler(void)
 {
     uint8_t sc = inb(KBD_DATA);
+    random_add_interrupt_entropy();  /* keyboard timing is excellent entropy */
 
     /* Extended key prefix — skip this byte (next byte is the actual key) */
     if (sc == 0xE0)

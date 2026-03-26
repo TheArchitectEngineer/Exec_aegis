@@ -15,6 +15,7 @@
 [SYSCALL] OK: SYSCALL/SYSRET enabled
 [SMAP] OK: supervisor access prevention active
 [SMEP] OK: supervisor mode execution prevention active
+[RNG] OK: ChaCha20 CSPRNG seeded
 [VFS] OK: initialized
 [INITRD] OK: 37 files registered
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)

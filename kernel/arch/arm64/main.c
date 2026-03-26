@@ -13,6 +13,7 @@
 #include "vfs.h"
 #include "console.h"
 #include "cap.h"
+#include "random.h"
 
 /* From gic.c */
 void gic_init(void);
@@ -62,6 +63,7 @@ kernel_main(uint64_t dtb_phys)
     kbd_init();    /* PL011 RX interrupt for serial input */
 
     cap_init();
+    random_init();
 
     vfs_init();
     console_init();

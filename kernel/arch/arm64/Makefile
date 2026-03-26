@@ -106,7 +106,9 @@ SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/xhci.o \
               $(BUILD)/usb_hid.o \
               $(BUILD)/virtio_net.o \
-              $(BUILD)/fb.o
+              $(BUILD)/fb.o \
+              $(BUILD)/random.o \
+              $(BUILD)/sys_random.o
 
 OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
 
@@ -271,6 +273,12 @@ $(BUILD)/virtio_net.o: $(REPO)/kernel/drivers/virtio_net.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/fb.o: $(REPO)/kernel/drivers/fb.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/random.o: $(REPO)/kernel/core/random.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_random.o: $(REPO)/kernel/syscall/sys_random.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(ELF): $(OBJS) linker.ld

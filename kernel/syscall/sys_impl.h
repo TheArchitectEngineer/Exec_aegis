@@ -202,3 +202,6 @@ uint64_t sys_getpgid(uint64_t pid_arg);
 uint64_t sys_umask(uint64_t mask);
 uint64_t sys_getrlimit(uint64_t resource, uint64_t rlim_ptr);
 uint64_t sys_uname(uint64_t buf_uptr);
+
+/* ── sys_random.c ──────────────────────────────────────────────────────── */
+uint64_t sys_getrandom(uint64_t buf, uint64_t buflen, uint64_t flags);

@@ -17,6 +17,7 @@
 #include "../drivers/virtio_net.h"
 #include "../drivers/fb.h"
 #include "../net/ip.h"
+#include "random.h"
 #include <stdint.h>
 
 /*
@@ -65,6 +66,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_smap_init();       /* SMAP detect + enable — [SMAP] OK/WARN         */
     arch_smep_init();       /* SMEP detect + enable — [SMEP] OK/WARN         */
     arch_sse_init();        /* enable SSE for user mode (CR0/CR4 bits)       */
+    random_init();          /* ChaCha20 CSPRNG — [RNG] OK                    */
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */

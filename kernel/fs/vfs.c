@@ -312,6 +312,16 @@ vfs_stat_path(const char *path, k_stat_t *out)
         return 0;
     }
 
+    if (streq(path, "/dev/urandom") || streq(path, "/dev/random")) {
+        __builtin_memset(out, 0, sizeof(*out));
+        out->st_mode  = S_IFCHR | 0666;
+        out->st_ino   = 5;
+        out->st_rdev  = makedev(1, 9);   /* Linux: /dev/urandom = 1:9 */
+        out->st_dev   = 1;
+        out->st_nlink = 1;
+        return 0;
+    }
+
     if (streq(path, "/dev/null")) {
         __builtin_memset(out, 0, sizeof(*out));
         out->st_mode  = S_IFCHR | 0666;
