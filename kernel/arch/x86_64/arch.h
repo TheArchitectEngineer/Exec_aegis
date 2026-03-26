@@ -140,10 +140,10 @@ void arch_vmm_invlpg(uint64_t virt);
  * sched.h defines the full struct; arch.h only needs the pointer. */
 struct aegis_task_t;
 
-/* Save outgoing task's callee-saved registers and RSP; restore incoming task's.
+/* Save outgoing task's callee-saved registers and stack pointer; restore incoming task's.
  * Implemented in kernel/arch/x86_64/ctx_switch.asm.
- *   outgoing — pointer to the current task's aegis_task_t (rsp field saved here)
- *   incoming — pointer to the next task's aegis_task_t   (rsp field loaded from here)
+ *   outgoing — pointer to the current task's aegis_task_t (sp field saved here)
+ *   incoming — pointer to the next task's aegis_task_t   (sp field loaded from here)
  * Never returns to the caller in the outgoing task until ctx_switch is called
  * again with that task as the incoming argument. */
 void ctx_switch(struct aegis_task_t *outgoing, struct aegis_task_t *incoming);
