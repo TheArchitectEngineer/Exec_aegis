@@ -1,6 +1,9 @@
 /* sys_process.c — Process lifecycle syscalls: exit, fork, execve, waitpid */
 #include "sys_impl.h"
 
+#define MAX_PROCESSES 64
+static uint32_t s_fork_count = 1;  /* starts at 1 for init */
+
 /*
  * sys_exit — syscall 60
  *
@@ -122,6 +125,11 @@ sys_fork(syscall_frame_t *frame)
     aegis_task_t    *parent_task = sched_current();
     if (!parent_task || !parent_task->is_user) return (uint64_t)-(int64_t)1; /* EPERM */
     aegis_process_t *parent      = (aegis_process_t *)parent_task;
+
+    /* S10: Prevent fork bombs — cap total process count. */
+    if (s_fork_count >= MAX_PROCESSES)
+        return (uint64_t)(int64_t)-11;  /* -EAGAIN */
+
     /* 1. Allocate child PCB */
     aegis_process_t *child = kva_alloc_pages(1);
     if (!child)
@@ -273,6 +281,7 @@ sys_fork(syscall_frame_t *frame)
 
     /* 7. Add child to run queue */
     sched_add(&child->task);
+    s_fork_count++;
 
     /* Return child PID to parent */
     return (uint64_t)child->pid;
