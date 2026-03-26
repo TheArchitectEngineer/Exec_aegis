@@ -119,6 +119,15 @@ uint64_t arch_get_ticks(void);
 void arch_request_shutdown(void);
 
 /* -------------------------------------------------------------------------
+ * PAN (Privileged Access Never) — ARM64 SMAP equivalent
+ * ------------------------------------------------------------------------- */
+
+/* Stubs — PAN not yet enabled. These match x86 arch_stac/arch_clac. */
+extern int arch_smap_enabled;
+static inline void arch_stac(void) { (void)0; }
+static inline void arch_clac(void) { (void)0; }
+
+/* -------------------------------------------------------------------------
  * Arch-portable helpers
  * ------------------------------------------------------------------------- */
 

@@ -3,7 +3,7 @@
 #include "ip.h"
 #include "socket.h"
 #include "epoll.h"
-#include "../arch/x86_64/arch.h"   /* arch_get_ticks() */
+#include "arch.h"   /* arch_get_ticks() */
 #include "../core/printk.h"
 #include <stddef.h>                 /* NULL */
 

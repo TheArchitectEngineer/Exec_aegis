@@ -4,7 +4,7 @@
 #include "udp.h"
 #include "tcp.h"
 #include "../core/printk.h"
-#include "../arch/x86_64/arch.h"   /* arch_get_ticks() */
+#include "arch.h"   /* arch_get_ticks() */
 
 /* Local memory helpers (kernel has no libc). */
 static void _ip_memset(void *dst, int val, uint32_t n)

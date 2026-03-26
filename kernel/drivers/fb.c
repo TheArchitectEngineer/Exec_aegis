@@ -10,9 +10,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "fb.h"
-#include "../arch/x86_64/arch.h"
-#include "../arch/x86_64/serial.h"
-#include "../arch/x86_64/pcie.h"
+#include "arch.h"
+#include "serial.h"
+#include "pcie.h"
 #include "../mm/vmm.h"
 #include "../mm/kva.h"
 #include "../mm/pmm.h"
