@@ -67,6 +67,10 @@ static inline int arch_get_fb_info(arch_fb_info_t *out) { (void)out; return 0; }
  * Higher-half mapping (0xFFFF800040000000) is a future phase. */
 #define ARCH_KERNEL_VIRT_BASE 0x40000000UL
 
+/* KVA bump allocator base address — must be in an unmapped L2 region
+ * so vmm_map_page can create L3 tables on demand. L2[5] = +0xA00000. */
+#define ARCH_KVA_BASE (ARCH_KERNEL_VIRT_BASE + 0xA00000UL)
+
 /* -------------------------------------------------------------------------
  * Virtual memory interface
  * ------------------------------------------------------------------------- */

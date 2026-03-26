@@ -9,6 +9,7 @@
 #include "printk.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "kva.h"
 
 void
 kernel_main(uint64_t dtb_phys)
@@ -19,6 +20,7 @@ kernel_main(uint64_t dtb_phys)
     arch_mm_init((void *)(uintptr_t)dtb_phys);
     pmm_init();
     vmm_init();
+    kva_init();
 
     printk("[AEGIS] ARM64 kernel ready.\n");
     printk("[AEGIS] System halted.\n");
