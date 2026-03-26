@@ -227,9 +227,12 @@ vmm_init(void)
                      PTE_ATTR_DEV | PTE_AP_RW_EL1 | PTE_XN;
     }
 
-    /* L2 RAM: 64 × 2MB block descriptors for 0x40000000-0x47FFFFFF (128MB)
-     * + remaining entries zeroed (unmapped). */
-    for (int i = 0; i < 64; i++) {
+    /* L2 RAM: map first 5 × 2MB blocks (0x40000000 - 0x409FFFFF, 10MB)
+     * covering kernel image, BSS, boot stack, and early allocations.
+     * L2[4] is replaced by the window allocator table below.
+     * L2[5+] are left unmapped — KVA creates L3 tables on demand via
+     * vmm_map_page → ensure_table. PMM still knows about all 128MB. */
+    for (int i = 0; i < 5; i++) {
         l2_ram[i] = (0x40000000UL + (uint64_t)i * 0x200000UL) |
                      PTE_VALID | /* block: bit[1]=0 */ PTE_AF |
                      PTE_SH_INNER | PTE_ATTR_NORM | PTE_AP_RW_EL1;
@@ -288,7 +291,7 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
     uint64_t l3_phys = ensure_table(l2_phys, l2_idx, 0);
 
     uint64_t *l3 = vmm_window_map(l3_phys);
-    l3[l3_idx] = phys | flags_to_pte(flags);
+    l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
 }
@@ -343,7 +346,7 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     uint64_t l3_phys = ensure_table(l2_phys, l2_idx, VMM_FLAG_USER);
 
     uint64_t *l3 = vmm_window_map(l3_phys);
-    l3[l3_idx] = phys | flags_to_pte(flags);
+    l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
     vmm_window_unmap();
 }
 

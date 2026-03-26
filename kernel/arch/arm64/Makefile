@@ -38,7 +38,8 @@ ARCH_OBJS = $(BUILD)/boot.o \
 # Shared kernel sources (arch-agnostic)
 SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/pmm.o \
-              $(BUILD)/vmm_arm64.o
+              $(BUILD)/vmm_arm64.o \
+              $(BUILD)/kva.o
 
 OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
 
@@ -76,6 +77,9 @@ $(BUILD)/pmm.o: $(REPO)/kernel/mm/pmm.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/vmm_arm64.o: vmm_arm64.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kva.o: $(REPO)/kernel/mm/kva.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(ELF): $(OBJS) linker.ld

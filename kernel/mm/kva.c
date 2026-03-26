@@ -6,12 +6,16 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* KVA_BASE: pd_hi[4] range — 0x800000 bytes above ARCH_KERNEL_VIRT_BASE.
- * pd_hi[0..1] = kernel image huge pages
- * pd_hi[2]    = (formerly KSTACK_VA — now also kva range)
- * pd_hi[3]    = VMM_WINDOW_VA (Phase 6)
- * pd_hi[4+]   = kva bump range (this allocator) */
+/* KVA_BASE: start of the bump-allocated kernel VA range.
+ * Each architecture defines ARCH_KVA_BASE in arch.h to place this past
+ * the kernel image, window allocator, and any other fixed-VA regions.
+ * x86-64: pd_hi[4] = VIRT_BASE + 0x800000
+ * ARM64:  L2[5]    = VIRT_BASE + 0xA00000 */
+#ifdef ARCH_KVA_BASE
+#define KVA_BASE ARCH_KVA_BASE
+#else
 #define KVA_BASE (ARCH_KERNEL_VIRT_BASE + 0x800000UL)
+#endif
 
 static uint64_t s_kva_next;
 
