@@ -262,10 +262,11 @@ nvme_init(void)
              * SAFETY: va is a kva-allocated page that is present in the PT
              * (kva_alloc_pages guarantees this); vmm_unmap_page succeeds. */
             vmm_unmap_page(va);
-            /* SAFETY: BAR0 is MMIO — map uncached (Present|Write|PWT|PCD = 0x1B).
+            /* SAFETY: BAR0 is MMIO — map uncached via arch-neutral flags.
              * vmm_map_page installs the MMIO physical address at this VA;
              * the old PMM frame is leaked (see above). */
-            vmm_map_page(va, bar0_phys + (uint64_t)i * 4096u, 0x1Bu);
+            vmm_map_page(va, bar0_phys + (uint64_t)i * 4096u,
+                         VMM_FLAG_WRITABLE | VMM_FLAG_WC | VMM_FLAG_UCMINUS);
         }
         /* SAFETY: bar0_va is a kernel VA mapped to NVMe BAR0 MMIO registers;
          * volatile cast prevents the compiler caching register reads/writes. */

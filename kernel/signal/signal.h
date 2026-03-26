@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-/* Signal numbers (Linux x86-64) */
+/* ── Signal numbers (POSIX, same on all architectures) ─────────── */
+
 #define SIGHUP    1
 #define SIGINT    2
 #define SIGQUIT   3
@@ -29,17 +30,77 @@
 #define SIG_DFL ((void (*)(int))0)
 #define SIG_IGN ((void (*)(int))1)
 
-/* musl struct sigaction layout (x86-64) */
+/* ── Architecture-specific signal frame structures ─────────────── */
+
+/* k_sigaction_t: kernel's view of struct sigaction.
+ * rt_sigframe_t: signal frame pushed to user stack.
+ * REG_*: gregset_t indices for register save/restore.
+ *
+ * These differ between x86-64 and ARM64 because:
+ * - Register sets are different (16 GPRs vs 31 GPRs)
+ * - musl's sigaction layout differs per-arch
+ * - The ucontext/mcontext structure varies */
+
+#ifdef __aarch64__
+
+/* ARM64 musl struct sigaction layout */
 typedef struct {
     void    (*sa_handler)(int);
     uint64_t sa_flags;
-    void    (*sa_restorer)(void);   /* __restore_rt — must be non-NULL for RT signals */
-    uint64_t sa_mask;               /* signals to mask while handler runs */
+    void    (*sa_restorer)(void);
+    uint64_t sa_mask;
 } k_sigaction_t;
 
-_Static_assert(sizeof(k_sigaction_t) == 32, "k_sigaction_t must be 32 bytes (musl struct sigaction x86-64)");
+/* ARM64 gregset_t indices — 31 GPRs + SP + PC + PSTATE */
+#define REG_X0       0
+#define REG_X1       1
+#define REG_X8       8
+#define REG_X29     29
+#define REG_X30     30
+#define REG_SP      31
+#define REG_PC      32
+#define REG_PSTATE  33
 
-/* gregset_t indices (Linux x86-64, REG_* in <sys/ucontext.h>) */
+/* Aliases for code that uses x86 names in generic signal paths */
+#define REG_RIP     REG_PC
+#define REG_RSP     REG_SP
+#define REG_EFL     REG_PSTATE
+#define REG_R8      REG_X8
+
+/* ARM64 signal frame — matches musl's AArch64 sigcontext layout.
+ * Simplified: only save/restore GPRs + SP + PC + PSTATE.
+ * Full FP/SIMD state is not saved (matching Phase 17 on x86). */
+typedef struct {
+    uint64_t pretcode;              /* &__restore_rt (sa_restorer) */
+    uint8_t  siginfo[128];         /* struct siginfo — zeroed */
+    uint64_t uc_flags;
+    uint64_t uc_link;
+    uint64_t uc_stack_sp;
+    uint32_t uc_stack_flags;
+    uint32_t uc_stack_pad;
+    uint64_t uc_stack_size;
+    /* mcontext_t: 34 registers (x0-x30, sp, pc, pstate) */
+    int64_t  gregs[34];
+    uint64_t fpregs;                /* 0 — no FP state */
+    uint64_t __reserved1[8];
+    uint64_t uc_sigmask;
+    uint8_t  _uc_sigmask_pad[120];
+} rt_sigframe_t;
+
+#else /* x86-64 */
+
+/* x86-64 musl struct sigaction layout */
+typedef struct {
+    void    (*sa_handler)(int);
+    uint64_t sa_flags;
+    void    (*sa_restorer)(void);
+    uint64_t sa_mask;
+} k_sigaction_t;
+
+_Static_assert(sizeof(k_sigaction_t) == 32,
+    "k_sigaction_t must be 32 bytes (musl struct sigaction x86-64)");
+
+/* x86-64 gregset_t indices (Linux, REG_* in <sys/ucontext.h>) */
 #define REG_R8       0
 #define REG_R9       1
 #define REG_R10      2
@@ -64,82 +125,55 @@ _Static_assert(sizeof(k_sigaction_t) == 32, "k_sigaction_t must be 32 bytes (mus
 #define REG_OLDMASK 21
 #define REG_CR2     22
 
-/*
- * rt_sigframe_t — signal frame placed on the user stack before a signal handler.
- *
- * Layout matches the Linux x86-64 ABI exactly:
- *   offset   0: pretcode      (8)  — pointer to __restore_rt (sa_restorer)
- *   offset   8: siginfo[128] (128) — struct siginfo (zeroed in Phase 17)
- *   offset 136: uc_flags       (8)
- *   offset 144: uc_link        (8)
- *   offset 152: uc_stack      (24)  — stack_t: ss_sp(8) + ss_flags(4) + pad(4) + ss_size(8)
- *   offset 176: gregs[23]    (184)  — mcontext_t gregset_t
- *   offset 360: fpregs         (8)  — pointer (zeroed; no FP state saved)
- *   offset 368: __reserved1[8](64)
- *   offset 432: uc_sigmask     (8)  — saved signal mask (low 64 bits)
- *   offset 440: _pad[120]    (120)  — pad sigset_t to 128 bytes
- *   total: 560 bytes
- *
- * musl's __restore_rt calls sys_rt_sigreturn (syscall 15) after the signal
- * handler returns via `ret`, which pops pretcode from the stack.  RSP at
- * SYSCALL time is therefore new_rsp+8 (past pretcode).  sys_rt_sigreturn
- * recovers the frame base by subtracting 8 (sizeof pretcode), matching
- * the Linux kernel: frame = regs->sp - sizeof(long).
- */
+/* x86-64 signal frame — matches Linux x86-64 ABI (560 bytes). */
 typedef struct {
-    uint64_t pretcode;              /* 0:   &__restore_rt (sa_restorer) */
-    uint8_t  siginfo[128];          /* 8:   struct siginfo — zeroed */
-    /* ucontext_t begins at offset 136 */
-    uint64_t uc_flags;              /* 136: 0 */
-    uint64_t uc_link;               /* 144: 0 */
-    uint64_t uc_stack_sp;           /* 152: 0 */
-    uint32_t uc_stack_flags;        /* 160: 0 */
-    uint32_t uc_stack_pad;          /* 164: 0 (padding in stack_t) */
-    uint64_t uc_stack_size;         /* 168: 0 */
-    /* mcontext_t begins at offset 176 */
-    int64_t  gregs[23];             /* 176: gregset_t (REG_R8..REG_CR2) */
-    uint64_t fpregs;                /* 360: 0 (no FP state saved in Phase 17) */
-    uint64_t __reserved1[8];        /* 368: 0 */
-    /* uc_sigmask at offset 432 */
-    uint64_t uc_sigmask;            /* 432: saved signal_mask */
-    uint8_t  _uc_sigmask_pad[120];  /* 440: pad sigset_t to 128 bytes */
+    uint64_t pretcode;
+    uint8_t  siginfo[128];
+    uint64_t uc_flags;
+    uint64_t uc_link;
+    uint64_t uc_stack_sp;
+    uint32_t uc_stack_flags;
+    uint32_t uc_stack_pad;
+    uint64_t uc_stack_size;
+    int64_t  gregs[23];
+    uint64_t fpregs;
+    uint64_t __reserved1[8];
+    uint64_t uc_sigmask;
+    uint8_t  _uc_sigmask_pad[120];
 } rt_sigframe_t;
 
-_Static_assert(sizeof(rt_sigframe_t) == 560, "rt_sigframe_t must be 560 bytes");
+_Static_assert(sizeof(rt_sigframe_t) == 560,
+    "rt_sigframe_t must be 560 bytes");
 
-/* Magic return value from sys_rt_sigreturn — signals syscall_entry.asm
- * to skip signal check and do sysret directly (frame already patched). */
+#endif /* __aarch64__ / x86-64 */
+
+/* ── Architecture-agnostic signal API ──────────────────────────── */
+
+/* Magic return value from sys_rt_sigreturn — signals the syscall
+ * return path to skip signal check (frame already patched). */
 #define SIGRETURN_MAGIC 0xdeadbeefcafebabeULL
 
 /* Forward declarations (avoid circular includes) */
 struct cpu_state;
 struct syscall_frame;
 
-/* Deliver pending signals when returning to ring-3 via iretq.
- * Called from isr.asm between isr_dispatch and isr_post_dispatch.
- * Returns immediately if s->cs != 0x23 (ring-3 check). */
+/* Deliver pending signals when returning to user mode.
+ * x86-64: called from isr.asm on iretq path.
+ * ARM64: stubbed (signal delivery not yet implemented). */
 void signal_deliver(struct cpu_state *s);
 
-/* Deliver pending signals when returning from a syscall via sysret.
- * frame:         syscall_frame_t * (for patching rip/rflags/user_rsp)
- * saved_rdi_ptr: pointer to the saved user rdi slot on kernel stack
- *                (signal_deliver_sysret writes signum there for handler delivery)
- * Returns 1 if a user handler was set up (rax should be set to 0 by caller),
- * returns 0 if no signal or SIG_DFL (sched_exit called — never reaches return). */
-int signal_deliver_sysret(struct syscall_frame *frame, uint64_t *saved_rdi_ptr);
+/* Deliver pending signals on syscall return path.
+ * Returns 1 if a handler was set up, 0 otherwise. */
+int signal_deliver_sysret(struct syscall_frame *frame,
+                          uint64_t *saved_rdi_ptr);
 
-/* Send signal signum to the process with the given pid.
- * Safe to call from ISR context (IF=0, no allocation).
- * Calls sched_wake if target is TASK_BLOCKED. */
+/* Send signal to a process by PID. Safe from ISR context. */
 void signal_send_pid(uint32_t pid, int signum);
 
-/* Send signal signum to all processes in process group pgid.
- * Skips PID 1. Also calls sched_resume on stopped/blocked targets
- * so they can return to the run queue and deliver the signal.
- * Safe to call from ISR context (IF=0, no allocation). */
+/* Send signal to all processes in a process group. */
 void signal_send_pgrp(uint32_t pgid, int signum);
 
-/* Return 1 if the current process has deliverable pending signals. */
+/* Return 1 if current process has deliverable pending signals. */
 int signal_check_pending(void);
 
 #endif /* AEGIS_SIGNAL_H */
