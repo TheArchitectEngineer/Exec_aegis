@@ -8,6 +8,20 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
                  uint64_t arg1, uint64_t arg2, uint64_t arg3,
                  uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
+#ifdef __aarch64__
+    {
+        extern void serial_write_string(const char *);
+        static int dbg = 0;
+        if (dbg++ < 5) {
+            char buf[64];
+            char *p = buf;
+            *p++ = '['; *p++ = 'S'; *p++ = 'V'; *p++ = 'C'; *p++ = ']';
+            *p++ = ' '; *p++ = 'n'; *p++ = '=';
+            *p++ = '0' + (char)(num % 10); *p++ = '\n'; *p++ = '\0';
+            serial_write_string(buf);
+        }
+    }
+#endif
     switch (num) {
     case  0: return sys_read(arg1, arg2, arg3);
     case  1: return sys_write(arg1, arg2, arg3);

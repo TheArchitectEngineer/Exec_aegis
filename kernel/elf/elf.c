@@ -39,7 +39,14 @@ typedef struct {
 #define PF_W       2      /* program header write flag */
 #define ELFCLASS64 2
 #define ET_EXEC    2
-#define EM_X86_64  0x3E
+#define EM_X86_64   0x3E
+#define EM_AARCH64  0xB7
+
+#ifdef __aarch64__
+#define EM_CURRENT EM_AARCH64
+#else
+#define EM_CURRENT EM_X86_64
+#endif
 
 int
 elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
@@ -56,8 +63,8 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
         return -1;
     }
     if (eh->e_ident[4] != ELFCLASS64 || eh->e_type != ET_EXEC ||
-        eh->e_machine != EM_X86_64) {
-        printk("[ELF] FAIL: not a static ELF64 x86-64 executable\n");
+        eh->e_machine != EM_CURRENT) {
+        printk("[ELF] FAIL: not a static ELF64 executable for this arch\n");
         return -1;
     }
 

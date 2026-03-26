@@ -159,12 +159,12 @@ flags_to_pte(uint64_t flags)
 static uint64_t
 table_entry(uint64_t child_phys, uint64_t extra_flags)
 {
-    uint64_t pte = child_phys | PTE_VALID | PTE_TABLE;
-    /* If USER requested, set AP for user access at this level too.
-     * ARM64 hierarchical access: non-user intermediate blocks user access. */
-    if (extra_flags & VMM_FLAG_USER)
-        pte |= PTE_AP_RW_ALL;
-    return pte;
+    (void)extra_flags;
+    /* ARM64 table descriptors: only valid+table bits needed.
+     * Hierarchical permission bits (APTable, UXNTable, PXNTable) at [63:59]
+     * default to 0 = no restriction. Do NOT set AP bits [7:6] in table
+     * descriptors — those are APTable and restrict child access. */
+    return child_phys | PTE_VALID | PTE_TABLE;
 }
 
 /* Ensure a child table exists at parent[idx]. Returns child phys addr. */
@@ -353,18 +353,32 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
 uint64_t
 vmm_create_user_pml4(void)
 {
-    uint64_t pml4 = alloc_table();
-    /* Copy kernel entries from master L0.
-     * On ARM64 identity-mapped, the kernel lives in L0[0]. */
-    uint64_t *master = vmm_window_map(s_pml4_phys);
-    uint64_t kernel_entry = master[0];
+    uint64_t user_l0 = alloc_table();
+    uint64_t user_l1 = alloc_table();
+
+    /* Read master L1 to get the RAM entry (L1[1]) */
+    uint64_t *master_l0 = vmm_window_map(s_pml4_phys);
+    uint64_t master_l1_phys = PTE_ADDR(master_l0[0]);
     vmm_window_unmap();
 
-    uint64_t *user = vmm_window_map(pml4);
-    user[0] = kernel_entry;  /* share kernel L1 subtree */
+    uint64_t *master_l1 = vmm_window_map(master_l1_phys);
+    uint64_t ram_l2_entry = master_l1[1];  /* L1[1] → RAM L2 table */
     vmm_window_unmap();
 
-    return pml4;
+    /* User L1: only RAM (L1[1]). L1[0] is empty — user code at low
+     * addresses (0x400000 etc.) maps via vmm_map_user_page → ensure_table.
+     * The kernel switches TTBR0 back to master PML4 on exception entry
+     * so device MMIO (UART, GIC) is accessible during syscall handling. */
+    uint64_t *ul1 = vmm_window_map(user_l1);
+    ul1[1] = ram_l2_entry;  /* share kernel RAM mappings */
+    vmm_window_unmap();
+
+    /* User L0[0] → user L1 */
+    uint64_t *ul0 = vmm_window_map(user_l0);
+    ul0[0] = user_l1 | PTE_VALID | PTE_TABLE;
+    vmm_window_unmap();
+
+    return user_l0;
 }
 
 uint64_t

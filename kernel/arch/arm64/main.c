@@ -10,10 +10,16 @@
 #include "vmm.h"
 #include "kva.h"
 #include "sched.h"
+#include "vfs.h"
+#include "console.h"
+#include "cap.h"
 
 /* From gic.c */
 void gic_init(void);
 void timer_init(void);
+
+/* From proc.c */
+void proc_spawn_init(void);
 
 /* From vectors.S */
 extern char exception_vectors[];
@@ -34,14 +40,6 @@ task_idle(void)
         arch_halt();
 }
 
-/* Task 1: test task — prints and exits */
-static void
-task_test(void)
-{
-    printk("[TEST] task running, ticks=%lu\n", arch_get_ticks());
-    sched_exit();
-}
-
 void
 kernel_main(uint64_t dtb_phys)
 {
@@ -57,9 +55,13 @@ kernel_main(uint64_t dtb_phys)
     gic_init();
     timer_init();
 
+    cap_init();
+    vfs_init();
+    console_init();
+
     sched_init();
     sched_spawn(task_idle);
-    sched_spawn(task_test);
+    proc_spawn_init();
 
     sched_start();
 
