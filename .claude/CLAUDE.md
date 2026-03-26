@@ -300,7 +300,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 |-------|---------|--------|
 | 25 | Ethernet/ARP/IPv4/ICMP/TCP/UDP stack | ✅ Done — test_net_stack.py PASS |
 | 26 | POSIX socket API + epoll + Vigil AF_UNIX IPC (`sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*`) | ✅ Done — test_socket.py PASS |
-| 27 | DHCP + DNS daemon; writable /etc + /root (ramfs); BearSSL 0.6 + curl 8.13.0 (ext2) | Not started |
+| 27 | DHCP + DNS daemon; writable /etc + /root (ramfs); BearSSL 0.6 + curl 8.13.0 (ext2) | 🔶 In progress — branch `phase27-dhcp-dns-curl` |
 | 28 | Writable root — ramfs-root populated from initrd; full live-system writability; foundation for installer | Not started |
 | 29 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
 | 30 | Framebuffer / VESA | Not started |
@@ -316,4 +316,4 @@ A subsystem is ✅ only when `make test` passes with it included.
 - **Test machine B (ThinkPad X13 Gen 1):** Ryzen 7 Pro 4750U (Zen 2 / Renoir)
 - **Shared panic (both test machines A and B) — FIXED 2026-03-24:** `[PANIC] corrupt ring-3 iretq frame vec=32 ss=0x18 rsp=0x7ffffffe7d0` after `[SHELL] Aegis shell ready`. Root cause: AMD CPUs in 64-bit long mode strip RPL bits from SS (pushing 0x18 instead of 0x1B on interrupt entry) since SS is unused for addressing in 64-bit mode. Two-part fix: (1) relaxed panic check from `ss != 0x1B` to `(ss & ~3) != 0x18`; (2) added SS RPL normalization in `isr_dispatch` — `if (s->cs == 0x23) s->ss |= 3;` forces RPL=3 before iretq so AMD machines don't #GP. **AMD 64-bit behavior: SS RPL bits are not maintained; expect ss=0x18 on interrupt from ring-3 on AMD, ss=0x1B on Intel/QEMU.**
 
-*Last updated: 2026-03-25 — Phase 26 complete: socket API (socket/bind/listen/accept/connect/send/recv/epoll), httpd test binary, test_socket.py PASS. RTL8125 moved to post-release (Phase 32).*
+*Last updated: 2026-03-26 — Phase 27 in progress on branch `phase27-dhcp-dns-curl`. DHCP daemon + writable /etc+/root + BearSSL 0.6 + curl 8.13.0 committed. Curl HTTPS end-to-end not yet verified (blocker: connect debug needed). Test bundling implemented (reduces ~25 QEMU boots to ~11). See Phase 27 forward constraints in branch CLAUDE.md.*
