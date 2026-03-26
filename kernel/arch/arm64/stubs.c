@@ -139,10 +139,20 @@ void arch_set_master_pml4(uint64_t pml4_phys) { g_master_pml4 = pml4_phys; }
 extern void arch_vmm_load_user_ttbr0(uint64_t phys);
 extern uint64_t arch_get_current_pml4(void);  /* in proc.c */
 
+extern void serial_write_string(const char *);
 void fork_child_load_ttbr0(void) {
     uint64_t pml4 = arch_get_current_pml4();
-    if (pml4)
+    if (pml4) {
+        /* Check if L0[0] is valid */
+        uint64_t *l0 = (uint64_t *)(uintptr_t)(pml4 + 0xFFFF000000000000UL);
+        if (l0[0] & 1)
+            serial_write_string("[FORK] child L0[0] valid\r\n");
+        else
+            serial_write_string("[FORK] child L0[0] EMPTY!\r\n");
         arch_vmm_load_user_ttbr0(pml4);
+    } else {
+        serial_write_string("[FORK] no pml4!\r\n");
+    }
 }
 
 /* proc_spawn_init is provided by the real proc.c (shared source). */

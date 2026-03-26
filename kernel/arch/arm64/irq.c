@@ -64,13 +64,13 @@ syscall_debug(uint64_t num, uint64_t a1, uint64_t a2)
 void
 exc_sync_el0_handler(void *frame)
 {
-    uint64_t esr;
-    uint64_t elr;
+    uint64_t esr, elr, far;
     (void)frame;
     __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
     __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
-    printk("[PANIC] user sync exception at ELR=0x%lx ESR=0x%lx EC=0x%x\n",
-           elr, esr, (uint32_t)(esr >> 26));
+    __asm__ volatile("mrs %0, far_el1" : "=r"(far));
+    printk("[PANIC] user at ELR=0x%lx FAR=0x%lx ESR=0x%lx EC=0x%x\n",
+           elr, far, esr, (uint32_t)(esr >> 26));
     for (;;)
         __asm__ volatile("wfi");
 }
