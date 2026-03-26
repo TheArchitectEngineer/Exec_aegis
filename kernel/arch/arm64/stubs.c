@@ -84,29 +84,20 @@ void kbd_usb_inject(char c) { (void)c; }
 /* ── Signal stubs ── */
 void signal_send_pgrp(uint32_t pgrp, int sig) { (void)pgrp; (void)sig; }
 
-/* ── User binary blobs — empty placeholders (no user binaries for ARM64 yet) ── */
-/* init_elf and init_elf_len provided by init_arm64_bin.c (compiled separately) */
+/* User binary blobs — empty placeholders. initrd.c references these symbols.
+ * init_elf/init_elf_len come from init_arm64_bin.c (the real ARM64 init).
+ * All others are empty until Docker-built ARM64 musl binaries replace them. */
 const char *init_name = "/bin/init";
-const unsigned char shell_elf[] = { 0 };
-const unsigned int  shell_elf_len = 0;
-const unsigned char cat_elf[] = { 0 }, echo_elf[] = { 0 }, ls_elf[] = { 0 };
-const unsigned int  cat_elf_len = 0, echo_elf_len = 0, ls_elf_len = 0;
-const unsigned char pwd_elf[] = { 0 }, uname_elf[] = { 0 }, clear_elf[] = { 0 };
-const unsigned int  pwd_elf_len = 0, uname_elf_len = 0, clear_elf_len = 0;
-const unsigned char true_bin_elf[] = { 0 }, false_bin_elf[] = { 0 };
-const unsigned int  true_bin_elf_len = 0, false_bin_elf_len = 0;
-const unsigned char wc_elf[] = { 0 }, grep_elf[] = { 0 }, sort_elf[] = { 0 };
-const unsigned int  wc_elf_len = 0, grep_elf_len = 0, sort_elf_len = 0;
-const unsigned char mkdir_elf[] = { 0 }, touch_elf[] = { 0 }, rm_elf[] = { 0 };
-const unsigned int  mkdir_elf_len = 0, touch_elf_len = 0, rm_elf_len = 0;
-const unsigned char cp_elf[] = { 0 }, mv_elf[] = { 0 }, whoami_elf[] = { 0 };
-const unsigned int  cp_elf_len = 0, mv_elf_len = 0, whoami_elf_len = 0;
-const unsigned char oksh_elf[] = { 0 }, login_elf[] = { 0 };
-const unsigned int  oksh_elf_len = 0, login_elf_len = 0;
-const unsigned char vigil_elf[] = { 0 }, vigictl_elf[] = { 0 };
-const unsigned int  vigil_elf_len = 0, vigictl_elf_len = 0;
-const unsigned char httpd_bin_elf[] = { 0 };
-const unsigned int  httpd_bin_elf_len = 0;
+#define EMPTY_ELF(name) \
+    const unsigned char name##_elf[] = { 0 }; \
+    const unsigned int  name##_elf_len = 0
+EMPTY_ELF(shell); EMPTY_ELF(cat);   EMPTY_ELF(echo);  EMPTY_ELF(ls);
+EMPTY_ELF(pwd);   EMPTY_ELF(uname); EMPTY_ELF(clear); EMPTY_ELF(true_bin);
+EMPTY_ELF(false_bin); EMPTY_ELF(wc); EMPTY_ELF(grep); EMPTY_ELF(sort);
+EMPTY_ELF(mkdir); EMPTY_ELF(touch); EMPTY_ELF(rm);    EMPTY_ELF(cp);
+EMPTY_ELF(mv);    EMPTY_ELF(whoami); EMPTY_ELF(oksh); EMPTY_ELF(login);
+EMPTY_ELF(vigil); EMPTY_ELF(vigictl); EMPTY_ELF(httpd_bin);
+#undef EMPTY_ELF
 
 /* proc_enter_user and fork_child_return are now in proc_enter.S */
 
