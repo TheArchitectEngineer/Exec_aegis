@@ -149,9 +149,9 @@ void pcie_init(void)
              * SAFETY: va is a kva-allocated page that is present in the PT
              * (kva_alloc_pages guarantees this); vmm_unmap_page succeeds. */
             vmm_unmap_page(va);
-            /* SAFETY: ECAM MMIO — map as present+write+PCD+PWT (no-cache).
-             * PTE flags 0x1B = Present(1)|Write(2)|PWT(8)|PCD(16). */
-            vmm_map_page(va, pa, 0x1B);
+            /* SAFETY: ECAM MMIO — map uncached via arch-neutral VMM flags. */
+            vmm_map_page(va, pa,
+                         VMM_FLAG_WRITABLE | VMM_FLAG_WC | VMM_FLAG_UCMINUS);
         }
         s_ecam_base = (volatile uint8_t *)va_base;
 
