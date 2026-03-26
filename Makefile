@@ -369,6 +369,9 @@ kernel/vigictl_bin.c: user/vigictl/vigictl
 	  sed 's/unsigned char vigictl/unsigned char vigictl_elf/g; s/unsigned int vigictl_len/unsigned int vigictl_elf_len/g' \
 	  > ../../kernel/vigictl_bin.c
 
+build/httpd_bin.elf: kernel/httpd_bin.c
+	musl-gcc -static -Wall -O2 -o $@ $<
+
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
@@ -397,7 +400,8 @@ DISK_USER_BINS = \
 	user/clear/clear.elf user/true/true.elf user/false/false.elf \
 	user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
 	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
-	user/mkdir/mkdir.elf user/touch/touch.elf
+	user/mkdir/mkdir.elf user/touch/touch.elf \
+	build/httpd_bin.elf
 
 disk: $(DISK)
 
@@ -413,7 +417,7 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite build/httpd_bin.elf /bin/httpd\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
