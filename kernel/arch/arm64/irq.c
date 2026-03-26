@@ -45,6 +45,17 @@ exc_sync_handler(void)
         __asm__ volatile("wfi");
 }
 
+/* Debug: log first few syscalls */
+static int s_syscall_debug_count = 0;
+
+/* Called from vectors.S before syscall_dispatch (for debug) */
+void
+syscall_debug(uint64_t num, uint64_t a1, uint64_t a2)
+{
+    if (s_syscall_debug_count++ < 5)
+        printk("[SVC] syscall %lu arg1=0x%lx arg2=0x%lx\n", num, a1, a2);
+}
+
 /* Non-SVC synchronous exception from EL0 (e.g. data abort, undef) */
 void
 exc_sync_el0_handler(void *frame)

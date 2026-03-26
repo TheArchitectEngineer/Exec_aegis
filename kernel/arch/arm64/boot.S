@@ -24,6 +24,10 @@ _start:
     /* Mask all exceptions (debug, SError, IRQ, FIQ) */
     msr     daifset, #0xf
 
+    /* Use SP_EL1 for kernel stack (SPSel=1).
+     * Exceptions from EL0 will use SP_EL1. */
+    msr     spsel, #1
+
     /* Zero BSS */
     adrp    x1, __bss_start
     add     x1, x1, :lo12:__bss_start

@@ -143,28 +143,44 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      */
     uint64_t *sp = (uint64_t *)(kstack + STACK_SIZE);
 
+#ifdef __aarch64__
+    /* ARM64: build a frame for proc_enter_user_arm64 trampoline.
+     * The trampoline loads TTBR0, sets SP_EL0, ELR_EL1, SPSR, and ERETs.
+     *
+     * Stack layout (high → low):
+     *   [user_pml4_phys]  — trampoline loads into TTBR0
+     *   [user_sp]         — trampoline writes to SP_EL0
+     *   [entry_rip]       — trampoline writes to ELR_EL1
+     *   [spsr = 0]        — EL0, interrupts enabled (DAIF clear)
+     * Then ctx_switch callee-saves (12 slots):
+     *   [x29=0][x30=proc_enter_user] ... [x19=0][x20=0]
+     */
+    *--sp = proc->pml4_phys;
+    *--sp = USER_STACK_TOP - 128;   /* user SP */
+    *--sp = entry_rip;              /* ELR (entry point) */
+    *--sp = 0;                      /* SPSR: EL0, all interrupts enabled */
+
+    /* ctx_switch callee-save frame (matches ctx_switch.S pop order) */
+    *--sp = 0;                          /* x20 */
+    *--sp = 0;                          /* x19 */
+    *--sp = 0;                          /* x22 */
+    *--sp = 0;                          /* x21 */
+    *--sp = 0;                          /* x24 */
+    *--sp = 0;                          /* x23 */
+    *--sp = 0;                          /* x26 */
+    *--sp = 0;                          /* x25 */
+    *--sp = 0;                          /* x28 */
+    *--sp = 0;                          /* x27 */
+    *--sp = (uint64_t)(uintptr_t)proc_enter_user; /* x30 (lr) → trampoline */
+    *--sp = 0;                          /* x29 (fp) */
+#else
+    /* x86-64: iretq frame + ctx_switch callee-saves. */
     *--sp = 0x1BULL;            /* SS  — user data | RPL=3       */
-    *--sp = USER_STACK_TOP - 128; /* RSP — 128 bytes below top; stack page is zeroed,
-                                   * so [rsp]=argc=0, [rsp+8]=argv[0]=NULL,
-                                   * [rsp+16]=envp[0]=NULL, [rsp+24]=AT_NULL. */
+    *--sp = USER_STACK_TOP - 128; /* RSP */
     *--sp = 0x202ULL;           /* RFLAGS — IF=1, reserved bit 1  */
     *--sp = 0x23ULL;            /* CS  — user code | RPL=3        */
     *--sp = entry_rip;          /* RIP — ELF entry point          */
-
-    /*
-     * User PML4 physical address: popped by proc_enter_user before iretq.
-     * proc_enter_user does: pop rax; mov cr3, rax; iretq.
-     * This switches CR3 to the user PML4 while still on the higher-half
-     * kernel stack (kva-allocated VA — accessible in both master and user
-     * PML4, as kva pages live in pd_hi which is shared across all PML4s).
-     *
-     * We must switch CR3 here rather than before ctx_switch in sched_tick
-     * because sched_tick runs on the outgoing task's kernel stack. Switching
-     * to the user PML4 from that stack must not occur until we are on a stack
-     * that is mapped in the user PML4.
-     */
     *--sp = proc->pml4_phys;    /* user PML4 phys — popped by proc_enter_user */
-
     *--sp = (uint64_t)(uintptr_t)proc_enter_user; /* ret → CR3 switch + iretq */
     *--sp = 0;                  /* rbx */
     *--sp = 0;                  /* rbp */
@@ -172,6 +188,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     *--sp = 0;                  /* r13 */
     *--sp = 0;                  /* r14 */
     *--sp = 0;                  /* r15 ← task.sp */
+#endif
 
     /* Initialize task fields */
     proc->task.sp               = (uint64_t)(uintptr_t)sp;
