@@ -40,7 +40,22 @@ exc_sync_handler(void)
     uint64_t elr;
     __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
     __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
-    printk("[PANIC] synchronous exception at ELR=0x%lx ESR=0x%lx\n", elr, esr);
+    printk("[PANIC] kernel sync exception at ELR=0x%lx ESR=0x%lx\n", elr, esr);
+    for (;;)
+        __asm__ volatile("wfi");
+}
+
+/* Non-SVC synchronous exception from EL0 (e.g. data abort, undef) */
+void
+exc_sync_el0_handler(void *frame)
+{
+    uint64_t esr;
+    uint64_t elr;
+    (void)frame;
+    __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
+    __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
+    printk("[PANIC] user sync exception at ELR=0x%lx ESR=0x%lx EC=0x%x\n",
+           elr, esr, (uint32_t)(esr >> 26));
     for (;;)
         __asm__ volatile("wfi");
 }

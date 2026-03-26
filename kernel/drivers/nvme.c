@@ -15,7 +15,7 @@
  */
 #include "nvme.h"
 #include "arch.h"
-#include "../arch/x86_64/pcie.h"
+#include "pcie.h"
 #include "../mm/vmm.h"
 #include "../mm/kva.h"
 #include "../mm/pmm.h"

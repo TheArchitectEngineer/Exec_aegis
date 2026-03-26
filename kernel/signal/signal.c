@@ -1,13 +1,26 @@
 #include "signal.h"
 #include "proc.h"
 #include "sched.h"
-#include "uaccess.h"
-#include "syscall_util.h"   /* for user_ptr_valid */
 #include "printk.h"
-#include "idt.h"        /* for cpu_state_t */
-#include "syscall.h"    /* for syscall_frame_t */
-#include "vmm.h"        /* for vmm_switch_to, vmm_get_master_pml4 */
 #include <stdint.h>
+
+#ifdef __aarch64__
+/* ARM64: signal delivery is not yet ported. Provide minimal stubs
+ * so the kernel compiles. Signal dispatch is a no-op — signals are
+ * queued but never delivered to user space until this is implemented. */
+#include "idt.h"
+#include "syscall.h"
+void signal_deliver(struct cpu_state *s) { (void)s; }
+int signal_deliver_sysret(struct syscall_frame *frame, uint64_t *saved_rdi_ptr) {
+    (void)frame; (void)saved_rdi_ptr; return 0;
+}
+
+#else /* x86-64 */
+#include "uaccess.h"
+#include "syscall_util.h"
+#include "idt.h"
+#include "syscall.h"
+#include "vmm.h"
 
 /*
  * signal_deliver — deliver the highest-priority pending signal when returning
@@ -268,3 +281,4 @@ signal_check_pending(void)
     aegis_process_t *proc = (aegis_process_t *)task;
     return (proc->pending_signals & ~proc->signal_mask) != 0;
 }
+#endif /* !__aarch64__ */
