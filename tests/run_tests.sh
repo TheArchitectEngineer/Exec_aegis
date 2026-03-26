@@ -114,3 +114,8 @@ python3 tests/test_login.py
 # Skipped automatically if build/disk.img is not present.
 echo "--- test_vigil ---"
 python3 tests/test_vigil.py
+
+# Phase 26 socket API test — boots INIT=vigil with httpd service on q35 + NVMe disk.
+# Skipped automatically if build/disk.img is not present.
+echo "--- test_socket ---"
+python3 tests/test_socket.py

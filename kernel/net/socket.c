@@ -3,6 +3,9 @@
 #include "proc.h"
 #include "vfs.h"
 #include "printk.h"
+#include "tcp.h"
+#include "sched.h"
+#include "../mm/uaccess.h"
 #include <stdint.h>
 
 static sock_t s_socks[SOCK_TABLE_SIZE];  /* zero-initialized by C runtime */
@@ -26,14 +29,53 @@ static const vfs_ops_t s_sock_ops = {
 
 static int sock_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
 {
-    (void)priv; (void)buf; (void)off; (void)len;
-    return -38;  /* ENOSYS — use recvfrom */
+    (void)off;
+    uint32_t sock_id = (uint32_t)(uintptr_t)priv;
+    sock_t *s = sock_get(sock_id);
+    if (!s) return -9;  /* EBADF */
+
+    if (s->type == SOCK_TYPE_STREAM) {
+        /* TCP: blocking recv.  Returns byte count, 0=EOF, -EPIPE on close. */
+        for (;;) {
+            int avail = tcp_conn_recv(s->tcp_conn_id, (void *)0, 0);  /* peek */
+            if (avail > 0) {
+                uint32_t want = (uint32_t)len < (uint32_t)avail ? (uint32_t)len : (uint32_t)avail;
+                if (want > 8192) want = 8192;
+                return tcp_conn_recv(s->tcp_conn_id, buf, (uint16_t)want);
+            }
+            if (avail == 0) return 0;  /* EOF / FIN */
+            if (s->nonblocking) return -11;  /* EAGAIN */
+            s->waiter_task = (aegis_task_t *)sched_current();
+            sched_block();
+        }
+    }
+    /* UDP: peek from ring buffer — kernel buf already filled via recvfrom */
+    return -38;  /* ENOSYS for UDP via read() — use recvfrom */
 }
 
 static int sock_vfs_write(void *priv, const void *buf, uint64_t len)
 {
-    (void)priv; (void)buf; (void)len;
-    return -38;  /* ENOSYS — use sendto */
+    uint32_t sock_id = (uint32_t)(uintptr_t)priv;
+    sock_t *s = sock_get(sock_id);
+    if (!s) return -9;  /* EBADF */
+
+    if (s->type == SOCK_TYPE_STREAM) {
+        if (s->state != SOCK_CONNECTED) return -107;  /* ENOTCONN */
+        /* buf is a raw user-space pointer from sys_write.  Copy to kernel
+         * staging before passing to tcp_conn_send to avoid SMAP fault. */
+        static uint8_t s_sndbuf[1460];
+        uint32_t sent = 0;
+        while (sent < (uint32_t)len) {
+            uint32_t chunk = (uint32_t)len - sent;
+            if (chunk > 1460) chunk = 1460;
+            copy_from_user(s_sndbuf, (const uint8_t *)buf + sent, chunk);
+            int n = tcp_conn_send(s->tcp_conn_id, s_sndbuf, (uint16_t)chunk);
+            if (n <= 0) return sent > 0 ? (int)sent : -32;  /* EPIPE */
+            sent += (uint32_t)n;
+        }
+        return (int)sent;
+    }
+    return -38;  /* ENOSYS for UDP via write() — use sendto */
 }
 
 static void sock_vfs_close(void *priv)

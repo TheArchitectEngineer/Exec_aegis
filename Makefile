@@ -164,7 +164,8 @@ PROG_BIN_SRCS = \
     kernel/oksh_bin.c \
     kernel/login_bin.c \
     kernel/vigil_bin.c \
-    kernel/vigictl_bin.c
+    kernel/vigictl_bin.c \
+    kernel/httpd_blob.c
 
 # ── Object file lists ─────────────────────────────────────────────────────────
 ARCH_OBJS      = $(patsubst kernel/%.c,$(BUILD)/%.o,$(ARCH_SRCS))
@@ -372,6 +373,12 @@ kernel/vigictl_bin.c: user/vigictl/vigictl
 build/httpd_bin.elf: kernel/httpd_bin.c
 	musl-gcc -static -Wall -O2 -o $@ $<
 
+# Embed compiled httpd ELF into kernel initrd blob.
+# The xxd-generated names use the filename (httpd_bin.elf → httpd_bin_elf /
+# httpd_bin_elf_len) which match the extern declarations in initrd.c.
+kernel/httpd_blob.c: build/httpd_bin.elf
+	cd build && xxd -i httpd_bin.elf > ../kernel/httpd_blob.c
+
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(INIT_BIN_C) $(PROG_BIN_SRCS) $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
@@ -436,6 +443,16 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'write /tmp/aegis-vigil-run /etc/vigil/services/getty/run\nwrite /tmp/aegis-vigil-policy /etc/vigil/services/getty/policy\nwrite /tmp/aegis-vigil-caps /etc/vigil/services/getty/caps\nwrite /tmp/aegis-vigil-user /etc/vigil/services/getty/user\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	rm -f /tmp/aegis-vigil-run /tmp/aegis-vigil-policy /tmp/aegis-vigil-caps /tmp/aegis-vigil-user
+	# httpd vigil service — binds :80, serves HTTP
+	printf 'mkdir /etc/vigil/services/httpd\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	printf 'exec /bin/httpd\n' > /tmp/aegis-httpd-run
+	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-httpd-policy
+	printf 'NET_SOCKET VFS_OPEN VFS_READ\n' > /tmp/aegis-httpd-caps
+	printf 'root\n' > /tmp/aegis-httpd-user
+	printf 'write /tmp/aegis-httpd-run /etc/vigil/services/httpd/run\nwrite /tmp/aegis-httpd-policy /etc/vigil/services/httpd/policy\nwrite /tmp/aegis-httpd-caps /etc/vigil/services/httpd/caps\nwrite /tmp/aegis-httpd-user /etc/vigil/services/httpd/user\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	rm -f /tmp/aegis-httpd-run /tmp/aegis-httpd-policy /tmp/aegis-httpd-caps /tmp/aegis-httpd-user
 	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
 	@echo "Disk image created: $(DISK)"
