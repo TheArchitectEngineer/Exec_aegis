@@ -182,7 +182,7 @@ sys_getdents64(uint64_t fd_num, uint64_t dirp, uint64_t count)
 
         /* Record size: fixed header (19 bytes) + name + null, rounded up to 8 */
         uint64_t namelen = 0;
-        while (name[namelen]) namelen++;
+        while (name[namelen] && namelen < 255) namelen++;
         uint16_t reclen = (uint16_t)(19 + namelen + 1);
         reclen = (uint16_t)((reclen + 7) & ~7);
 

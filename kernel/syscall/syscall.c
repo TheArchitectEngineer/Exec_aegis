@@ -14,29 +14,22 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
      * most common ones to x86-64 numbers used by the dispatch table.
      * This avoids duplicating the entire switch table. */
     switch (num) {
-    case  56: num = 57;  break;  /* clone → fork (simplified) */
     case  57: num = 3;   break;  /* close */
     case  61: num = 217; break;  /* getdents64 */
     case  63: num = 0;   break;  /* read */
     case  64: num = 1;   break;  /* write */
     case  66: num = 20;  break;  /* writev */
-    case  78: num = 0;   break;  /* readlinkat → read (stub) */
     case  79: num = 5;   break;  /* fstatat → fstat (approx) */
     case  80: num = 5;   break;  /* fstat */
     case  93: num = 60;  break;  /* exit */
     case  94: num = 231; break;  /* exit_group */
     case  96: num = 273; break;  /* set_robust_list */
-    case  98: num = 21;  break;  /* futex → access (stub) */
     case 113: num = 228; break;  /* clock_gettime */
-    case 124: num = 162; break;  /* sched_yield → sync (stub) */
-    case 131: num = 130; break;  /* sigaltstack → sigsuspend (stub) */
     case 134: num = 13;  break;  /* rt_sigaction */
     case 135: num = 14;  break;  /* rt_sigprocmask */
     case 139: num = 15;  break;  /* rt_sigreturn */
-    case 153: num = 7;   break;  /* times → poll (stub) */
     case 160: num = 63;  break;  /* uname */
-    case 165: num = 9;   break;  /* mount → mmap (stub) */
-    case 172: num = 110; break;  /* getpid → getppid (approx) */
+    case 172: num = 39;  break;  /* getpid */
     case 174: num = 102; break;  /* getuid */
     case 175: num = 107; break;  /* geteuid */
     case 176: num = 104; break;  /* getgid */
@@ -59,13 +52,12 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 221: num = 59;  break;  /* execve */
     case 222: num = 9;   break;  /* mmap */
     case 226: num = 10;  break;  /* mprotect */
-    case 233: num = 95;  break;  /* umask → umask (same) */
+    case 233: num = 95;  break;  /* umask */
     case 260: num = 61;  break;  /* wait4 → waitpid */
-    case 261: num = 62;  break;  /* kill → kill (approx) */
-    case 278: num = 217; break;  /* getrandom → getdents64 (stub) */
+    case 261: num = 62;  break;  /* kill */
     case 281: num = 293; break;  /* pipe2 */
-    case 291: num = 158; break;  /* arch_prctl → arch_prctl */
-    /* Leave unrecognized numbers as-is — dispatch returns ENOSYS */
+    case 291: num = 158; break;  /* arch_prctl */
+    /* Unrecognized numbers fall through — dispatch returns ENOSYS */
     }
 #endif
     switch (num) {
