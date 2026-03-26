@@ -155,7 +155,6 @@ void save_user_tpidr(void) {
 /* Called from fork_child_return and EL0 IRQ return to set TTBR0 + TLS. */
 extern uint64_t arch_get_current_fs_base(void);  /* in proc.c */
 
-extern void serial_write_string(const char *);
 void fork_child_load_ttbr0(void) {
     uint64_t pml4 = arch_get_current_pml4();
     if (pml4)

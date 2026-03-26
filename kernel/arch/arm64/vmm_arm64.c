@@ -326,12 +326,6 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     uint64_t *l3 = (uint64_t *)(uintptr_t)(l3_phys + KERN_VA_OFFSET);
     l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
     arch_vmm_invlpg(virt);
-
-    static int s_umap_count = 0;
-    s_umap_count++;
-    if (s_umap_count <= 3 || (s_umap_count % 20 == 0))
-        printk("[UMAP] #%u va=0x%lx → L2[%lu] L3[%lu]\n",
-               (uint32_t)s_umap_count, virt, l2_idx, l3_idx);
 }
 
 uint64_t
@@ -436,29 +430,6 @@ int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4) {
     #define PA_TO_KVA(pa) ((uint64_t *)(uintptr_t)((pa) + KERN_VA_OFFSET))
 
     uint64_t *l0 = PA_TO_KVA(src_pml4);
-
-    /* Debug: count pages in src PML4 */
-    {
-        int total = 0;
-        uint64_t ii0, ii1, ii2, ii3;
-        for (ii0 = 0; ii0 < 512; ii0++) {
-            if (!(l0[ii0] & PTE_VALID)) continue;
-            uint64_t *dl1 = PA_TO_KVA(PTE_ADDR(l0[ii0]));
-            for (ii1 = 0; ii1 < 512; ii1++) {
-                if (!(dl1[ii1] & PTE_VALID) || !(dl1[ii1] & PTE_TABLE)) continue;
-                uint64_t *dl2 = PA_TO_KVA(PTE_ADDR(dl1[ii1]));
-                for (ii2 = 0; ii2 < 512; ii2++) {
-                    if (!(dl2[ii2] & PTE_VALID)) continue;
-                    if (ii2 < 10) printk("[FORK] L2[%lu]=0x%lx t=%lu\n", ii2, dl2[ii2], (dl2[ii2]>>1)&1);
-                    if (!(dl2[ii2] & PTE_TABLE)) continue;
-                    uint64_t *dl3 = PA_TO_KVA(PTE_ADDR(dl2[ii2]));
-                    for (ii3 = 0; ii3 < 512; ii3++)
-                        if (dl3[ii3] & PTE_VALID) total++;
-                }
-            }
-        }
-        printk("[FORK] src has %u leaf pages\n", (uint32_t)total);
-    }
 
     for (i0 = 0; i0 < 512; i0++) {
         if (!(l0[i0] & PTE_VALID)) continue;

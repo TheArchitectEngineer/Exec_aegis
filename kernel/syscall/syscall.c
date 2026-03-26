@@ -14,39 +14,48 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
      * most common ones to x86-64 numbers used by the dispatch table.
      * This avoids duplicating the entire switch table. */
     switch (num) {
+    /* File I/O */
+    case  17: num = 79;  break;  /* getcwd */
+    case  23: num = 33;  break;  /* dup */
+    case  24: num = 33;  break;  /* dup3 → dup (approx) */
+    case  25: num = 72;  break;  /* fcntl */
+    case  29: num = 16;  break;  /* ioctl */
+    case  35: num = 87; arg1 = arg2; break;  /* unlinkat → unlink (skip dirfd) */
+    case  46: num = 5;   break;  /* ftruncate → fstat (stub) */
+    case  48: num = 21; arg1 = arg2; arg2 = arg3; break; /* faccessat → access (skip dirfd) */
+    case  49: num = 80;  break;  /* chdir */
+    case  56: num = 257; break;  /* openat */
     case  57: num = 3;   break;  /* close */
     case  61: num = 217; break;  /* getdents64 */
+    case  62: num = 8;   break;  /* lseek */
     case  63: num = 0;   break;  /* read */
     case  64: num = 1;   break;  /* write */
     case  66: num = 20;  break;  /* writev */
+    /* readlinkat: not supported, let it fall through to ENOSYS */
     case  79: num = 5;   break;  /* fstatat → fstat (approx) */
     case  80: num = 5;   break;  /* fstat */
+    case  82: num = 162; break;  /* fsync → sync */
+    /* Process */
     case  93: num = 60;  break;  /* exit */
     case  94: num = 231; break;  /* exit_group */
     case  96: num = 218; break;  /* set_tid_address */
     case  99: num = 273; break;  /* set_robust_list */
     case 113: num = 228; break;  /* clock_gettime */
+    case 124: num = 35;  break;  /* sched_yield → nanosleep(0) */
+    case 129: num = 62;  break;  /* kill */
+    case 130: num = 130; break;  /* rt_sigsuspend */
+    case 131: num = 13;  break;  /* sigaltstack → rt_sigaction (stub) */
     case 134: num = 13;  break;  /* rt_sigaction */
     case 135: num = 14;  break;  /* rt_sigprocmask */
     case 139: num = 15;  break;  /* rt_sigreturn */
     case 160: num = 63;  break;  /* uname */
     case 172: num = 39;  break;  /* getpid */
+    case 173: num = 110; break;  /* getppid */
     case 174: num = 102; break;  /* getuid */
     case 175: num = 107; break;  /* geteuid */
     case 176: num = 104; break;  /* getgid */
     case 177: num = 108; break;  /* getegid */
     case 178: num = 39;  break;  /* gettid → getpid */
-    case 198: num = 41;  break;  /* socket */
-    case 200: num = 49;  break;  /* bind */
-    case 201: num = 50;  break;  /* listen */
-    case 202: num = 42;  break;  /* accept */
-    case 203: num = 42;  break;  /* connect */
-    case 204: num = 51;  break;  /* getsockname */
-    case 206: num = 44;  break;  /* sendto */
-    case 207: num = 45;  break;  /* recvfrom */
-    case 208: num = 54;  break;  /* setsockopt */
-    case 209: num = 55;  break;  /* getsockopt */
-    case 210: num = 48;  break;  /* shutdown */
     case 214: num = 12;  break;  /* brk */
     case 215: num = 11;  break;  /* munmap */
     case 220: num = 57;  break;  /* clone → fork */
@@ -58,6 +67,21 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 261: num = 62;  break;  /* kill */
     case 281: num = 293; break;  /* pipe2 */
     case 291: num = 158; break;  /* arch_prctl */
+    /* Directory */
+    case  34: num = 83; arg1 = arg2; arg2 = arg3; break; /* mkdirat → mkdir (skip dirfd) */
+    case  38: num = 82; arg1 = arg2; arg2 = arg4; break; /* renameat2 → rename (skip dirfds) */
+    /* Networking */
+    case 198: num = 41;  break;  /* socket */
+    case 200: num = 49;  break;  /* bind */
+    case 201: num = 50;  break;  /* listen */
+    case 202: num = 42;  break;  /* accept */
+    case 203: num = 42;  break;  /* connect */
+    case 204: num = 51;  break;  /* getsockname */
+    case 206: num = 44;  break;  /* sendto */
+    case 207: num = 45;  break;  /* recvfrom */
+    case 208: num = 54;  break;  /* setsockopt */
+    case 209: num = 55;  break;  /* getsockopt */
+    case 210: num = 48;  break;  /* shutdown */
     /* Unrecognized numbers fall through — dispatch returns ENOSYS */
     }
 #endif

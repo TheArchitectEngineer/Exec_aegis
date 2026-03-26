@@ -1,10 +1,11 @@
-#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
 int main(int argc, char **argv) {
     int i;
     for (i = 1; i < argc; i++) {
-        fputs(argv[i], stdout);
-        if (i + 1 < argc) fputc(' ', stdout);
+        write(1, argv[i], strlen(argv[i]));
+        if (i + 1 < argc) write(1, " ", 1);
     }
-    fputc('\n', stdout);
+    write(1, "\n", 1);
     return 0;
 }

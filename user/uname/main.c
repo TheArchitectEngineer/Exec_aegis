@@ -1,2 +1,10 @@
 #include <stdio.h>
-int main(void) { puts("Aegis x86_64"); return 0; }
+#include <sys/utsname.h>
+int main(void) {
+    struct utsname u;
+    if (uname(&u) == 0)
+        printf("%s %s\n", u.sysname, u.machine);
+    else
+        puts("Aegis");
+    return 0;
+}

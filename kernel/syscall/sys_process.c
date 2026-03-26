@@ -259,10 +259,6 @@ sys_fork(syscall_frame_t *frame)
     sp[32] = frame->elr;     /* elr_el1 (return to user) */
     sp[33] = frame->spsr;    /* spsr_el1 */
 
-#ifdef __aarch64__
-    printk("[FORK] child sp_el0=0x%lx elr=0x%lx\n", frame->user_sp, frame->elr);
-#endif
-
     /* ctx_switch callee-save frame: 12 slots (matching ctx_switch.S) */
     /* lr (x30) = fork_child_return, rest zeroed */
     *--sp = 0;                          /* x20 */
@@ -882,7 +878,11 @@ sys_uname(uint64_t buf_uptr)
     __builtin_memcpy(uts + 1*65,  "aegis",   5); /* nodename   */
     __builtin_memcpy(uts + 2*65,  "1.0.0",   5); /* release    */
     __builtin_memcpy(uts + 3*65,  "#1",      2); /* version    */
+#ifdef __aarch64__
+    __builtin_memcpy(uts + 4*65,  "aarch64", 7); /* machine    */
+#else
     __builtin_memcpy(uts + 4*65,  "x86_64",  6); /* machine    */
+#endif
     __builtin_memcpy(uts + 5*65,  "(none)",  6); /* domainname */
     copy_to_user((void *)(uintptr_t)buf_uptr, uts, sizeof(uts));
     return 0;
