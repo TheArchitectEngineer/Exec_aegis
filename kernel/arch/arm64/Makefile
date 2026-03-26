@@ -45,7 +45,9 @@ ARCH_OBJS = $(BUILD)/boot.o \
             $(BUILD)/gic.o \
             $(BUILD)/irq.o \
             $(BUILD)/stubs.o \
-            $(BUILD)/ctx_switch.o
+            $(BUILD)/ctx_switch.o \
+            $(BUILD)/proc_enter.o \
+            $(BUILD)/init_arm64_bin.o
 
 # Shared kernel sources (arch-agnostic)
 SHARED_OBJS = $(BUILD)/printk.o \
@@ -126,6 +128,12 @@ $(BUILD)/stubs.o: stubs.c | $(BUILD)
 
 $(BUILD)/ctx_switch.o: ctx_switch.S | $(BUILD)
 	$(CC) $(ASFLAGS) -c $< -o $@
+
+$(BUILD)/proc_enter.o: proc_enter.S | $(BUILD)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+$(BUILD)/init_arm64_bin.o: init_arm64_bin.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 # Shared kernel sources
 $(BUILD)/printk.o: $(REPO)/kernel/core/printk.c | $(BUILD)

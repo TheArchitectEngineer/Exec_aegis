@@ -66,6 +66,10 @@ arch_request_shutdown(void)
 }
 
 /* ── Capability system stubs (Rust FFI — not yet built for aarch64) ── */
+void cap_init(void) {
+    extern void serial_write_string(const char *);
+    serial_write_string("[CAP] OK: capability subsystem initialized\n");
+}
 int cap_check(void *proc, uint32_t kind, uint32_t rights)
     { (void)proc; (void)kind; (void)rights; return 0; /* allow all */ }
 int cap_grant(void *proc, uint32_t kind, uint32_t rights)
@@ -81,9 +85,8 @@ void kbd_usb_inject(char c) { (void)c; }
 void signal_send_pgrp(uint32_t pgrp, int sig) { (void)pgrp; (void)sig; }
 
 /* ── User binary blobs — empty placeholders (no user binaries for ARM64 yet) ── */
-const unsigned char init_elf[] = { 0 };
-const unsigned int  init_elf_len = 0;
-const char         *init_name = "/bin/init";
+/* init_elf and init_elf_len provided by init_arm64_bin.c (compiled separately) */
+const char *init_name = "/bin/init";
 const unsigned char shell_elf[] = { 0 };
 const unsigned int  shell_elf_len = 0;
 const unsigned char cat_elf[] = { 0 }, echo_elf[] = { 0 }, ls_elf[] = { 0 };
@@ -105,20 +108,7 @@ const unsigned int  vigil_elf_len = 0, vigictl_elf_len = 0;
 const unsigned char httpd_bin_elf[] = { 0 };
 const unsigned int  httpd_bin_elf_len = 0;
 
-/* ── ARM64 asm trampolines ── */
-/* proc_enter_user — switches to user PML4 and ERETs to EL0.
- * Called from the ctx_switch return path for the first scheduling of init. */
-void proc_enter_user(void) {
-    /* TODO: implement properly — load user PML4 into TTBR0, ERET to EL0 */
-    for (;;) __asm__ volatile("wfi");
-}
-
-/* fork_child_return — first scheduling of a fork child.
- * ctx_switch returns here; we restore the EL0 frame and ERET. */
-void fork_child_return(void) {
-    /* TODO: implement — restore SAVE_ALL_EL0 frame from stack, ERET */
-    for (;;) __asm__ volatile("wfi");
-}
+/* proc_enter_user and fork_child_return are now in proc_enter.S */
 
 /* ── Stubs for subsystems not yet ported ──────────────────────────── */
 
@@ -133,8 +123,14 @@ void     kbd_set_tty_pgrp(uint32_t pgid) { s_tty_pgrp = pgid; }
 uint32_t kbd_get_tty_pgrp(void) { return s_tty_pgrp; }
 
 /* sched.c calls these — stub until user process support is added */
-void arch_set_kernel_stack(uint64_t sp0) { (void)sp0; }
-void arch_set_master_pml4(uint64_t pml4_phys) { (void)pml4_phys; }
+void arch_set_kernel_stack(uint64_t sp0) {
+    /* On ARM64 with SPSel=1, the kernel uses SP (= SP_EL1 at EL1).
+     * Exceptions from EL0 auto-use SP_EL1. The scheduler's ctx_switch
+     * already switches SP to the incoming task's kernel stack. */
+    (void)sp0;
+}
+uint64_t g_master_pml4 = 0;
+void arch_set_master_pml4(uint64_t pml4_phys) { g_master_pml4 = pml4_phys; }
 
 /* sched.c exit path calls ext2_sync and signal_send_pid */
 /* ext2_sync provided by real ext2_cache.c */

@@ -2,11 +2,38 @@
  * vectors.S — ARM64 exception vector table + handlers.
  *
  * Vector layout: 16 entries × 128 bytes, 2KB aligned.
- * Active vectors: [4] kernel sync, [5] kernel IRQ,
- *                 [8] user sync (SVC), [9] user IRQ.
+ *
+ * On EL0→EL1 exception entry, we switch TTBR0 to the master (kernel) PML4
+ * so device MMIO is accessible. Before ERET back to EL0, we restore the
+ * user PML4. The user TTBR0 is saved in a global (single-CPU only).
  */
 
-/* ── Macros for full GPR save/restore (EL0 exceptions) ─────────── */
+/* ── Macros ──────────────────────────────────────────────────────── */
+
+.macro KERNEL_ENTRY_FROM_EL0
+    /* Save user TTBR0 and switch to kernel PML4.
+     * Uses x9/x10 as scratch — saved by SAVE_ALL_EL0 afterward. */
+    mrs     x9, ttbr0_el1
+    adrp    x10, g_saved_user_ttbr0
+    add     x10, x10, :lo12:g_saved_user_ttbr0
+    str     x9, [x10]               /* save user TTBR0 */
+    adrp    x10, g_master_pml4
+    add     x10, x10, :lo12:g_master_pml4
+    ldr     x10, [x10]
+    msr     ttbr0_el1, x10          /* switch to master */
+    tlbi    vmalle1                 /* flush TLB after TTBR switch */
+    dsb     sy
+    isb
+.endm
+
+.macro KERNEL_EXIT_TO_EL0
+    /* Restore user TTBR0 before ERET */
+    adrp    x10, g_saved_user_ttbr0
+    add     x10, x10, :lo12:g_saved_user_ttbr0
+    ldr     x10, [x10]
+    msr     ttbr0_el1, x10
+    isb
+.endm
 
 .macro SAVE_ALL_EL0
     sub     sp, sp, #(34 * 8)
@@ -58,42 +85,47 @@
     add     sp, sp, #(34 * 8)
 .endm
 
-/* ── Vector table ──────────────────────────────────────────────── */
+/* ── Global: saved user TTBR0 (single-CPU) ─────────────────────── */
+    .section .bss
+    .balign 8
+    .globl g_saved_user_ttbr0
+g_saved_user_ttbr0:
+    .space 8
 
+/* ── Vector table ──────────────────────────────────────────────── */
     .section .text
     .balign 2048
     .globl exception_vectors
 exception_vectors:
-
-/* Current EL, SP_EL0 (unused — we use SP_ELx) */
+/* Current EL, SP_EL0 (unused) */
     .balign 128
-    b       _exc_hang           /* [0] Sync */
+    b       _exc_hang
     .balign 128
-    b       _exc_hang           /* [1] IRQ */
+    b       _exc_hang
     .balign 128
-    b       _exc_hang           /* [2] FIQ */
+    b       _exc_hang
     .balign 128
-    b       _exc_hang           /* [3] SError */
+    b       _exc_hang
 
 /* Current EL, SP_ELx (kernel mode) */
     .balign 128
-    b       _exc_sync_el1       /* [4] Sync */
+    b       _exc_sync_el1
     .balign 128
-    b       _exc_irq_el1        /* [5] IRQ */
+    b       _exc_irq_el1
     .balign 128
-    b       _exc_hang           /* [6] FIQ */
+    b       _exc_hang
     .balign 128
-    b       _exc_hang           /* [7] SError */
+    b       _exc_hang
 
 /* Lower EL, AArch64 (user mode) */
     .balign 128
-    b       _exc_sync_el0       /* [8] Sync (SVC) */
+    b       _exc_sync_el0
     .balign 128
-    b       _exc_irq_el0        /* [9] IRQ */
+    b       _exc_irq_el0
     .balign 128
-    b       _exc_hang           /* [10] FIQ */
+    b       _exc_hang
     .balign 128
-    b       _exc_hang           /* [11] SError */
+    b       _exc_hang
 
 /* Lower EL, AArch32 (unused) */
     .balign 128
@@ -111,7 +143,6 @@ _exc_hang:
     wfi
     b       _exc_hang
 
-/* Kernel synchronous exception — diagnostic + hang */
 _exc_sync_el1:
     stp     x0, x1,   [sp, #-16]!
     stp     x2, x3,   [sp, #-16]!
@@ -122,7 +153,6 @@ _exc_sync_el1:
     ldp     x0, x1,   [sp], #16
     eret
 
-/* Kernel IRQ — save caller-saved regs, dispatch, restore */
 _exc_irq_el1:
     stp     x0, x1,   [sp, #-16]!
     stp     x2, x3,   [sp, #-16]!
@@ -149,34 +179,27 @@ _exc_irq_el1:
     ldp     x0, x1,   [sp], #16
     eret
 
-/*
- * User synchronous (SVC) — full context save, dispatch syscall, restore.
- *
- * Linux AArch64 syscall: x8=number, x0-x5=args, x0=return.
- * Frame: 34 slots (x0-x30, sp_el0, elr_el1, spsr_el1).
- */
+/* ── EL0 Synchronous (SVC + faults) ── */
 _exc_sync_el0:
+    KERNEL_ENTRY_FROM_EL0
     SAVE_ALL_EL0
 
-    /* Verify ESR EC == 0x15 (SVC from AArch64) */
     mrs     x9, esr_el1
     lsr     x9, x9, #26
     cmp     x9, #0x15
     b.ne    .Lel0_not_svc
 
-    /* syscall_dispatch(frame, num, a1, a2, a3, a4, a5, a6) */
-    mov     x0, sp                     /* frame */
-    ldr     x1, [sp, #(8*8)]          /* x8 = syscall number */
-    ldr     x2, [sp, #(0*8)]          /* x0 = arg1 */
-    ldr     x3, [sp, #(1*8)]          /* x1 = arg2 */
-    ldr     x4, [sp, #(2*8)]          /* x2 = arg3 */
-    ldr     x5, [sp, #(3*8)]          /* x3 = arg4 */
-    ldr     x6, [sp, #(4*8)]          /* x4 = arg5 */
-    ldr     x7, [sp, #(5*8)]          /* x5 = arg6 */
+    /* syscall_dispatch(frame, num, a1..a6) */
+    mov     x0, sp
+    ldr     x1, [sp, #(8*8)]       /* x8 = syscall number */
+    ldr     x2, [sp, #(0*8)]       /* x0 = arg1 */
+    ldr     x3, [sp, #(1*8)]       /* x1 = arg2 */
+    ldr     x4, [sp, #(2*8)]       /* x2 = arg3 */
+    ldr     x5, [sp, #(3*8)]       /* x3 = arg4 */
+    ldr     x6, [sp, #(4*8)]       /* x4 = arg5 */
+    ldr     x7, [sp, #(5*8)]       /* x5 = arg6 */
     bl      syscall_dispatch
-
-    /* Store return value into saved x0 slot */
-    str     x0, [sp, #(0*8)]
+    str     x0, [sp, #(0*8)]       /* store return value in saved x0 */
     b       .Lel0_return
 
 .Lel0_not_svc:
@@ -185,11 +208,14 @@ _exc_sync_el0:
 
 .Lel0_return:
     RESTORE_ALL_EL0
+    KERNEL_EXIT_TO_EL0
     eret
 
-/* User IRQ — full context save, dispatch, restore */
+/* ── EL0 IRQ ── */
 _exc_irq_el0:
+    KERNEL_ENTRY_FROM_EL0
     SAVE_ALL_EL0
     bl      irq_handler
     RESTORE_ALL_EL0
+    KERNEL_EXIT_TO_EL0
     eret
