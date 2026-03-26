@@ -52,7 +52,40 @@ SHARED_OBJS = $(BUILD)/printk.o \
               $(BUILD)/pmm.o \
               $(BUILD)/vmm_arm64.o \
               $(BUILD)/kva.o \
-              $(BUILD)/sched.o
+              $(BUILD)/sched.o \
+              $(BUILD)/syscall.o \
+              $(BUILD)/sys_io.o \
+              $(BUILD)/sys_memory.o \
+              $(BUILD)/sys_process.o \
+              $(BUILD)/sys_file.o \
+              $(BUILD)/sys_signal.o \
+              $(BUILD)/sys_socket.o \
+              $(BUILD)/vfs.o \
+              $(BUILD)/initrd.o \
+              $(BUILD)/console.o \
+              $(BUILD)/kbd_vfs.o \
+              $(BUILD)/pipe.o \
+              $(BUILD)/blkdev.o \
+              $(BUILD)/gpt.o \
+              $(BUILD)/ext2.o \
+              $(BUILD)/ext2_cache.o \
+              $(BUILD)/ext2_dir.o \
+              $(BUILD)/ramfs.o \
+              $(BUILD)/signal.o \
+              $(BUILD)/proc.o \
+              $(BUILD)/elf.o \
+              $(BUILD)/netdev.o \
+              $(BUILD)/eth.o \
+              $(BUILD)/ip.o \
+              $(BUILD)/udp.o \
+              $(BUILD)/tcp.o \
+              $(BUILD)/socket.o \
+              $(BUILD)/epoll.o \
+              $(BUILD)/nvme.o \
+              $(BUILD)/xhci.o \
+              $(BUILD)/usb_hid.o \
+              $(BUILD)/virtio_net.o \
+              $(BUILD)/fb.o
 
 OBJS = $(ARCH_OBJS) $(SHARED_OBJS)
 
@@ -108,6 +141,105 @@ $(BUILD)/kva.o: $(REPO)/kernel/mm/kva.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/sched.o: $(REPO)/kernel/sched/sched.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/syscall.o: $(REPO)/kernel/syscall/syscall.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_io.o: $(REPO)/kernel/syscall/sys_io.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_memory.o: $(REPO)/kernel/syscall/sys_memory.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_process.o: $(REPO)/kernel/syscall/sys_process.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_file.o: $(REPO)/kernel/syscall/sys_file.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_signal.o: $(REPO)/kernel/syscall/sys_signal.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/sys_socket.o: $(REPO)/kernel/syscall/sys_socket.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/vfs.o: $(REPO)/kernel/fs/vfs.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/initrd.o: $(REPO)/kernel/fs/initrd.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/console.o: $(REPO)/kernel/fs/console.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kbd_vfs.o: $(REPO)/kernel/fs/kbd_vfs.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/pipe.o: $(REPO)/kernel/fs/pipe.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/blkdev.o: $(REPO)/kernel/fs/blkdev.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/gpt.o: $(REPO)/kernel/fs/gpt.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ext2.o: $(REPO)/kernel/fs/ext2.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ext2_cache.o: $(REPO)/kernel/fs/ext2_cache.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ext2_dir.o: $(REPO)/kernel/fs/ext2_dir.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ramfs.o: $(REPO)/kernel/fs/ramfs.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/signal.o: $(REPO)/kernel/signal/signal.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/proc.o: $(REPO)/kernel/proc/proc.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/elf.o: $(REPO)/kernel/elf/elf.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/netdev.o: $(REPO)/kernel/net/netdev.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/eth.o: $(REPO)/kernel/net/eth.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/ip.o: $(REPO)/kernel/net/ip.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/udp.o: $(REPO)/kernel/net/udp.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/tcp.o: $(REPO)/kernel/net/tcp.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/socket.o: $(REPO)/kernel/net/socket.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/epoll.o: $(REPO)/kernel/net/epoll.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/nvme.o: $(REPO)/kernel/drivers/nvme.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/xhci.o: $(REPO)/kernel/drivers/xhci.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/usb_hid.o: $(REPO)/kernel/drivers/usb_hid.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/virtio_net.o: $(REPO)/kernel/drivers/virtio_net.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/fb.o: $(REPO)/kernel/drivers/fb.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(ELF): $(OBJS) linker.ld

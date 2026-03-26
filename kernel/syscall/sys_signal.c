@@ -119,7 +119,7 @@ sys_rt_sigreturn(syscall_frame_t *frame)
      * popped pretcode (8 bytes) before jumping to __restore_rt.  Linux
      * compensates with `frame = regs->sp - sizeof(long)`.  Do the same: the
      * actual rt_sigframe_t starts at frame->user_rsp - 8. */
-    uint64_t sigframe_addr = frame->user_rsp - sizeof(uint64_t);
+    uint64_t sigframe_addr = FRAME_SP(frame) - sizeof(uint64_t);
     if (!user_ptr_valid(sigframe_addr, sizeof(rt_sigframe_t))) {
         sched_exit(); /* signal frame corrupted — terminate */
         __builtin_unreachable();
@@ -128,13 +128,19 @@ sys_rt_sigreturn(syscall_frame_t *frame)
     copy_from_user(&sf, (const void *)(uintptr_t)sigframe_addr,
                    sizeof(sf));
 
-    /* Restore interrupted execution context into sysret frame slots */
+    /* Restore interrupted execution context */
+#ifdef __aarch64__
+    FRAME_IP(frame) = (uint64_t)sf.gregs[REG_RIP];
+    FRAME_SP(frame) = (uint64_t)sf.gregs[REG_RSP];
+    FRAME_FLAGS(frame) = (uint64_t)sf.gregs[REG_EFL];
+#else
     frame->rip      = (uint64_t)sf.gregs[REG_RIP];
     frame->rflags   = (uint64_t)sf.gregs[REG_EFL];
     frame->user_rsp = (uint64_t)sf.gregs[REG_RSP];
     frame->r8       = (uint64_t)sf.gregs[REG_R8];
     frame->r9       = (uint64_t)sf.gregs[REG_R9];
     frame->r10      = (uint64_t)sf.gregs[REG_R10];
+#endif
 
     /* Restore signal mask from saved uc_sigmask */
     proc->signal_mask = sf.uc_sigmask;

@@ -1,7 +1,7 @@
 /* kernel/net/eth.c — Ethernet framing, ARP table, ARP send/resolve */
 #include "eth.h"
 #include "ip.h"     /* ip_rx(), net_get_config() */
-#include "../arch/x86_64/arch.h"   /* arch_get_ticks() */
+#include "arch.h"   /* arch_get_ticks() */
 #include "../core/printk.h"
 #include <stddef.h>
 

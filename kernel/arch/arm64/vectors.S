@@ -1,83 +1,101 @@
 /*
- * vectors.S — ARM64 exception vector table.
+ * vectors.S — ARM64 exception vector table + handlers.
  *
- * ARM64 exception vectors: 16 entries, 128 bytes each (32 instructions).
- * Layout:
- *   [0]  Current EL, SP_EL0, Synchronous
- *   [1]  Current EL, SP_EL0, IRQ
- *   [2]  Current EL, SP_EL0, FIQ
- *   [3]  Current EL, SP_EL0, SError
- *   [4]  Current EL, SP_ELx, Synchronous
- *   [5]  Current EL, SP_ELx, IRQ        ← kernel IRQ handler (timer)
- *   [6]  Current EL, SP_ELx, FIQ
- *   [7]  Current EL, SP_ELx, SError
- *   [8]  Lower EL, AArch64, Synchronous  ← syscall (SVC) from user
- *   [9]  Lower EL, AArch64, IRQ          ← user-mode IRQ
- *   [10] Lower EL, AArch64, FIQ
- *   [11] Lower EL, AArch64, SError
- *   [12-15] Lower EL, AArch32 (unused)
- *
- * For now, only vector [5] (kernel IRQ) is meaningful — the timer.
- * All others print a diagnostic and hang.
+ * Vector layout: 16 entries × 128 bytes, 2KB aligned.
+ * Active vectors: [4] kernel sync, [5] kernel IRQ,
+ *                 [8] user sync (SVC), [9] user IRQ.
  */
+
+/* ── Macros for full GPR save/restore (EL0 exceptions) ─────────── */
+
+.macro SAVE_ALL_EL0
+    sub     sp, sp, #(34 * 8)
+    stp     x0,  x1,  [sp, #(0*8)]
+    stp     x2,  x3,  [sp, #(2*8)]
+    stp     x4,  x5,  [sp, #(4*8)]
+    stp     x6,  x7,  [sp, #(6*8)]
+    stp     x8,  x9,  [sp, #(8*8)]
+    stp     x10, x11, [sp, #(10*8)]
+    stp     x12, x13, [sp, #(12*8)]
+    stp     x14, x15, [sp, #(14*8)]
+    stp     x16, x17, [sp, #(16*8)]
+    stp     x18, x19, [sp, #(18*8)]
+    stp     x20, x21, [sp, #(20*8)]
+    stp     x22, x23, [sp, #(22*8)]
+    stp     x24, x25, [sp, #(24*8)]
+    stp     x26, x27, [sp, #(26*8)]
+    stp     x28, x29, [sp, #(28*8)]
+    str     x30,       [sp, #(30*8)]
+    mrs     x10, sp_el0
+    mrs     x11, elr_el1
+    mrs     x12, spsr_el1
+    stp     x10, x11, [sp, #(31*8)]
+    str     x12,       [sp, #(33*8)]
+.endm
+
+.macro RESTORE_ALL_EL0
+    ldp     x10, x11, [sp, #(31*8)]
+    ldr     x12,       [sp, #(33*8)]
+    msr     sp_el0,    x10
+    msr     elr_el1,   x11
+    msr     spsr_el1,  x12
+    ldp     x0,  x1,  [sp, #(0*8)]
+    ldp     x2,  x3,  [sp, #(2*8)]
+    ldp     x4,  x5,  [sp, #(4*8)]
+    ldp     x6,  x7,  [sp, #(6*8)]
+    ldp     x8,  x9,  [sp, #(8*8)]
+    ldp     x10, x11, [sp, #(10*8)]
+    ldp     x12, x13, [sp, #(12*8)]
+    ldp     x14, x15, [sp, #(14*8)]
+    ldp     x16, x17, [sp, #(16*8)]
+    ldp     x18, x19, [sp, #(18*8)]
+    ldp     x20, x21, [sp, #(20*8)]
+    ldp     x22, x23, [sp, #(22*8)]
+    ldp     x24, x25, [sp, #(24*8)]
+    ldp     x26, x27, [sp, #(26*8)]
+    ldp     x28, x29, [sp, #(28*8)]
+    ldr     x30,       [sp, #(30*8)]
+    add     sp, sp, #(34 * 8)
+.endm
+
+/* ── Vector table ──────────────────────────────────────────────── */
 
     .section .text
     .balign 2048
     .globl exception_vectors
 exception_vectors:
 
-/* ── Current EL, SP_EL0 ── (not used, we use SP_ELx) */
-    /* [0] Synchronous */
+/* Current EL, SP_EL0 (unused — we use SP_ELx) */
     .balign 128
-    b       _exc_hang
-
-    /* [1] IRQ */
+    b       _exc_hang           /* [0] Sync */
     .balign 128
-    b       _exc_hang
-
-    /* [2] FIQ */
+    b       _exc_hang           /* [1] IRQ */
     .balign 128
-    b       _exc_hang
-
-    /* [3] SError */
+    b       _exc_hang           /* [2] FIQ */
     .balign 128
-    b       _exc_hang
+    b       _exc_hang           /* [3] SError */
 
-/* ── Current EL, SP_ELx ── (kernel mode exceptions) */
-    /* [4] Synchronous */
+/* Current EL, SP_ELx (kernel mode) */
     .balign 128
-    b       _exc_sync_el1
-
-    /* [5] IRQ — timer fires here */
+    b       _exc_sync_el1       /* [4] Sync */
     .balign 128
-    b       _exc_irq_el1
-
-    /* [6] FIQ */
+    b       _exc_irq_el1        /* [5] IRQ */
     .balign 128
-    b       _exc_hang
-
-    /* [7] SError */
+    b       _exc_hang           /* [6] FIQ */
     .balign 128
-    b       _exc_hang
+    b       _exc_hang           /* [7] SError */
 
-/* ── Lower EL, AArch64 ── (user mode exceptions — future) */
-    /* [8] Synchronous (SVC) */
+/* Lower EL, AArch64 (user mode) */
     .balign 128
-    b       _exc_hang
-
-    /* [9] IRQ */
+    b       _exc_sync_el0       /* [8] Sync (SVC) */
     .balign 128
-    b       _exc_hang
-
-    /* [10] FIQ */
+    b       _exc_irq_el0        /* [9] IRQ */
     .balign 128
-    b       _exc_hang
-
-    /* [11] SError */
+    b       _exc_hang           /* [10] FIQ */
     .balign 128
-    b       _exc_hang
+    b       _exc_hang           /* [11] SError */
 
-/* ── Lower EL, AArch32 ── (unused) */
+/* Lower EL, AArch32 (unused) */
     .balign 128
     b       _exc_hang
     .balign 128
@@ -87,33 +105,24 @@ exception_vectors:
     .balign 128
     b       _exc_hang
 
-/* ── Handler stubs ─────────────────────────────────────────────── */
+/* ── Handlers ──────────────────────────────────────────────────── */
 
 _exc_hang:
     wfi
     b       _exc_hang
 
-/*
- * _exc_sync_el1 — kernel synchronous exception.
- * Read ESR_EL1 for cause. For now, just hang.
- */
+/* Kernel synchronous exception — diagnostic + hang */
 _exc_sync_el1:
-    /* Save caller-saved regs */
     stp     x0, x1,   [sp, #-16]!
     stp     x2, x3,   [sp, #-16]!
     stp     x29, x30, [sp, #-16]!
-
     bl      exc_sync_handler
-
     ldp     x29, x30, [sp], #16
     ldp     x2, x3,   [sp], #16
     ldp     x0, x1,   [sp], #16
     eret
 
-/*
- * _exc_irq_el1 — kernel IRQ exception.
- * Save registers, call irq_handler (C), restore, eret.
- */
+/* Kernel IRQ — save caller-saved regs, dispatch, restore */
 _exc_irq_el1:
     stp     x0, x1,   [sp, #-16]!
     stp     x2, x3,   [sp, #-16]!
@@ -126,9 +135,7 @@ _exc_irq_el1:
     stp     x16, x17, [sp, #-16]!
     stp     x18, x30, [sp, #-16]!
     stp     x29, xzr, [sp, #-16]!
-
     bl      irq_handler
-
     ldp     x29, xzr, [sp], #16
     ldp     x18, x30, [sp], #16
     ldp     x16, x17, [sp], #16
@@ -140,4 +147,49 @@ _exc_irq_el1:
     ldp     x4, x5,   [sp], #16
     ldp     x2, x3,   [sp], #16
     ldp     x0, x1,   [sp], #16
+    eret
+
+/*
+ * User synchronous (SVC) — full context save, dispatch syscall, restore.
+ *
+ * Linux AArch64 syscall: x8=number, x0-x5=args, x0=return.
+ * Frame: 34 slots (x0-x30, sp_el0, elr_el1, spsr_el1).
+ */
+_exc_sync_el0:
+    SAVE_ALL_EL0
+
+    /* Verify ESR EC == 0x15 (SVC from AArch64) */
+    mrs     x9, esr_el1
+    lsr     x9, x9, #26
+    cmp     x9, #0x15
+    b.ne    .Lel0_not_svc
+
+    /* syscall_dispatch(frame, num, a1, a2, a3, a4, a5, a6) */
+    mov     x0, sp                     /* frame */
+    ldr     x1, [sp, #(8*8)]          /* x8 = syscall number */
+    ldr     x2, [sp, #(0*8)]          /* x0 = arg1 */
+    ldr     x3, [sp, #(1*8)]          /* x1 = arg2 */
+    ldr     x4, [sp, #(2*8)]          /* x2 = arg3 */
+    ldr     x5, [sp, #(3*8)]          /* x3 = arg4 */
+    ldr     x6, [sp, #(4*8)]          /* x4 = arg5 */
+    ldr     x7, [sp, #(5*8)]          /* x5 = arg6 */
+    bl      syscall_dispatch
+
+    /* Store return value into saved x0 slot */
+    str     x0, [sp, #(0*8)]
+    b       .Lel0_return
+
+.Lel0_not_svc:
+    mov     x0, sp
+    bl      exc_sync_el0_handler
+
+.Lel0_return:
+    RESTORE_ALL_EL0
+    eret
+
+/* User IRQ — full context save, dispatch, restore */
+_exc_irq_el0:
+    SAVE_ALL_EL0
+    bl      irq_handler
+    RESTORE_ALL_EL0
     eret

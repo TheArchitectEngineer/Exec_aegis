@@ -231,6 +231,41 @@ sys_fork(syscall_frame_t *frame)
      */
     uint64_t *sp = (uint64_t *)(kstack + 4 * 4096);
 
+#ifdef __aarch64__
+    /* ARM64 fork child frame: ctx_switch callee-saves + a trampoline that
+     * restores the EL0 exception frame and ERETs to user space.
+     * For now, build a ctx_switch frame that returns to fork_child_return
+     * which sets x0=0 (child return) and returns to user via ERET.
+     * TODO: implement fork_child_return trampoline in vectors.S */
+    extern void fork_child_return(void);
+
+    /* Build SAVE_ALL_EL0 frame (34 slots) for the trampoline to restore */
+    sp -= 34;
+    for (int fi = 0; fi < 34; fi++) sp[fi] = 0;
+    /* Copy parent's saved regs into child frame */
+    for (int fi = 0; fi < 31; fi++) sp[fi] = frame->regs[fi];
+    sp[0]  = 0;              /* x0 = 0 (fork returns 0 in child) */
+    sp[31] = frame->user_sp; /* sp_el0 */
+    sp[32] = frame->elr;     /* elr_el1 (return to user) */
+    sp[33] = frame->spsr;    /* spsr_el1 */
+
+    /* ctx_switch callee-save frame: 12 slots (matching ctx_switch.S) */
+    /* lr (x30) = fork_child_return, rest zeroed */
+    *--sp = 0;                          /* x20 */
+    *--sp = 0;                          /* x19 */
+    *--sp = 0;                          /* x22 */
+    *--sp = 0;                          /* x21 */
+    *--sp = 0;                          /* x24 */
+    *--sp = 0;                          /* x23 */
+    *--sp = 0;                          /* x26 */
+    *--sp = 0;                          /* x25 */
+    *--sp = 0;                          /* x28 */
+    *--sp = 0;                          /* x27 */
+    *--sp = (uint64_t)(uintptr_t)fork_child_return; /* x30 (lr) */
+    *--sp = 0;                          /* x29 (fp) */
+#else
+    /* x86-64: build ISR + ctx_switch frame for isr_post_dispatch path. */
+
     /* CPU ring-3 interrupt frame (ss = highest address) */
     *--sp = 0x1B;                   /* ss = user data selector              */
     *--sp = frame->user_rsp;        /* user RSP                             */
@@ -242,8 +277,7 @@ sys_fork(syscall_frame_t *frame)
     *--sp = 0;                      /* error_code                           */
     *--sp = 0;                      /* vector                               */
 
-    /* GPRs: isr_common_stub pushes rax first (high) → r15 last (low).
-     * We build in reverse: r15 first (*--sp) → rax last. */
+    /* GPRs: isr_common_stub pushes rax first (high) → r15 last (low). */
     *--sp = 0;                      /* rax = 0  (fork returns 0 in child)   */
     *--sp = 0;                      /* rbx                                  */
     *--sp = frame->rip;             /* rcx = return RIP (SYSCALL semantics) */
@@ -271,6 +305,7 @@ sys_fork(syscall_frame_t *frame)
     *--sp = 0;  /* r13                                                      */
     *--sp = 0;  /* r14                                                      */
     *--sp = 0;  /* r15  <- child->task.sp points here                       */
+#endif
 
     child->task.sp               = (uint64_t)(uintptr_t)sp;
     child->task.stack_base       = kstack;
@@ -669,9 +704,9 @@ sys_execve(syscall_frame_t *frame,
         }
     }
 
-    /* 10. Redirect SYSRET to new ELF entry point */
-    frame->rip      = er.entry;
-    frame->user_rsp = sp_va;
+    /* 10. Redirect return to new ELF entry point */
+    FRAME_IP(frame) = er.entry;
+    FRAME_SP(frame) = sp_va;
     /* ret = 0 (success) */
         } /* argc2 scope */
     } /* argc scope */
