@@ -51,6 +51,12 @@ pit_handler(void)
     xhci_poll();    /* poll USB event ring for HID reports (no-op if inactive) */
     netdev_poll_all();  /* poll registered network devices (virtio-net etc.) */
     tcp_tick();         /* Phase 25: TCP retransmit timer */
+    /* Yield to QEMU's SLIRP event loop via port I/O (causes VM-exit on TCG).
+     * The doorbell write in virtio_net_poll triggers virtio processing but not
+     * SLIRP's connection accept loop.  A port I/O read forces QEMU's main event
+     * loop to run select()/poll(), which processes SLIRP hostfwd connections.
+     * Port 0x61 (PC speaker control) is safe to read in any state. */
+    inb(0x61);
     /* Check shutdown AFTER sched_tick so the task that set s_shutdown
      * gets preempted cleanly before we call arch_debug_exit. */
     if (s_shutdown)

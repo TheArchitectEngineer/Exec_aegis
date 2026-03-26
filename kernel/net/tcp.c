@@ -50,6 +50,9 @@ typedef struct __attribute__((packed)) {
 
 static tcp_conn_t s_tcp[TCP_MAX_CONNS];
 static uint8_t s_tcp_buf[1480];
+/* RST template — used by tcp_rx to send RST|ACK for unknown ports.
+ * File-static to avoid placing a 16KB tcp_conn_t on the ISR stack. */
+static tcp_conn_t s_rst_conn;
 
 void tcp_init(void)
 {
@@ -162,17 +165,17 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
 
     if (!conn) {
         if (flags & TCP_SYN) {
+            printk("[TCP] SYN dst_port=%u\n", (uint32_t)local_port);
             tcp_conn_t *listener = tcp_find_listener(dst_ip, local_port);
             if (!listener) {
-                tcp_conn_t tmp;
-                _tcp_memset(&tmp, 0, sizeof(tmp));
-                tmp.local_ip    = dst_ip;
-                tmp.local_port  = local_port;
-                tmp.remote_ip   = src_ip;
-                tmp.remote_port = remote_port;
-                tmp.snd_nxt     = 0;
-                tmp.rcv_nxt     = seq + 1;
-                tcp_send_segment(dev, &tmp, TCP_RST | TCP_ACK, NULL, 0);
+                _tcp_memset(&s_rst_conn, 0, sizeof(s_rst_conn));
+                s_rst_conn.local_ip    = dst_ip;
+                s_rst_conn.local_port  = local_port;
+                s_rst_conn.remote_ip   = src_ip;
+                s_rst_conn.remote_port = remote_port;
+                s_rst_conn.snd_nxt     = 0;
+                s_rst_conn.rcv_nxt     = seq + 1;
+                tcp_send_segment(dev, &s_rst_conn, TCP_RST | TCP_ACK, NULL, 0);
                 return;
             }
             conn = tcp_alloc();
@@ -204,6 +207,7 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             if (ack == conn->snd_nxt) {
                 conn->snd_una  = ack;
                 conn->state    = TCP_ESTABLISHED;
+                printk("[TCP] ESTABLISHED port=%u\n", (uint32_t)conn->local_port);
                 conn->retransmit_at = 0;
                 /* Wake accept() waiter on the listener socket */
                 if (conn->listener_id != SOCK_NONE) {
@@ -474,4 +478,12 @@ tcp_conn_set_sock(uint32_t conn_id, uint32_t sock_id)
 {
     if (conn_id >= TCP_MAX_CONNS) return;
     s_tcp[conn_id].sock_id = sock_id;
+}
+
+/* tcp_conn_get: return pointer to tcp_conn_t for conn_id, or NULL if invalid. */
+tcp_conn_t *
+tcp_conn_get(uint32_t conn_id)
+{
+    if (conn_id >= TCP_MAX_CONNS) return (tcp_conn_t *)0;
+    return &s_tcp[conn_id];
 }

@@ -35,7 +35,13 @@ static int sock_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
     if (!s) return -9;  /* EBADF */
 
     if (s->type == SOCK_TYPE_STREAM) {
-        /* TCP: blocking recv.  Returns byte count, 0=EOF, -EPIPE on close. */
+        /* TCP: blocking recv.  Returns byte count, 0=EOF, -EPIPE on close.
+         *
+         * avail > 0  → data available: read it.
+         * avail == 0 → no data in rbuf; must check TCP state:
+         *   ESTABLISHED/SYN_RCVD: block (or EAGAIN if nonblocking).
+         *   CLOSE_WAIT/CLOSED:    return 0 (EOF — FIN received).
+         */
         for (;;) {
             int avail = tcp_conn_recv(s->tcp_conn_id, (void *)0, 0);  /* peek */
             if (avail > 0) {
@@ -43,7 +49,13 @@ static int sock_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
                 if (want > 8192) want = 8192;
                 return tcp_conn_recv(s->tcp_conn_id, buf, (uint16_t)want);
             }
-            if (avail == 0) return 0;  /* EOF / FIN */
+            /* avail == 0: check if EOF or just no data yet */
+            {
+                tcp_conn_t *tc = tcp_conn_get(s->tcp_conn_id);
+                if (!tc || tc->state == TCP_CLOSE_WAIT || tc->state == TCP_CLOSED
+                    || tc->state == TCP_TIME_WAIT)
+                    return 0;  /* EOF — FIN received */
+            }
             if (s->nonblocking) return -11;  /* EAGAIN */
             s->waiter_task = (aegis_task_t *)sched_current();
             sched_block();

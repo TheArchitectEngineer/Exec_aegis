@@ -11,10 +11,18 @@ static const char RESPONSE[] =
     "\r\n"
     "Hello from Aegis\n";
 
+static void log_str(const char *s)
+{
+    write(1, s, strlen(s));
+}
+
 int main(void)
 {
+    log_str("httpd: starting\n");
+
     int srv = socket(AF_INET, SOCK_STREAM, 0);
-    if (srv < 0) return 1;
+    if (srv < 0) { log_str("httpd: socket() failed\n"); return 1; }
+    log_str("httpd: socket ok\n");
 
     int yes = 1;
     setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -24,16 +32,27 @@ int main(void)
     addr.sin_port        = __builtin_bswap16(80);
     addr.sin_addr.s_addr = 0;  /* INADDR_ANY */
 
-    if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) < 0) return 1;
-    if (listen(srv, 4) < 0) return 1;
+    if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+        { log_str("httpd: bind() failed\n"); return 1; }
+    log_str("httpd: bind ok\n");
+
+    if (listen(srv, 4) < 0)
+        { log_str("httpd: listen() failed\n"); return 1; }
+    log_str("httpd: listening on :80\n");
 
     for (;;) {
+        log_str("httpd: waiting for connection\n");
         int cli = accept(srv, NULL, NULL);
-        if (cli < 0) continue;
+        if (cli < 0) { log_str("httpd: accept failed\n"); continue; }
+        log_str("httpd: accepted connection\n");
 
         char buf[256];
-        read(cli, buf, sizeof(buf) - 1);  /* drain request */
-        write(cli, RESPONSE, sizeof(RESPONSE) - 1);
+        int n = read(cli, buf, sizeof(buf) - 1);  /* drain request */
+        log_str("httpd: read done\n");
+        int w = write(cli, RESPONSE, sizeof(RESPONSE) - 1);
+        log_str("httpd: write done\n");
+        (void)n; (void)w;
         close(cli);
+        log_str("httpd: closed\n");
     }
 }

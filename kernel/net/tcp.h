@@ -73,5 +73,7 @@ int  tcp_conn_close(uint32_t conn_id);
 void tcp_conn_get_addr(uint32_t conn_id, ip4_addr_t *rip, uint16_t *rport,
                        ip4_addr_t *lip, uint16_t *lport);
 void tcp_conn_set_sock(uint32_t conn_id, uint32_t sock_id);
+/* tcp_conn_get: return pointer to tcp_conn_t for conn_id, or NULL if invalid. */
+tcp_conn_t *tcp_conn_get(uint32_t conn_id);
 
 #endif /* TCP_H */
