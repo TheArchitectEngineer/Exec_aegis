@@ -1,6 +1,8 @@
 /* kernel/net/udp.c — UDP send/receive, port demultiplexing */
 #include "udp.h"
 #include "ip.h"
+#include "socket.h"
+#include "epoll.h"
 
 /* Local memory helpers. */
 static void _udp_memset(void *dst, int val, uint32_t n)
@@ -53,19 +55,40 @@ int udp_send(netdev_t *dev, uint16_t src_port, ip4_addr_t dst_ip,
 void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             const void *udp_data, uint16_t len)
 {
-    (void)dev; (void)src_ip; (void)dst_ip;
+    (void)dev; (void)dst_ip;
     if (len < (uint16_t)sizeof(udp_hdr_t)) return;
 
     const udp_hdr_t *hdr      = (const udp_hdr_t *)udp_data;
     uint16_t udp_claimed = ntohs(hdr->length);
     if (udp_claimed < (uint16_t)sizeof(udp_hdr_t)) return;  /* malformed */
     if (udp_claimed > len) return;                           /* truncated */
-    uint16_t         dst_port = ntohs(hdr->dst_port);
+    uint16_t dst_port  = ntohs(hdr->dst_port);
+    uint16_t src_port  = ntohs(hdr->src_port);
+    uint16_t payload_len = (uint16_t)(udp_claimed - (uint16_t)sizeof(udp_hdr_t));
+    const uint8_t *payload = (const uint8_t *)udp_data + sizeof(udp_hdr_t);
     int i;
 
     for (i = 0; i < UDP_BINDINGS_MAX; i++) {
         if (s_udp[i].port == dst_port && s_udp[i].port != 0) {
-            /* Socket delivery deferred to Phase 26. */
+            uint32_t sid = s_udp[i].sock_id;
+            if (sid == SOCK_NONE) return;
+            sock_t *s = sock_get(sid);
+            if (!s) return;
+            /* Find a free UDP RX slot */
+            uint8_t next = (uint8_t)((s->udp_rx_tail + 1) & (UDP_RX_SLOTS - 1));
+            if (next == s->udp_rx_head) return;  /* ring full, drop */
+            udp_rx_slot_t *slot = &s->udp_rx[s->udp_rx_tail];
+            if (payload_len > UDP_RX_MAXBUF) payload_len = UDP_RX_MAXBUF;
+            uint32_t j;
+            for (j = 0; j < payload_len; j++)
+                slot->data[j] = payload[j];
+            slot->len      = payload_len;
+            slot->src_ip   = src_ip;
+            slot->src_port = src_port;
+            slot->in_use   = 1;
+            s->udp_rx_tail = next;
+            sock_wake(sid);
+            epoll_notify(sid, EPOLLIN);
             return;
         }
     }
