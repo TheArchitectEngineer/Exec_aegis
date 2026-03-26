@@ -25,7 +25,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* Arch-specific asm labels used by fork/proc stack frame construction.
+ * x86-64: isr_post_dispatch (ISR return path after ctx_switch).
+ * ARM64: fork_child_return (restores EL0 frame and ERETs). */
+#ifdef __aarch64__
+extern void fork_child_return(void);
+#else
 extern void isr_post_dispatch(void);
+#endif
 
 /* ── Common defines ─────────────────────────────────────────────────────── */
 
