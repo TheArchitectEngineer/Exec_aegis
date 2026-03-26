@@ -34,6 +34,11 @@ static const char s_httpd_run[]    = "/bin/httpd\n";
 static const char s_httpd_policy[] = "respawn\nmax_restarts=5\n";
 static const char s_httpd_caps[]   = "NET_SOCKET VFS_OPEN VFS_READ\n";
 
+/* dhcp vigil service config */
+static const char s_dhcp_run[]    = "/bin/dhcp\n";
+static const char s_dhcp_policy[] = "respawn\nmax_restarts=10\n";
+static const char s_dhcp_caps[]   = "NET_ADMIN NET_SOCKET\n";
+
 /* Compile-time size constants for static string entries. */
 static const uint32_t     s_motd_size          = sizeof(s_motd)          - 1;
 static const unsigned int s_passwd_size        = sizeof(s_passwd)        - 1;
@@ -45,6 +50,9 @@ static const unsigned int s_vigil_caps_size    = sizeof(s_vigil_caps)    - 1;
 static const unsigned int s_httpd_run_size     = sizeof(s_httpd_run)     - 1;
 static const unsigned int s_httpd_policy_size  = sizeof(s_httpd_policy)  - 1;
 static const unsigned int s_httpd_caps_size    = sizeof(s_httpd_caps)    - 1;
+static const unsigned int s_dhcp_run_size    = sizeof(s_dhcp_run)    - 1;
+static const unsigned int s_dhcp_policy_size = sizeof(s_dhcp_policy) - 1;
+static const unsigned int s_dhcp_caps_size   = sizeof(s_dhcp_caps)   - 1;
 
 /* Binary ELF blobs embedded by the Makefile via objcopy.
  * These symbols are resolved at link time; their lengths are not
@@ -97,6 +105,8 @@ extern const unsigned char vigictl_elf[];
 extern const unsigned int  vigictl_elf_len;
 extern const unsigned char httpd_bin_elf[];
 extern const unsigned int  httpd_bin_elf_len;
+extern const unsigned char dhcp_bin_elf[];
+extern const unsigned int  dhcp_bin_elf_len;
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -133,6 +143,10 @@ static const initrd_entry_t s_files[] = {
     { "/bin/vigil",   (const char *)vigil_elf,   &vigil_elf_len   },
     { "/bin/vigictl", (const char *)vigictl_elf, &vigictl_elf_len },
     { "/bin/httpd",   (const char *)httpd_bin_elf, &httpd_bin_elf_len },
+    { "/bin/dhcp",                        (const char *)dhcp_bin_elf, &dhcp_bin_elf_len },
+    { "/etc/vigil/services/dhcp/run",     s_dhcp_run,    &s_dhcp_run_size    },
+    { "/etc/vigil/services/dhcp/policy",  s_dhcp_policy, &s_dhcp_policy_size },
+    { "/etc/vigil/services/dhcp/caps",    s_dhcp_caps,   &s_dhcp_caps_size   },
     { "/etc/passwd",  s_passwd,                   &s_passwd_size  },
     { "/etc/shadow",  s_shadow,                   &s_shadow_size  },
     { "/etc/profile", s_profile,                  &s_profile_size },
@@ -145,7 +159,7 @@ static const initrd_entry_t s_files[] = {
     { (const char *)0, (const char *)0, (const unsigned int *)0 }  /* sentinel */
 };
 
-static const uint32_t s_nfiles = 33;
+static const uint32_t s_nfiles = 37;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -262,12 +276,15 @@ static const dir_entry_t s_vigil_entries[] = {
     { "services", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_vigil_services_entries[] = {
-    { "getty", 4 }, { "httpd", 4 }, { (const char *)0, 0 }
+    { "getty", 4 }, { "httpd", 4 }, { "dhcp", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_vigil_getty_entries[] = {
     { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_vigil_httpd_entries[] = {
+    { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
+};
+static const dir_entry_t s_vigil_dhcp_entries[] = {
     { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_bin_entries[] = {
@@ -276,7 +293,7 @@ static const dir_entry_t s_bin_entries[] = {
     { "false",  8 }, { "wc",     8 }, { "grep",   8 }, { "sort",   8 },
     { "mkdir",  8 }, { "touch",  8 }, { "rm",     8 }, { "cp",     8 },
     { "mv",     8 }, { "whoami", 8 }, { "oksh",   8 }, { "login",  8 },
-    { "vigil",  8 }, { "vigictl", 8 }, { "httpd", 8 },
+    { "vigil",  8 }, { "vigictl", 8 }, { "httpd", 8 }, { "dhcp",   8 },
     { (const char *)0, 0 }
 };
 
@@ -341,22 +358,24 @@ initrd_open(const char *path, vfs_file_t *out)
 
     /* Check for directory paths first */
     {
-        const char *dirs[10] = {
+        const char *dirs[11] = {
             "/", "/etc", "/bin", "/dev",
             "/etc/vigil", "/etc/vigil/services", "/etc/vigil/services/getty",
             "/etc/vigil/services/httpd",
+            "/etc/vigil/services/dhcp",
             "/root",
             (const char *)0
         };
-        const dir_entry_t *dir_tables[10] = {
+        const dir_entry_t *dir_tables[11] = {
             s_root_entries, s_etc_entries, s_bin_entries, s_dev_entries,
             s_vigil_entries, s_vigil_services_entries, s_vigil_getty_entries,
             s_vigil_httpd_entries,
+            s_vigil_dhcp_entries,
             s_root_dir_entries,
             (const dir_entry_t *)0
         };
         uint32_t d;
-        for (d = 0; d < 9; d++) {
+        for (d = 0; d < 10; d++) {
             const char *a = path, *b = dirs[d];
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a == *b) {
