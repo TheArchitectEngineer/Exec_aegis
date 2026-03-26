@@ -62,6 +62,7 @@ kernel_main(uint64_t dtb_phys)
     kbd_init();    /* PL011 RX interrupt for serial input */
 
     cap_init();
+
     vfs_init();
     console_init();
 

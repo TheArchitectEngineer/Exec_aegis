@@ -541,9 +541,9 @@ int vmm_write_user_bytes(uint64_t pml4_phys, uint64_t va,
         uint64_t phys = vmm_phys_of_user(pml4_phys, va);
         if (!phys) return -1;
 
-        uint8_t *dst = vmm_window_map(phys);
-        __builtin_memcpy(dst + page_off, s, chunk);
-        vmm_window_unmap();
+        /* Write directly via TTBR0 identity map (still active from boot).
+         * Avoids window conflict with vmm_phys_of_user. */
+        __builtin_memcpy((uint8_t *)(uintptr_t)(phys + page_off), s, chunk);
 
         va  += chunk;
         s   += chunk;

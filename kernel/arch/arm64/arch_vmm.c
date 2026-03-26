@@ -41,13 +41,13 @@ arch_vmm_load_user_ttbr0(uint64_t phys)
 void
 arch_vmm_invlpg(uint64_t virt)
 {
-    /* TLBI VAE1 — invalidate by VA, EL1.
-     * The VA argument is bits [43:0] of (VA >> 12). */
-    uint64_t page = virt >> 12;
+    /* Full TLB invalidate — TLBI VAE1 has issues with TTBR1 addresses
+     * (bit 43 set in the page number). Use VMALLE1 for correctness. */
+    (void)virt;
     __asm__ volatile(
-        "tlbi vae1, %0\n"
+        "tlbi vmalle1\n"
         "dsb sy\n"
         "isb\n"
-        : : "r"(page) : "memory"
+        : : : "memory"
     );
 }
