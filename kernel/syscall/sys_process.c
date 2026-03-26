@@ -206,7 +206,7 @@ sys_fork(syscall_frame_t *frame)
      * This avoids the SYSRET path entirely, eliminating the stale-frame
      * register corruption that caused r12=0 / ss=0x18 crashes.
      *
-     * Stack layout (low→high, child->task.rsp = lowest address):
+     * Stack layout (low→high, child->task.sp = lowest address):
      *
      *   -- ctx_switch callee-save frame (7 slots) --
      *   [r15=0][r14=0][r13=0][r12=0][rbp=0][rbx=0]
@@ -262,9 +262,9 @@ sys_fork(syscall_frame_t *frame)
     *--sp = 0;  /* r12                                                      */
     *--sp = 0;  /* r13                                                      */
     *--sp = 0;  /* r14                                                      */
-    *--sp = 0;  /* r15  <- child->task.rsp points here                      */
+    *--sp = 0;  /* r15  <- child->task.sp points here                       */
 
-    child->task.rsp              = (uint64_t)(uintptr_t)sp;
+    child->task.sp               = (uint64_t)(uintptr_t)sp;
     child->task.stack_base       = kstack;
     child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4 * 4096);
 
