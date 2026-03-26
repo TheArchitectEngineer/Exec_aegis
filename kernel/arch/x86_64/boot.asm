@@ -111,17 +111,20 @@ _start:
     ; Use (label - KERN_VMA) to compute their physical addresses at
     ; assemble/link time. NASM evaluates these as 32-bit constants.
     ;
-    ; We map 4MB total (two 2MB huge pages) for both identity and higher-half:
-    ;   Identity:     VA [0x000000..0x3FFFFF] → PA [0x000000..0x3FFFFF]
-    ;   Higher-half:  VA [KERN_VMA..KERN_VMA+0x3FFFFF] → PA [0x000000..0x3FFFFF]
+    ; We map 8MB total (four 2MB huge pages) for both identity and higher-half:
+    ;   Identity:     VA [0x000000..0x7FFFFF] → PA [0x000000..0x7FFFFF]
+    ;   Higher-half:  VA [KERN_VMA..KERN_VMA+0x7FFFFF] → PA [0x000000..0x7FFFFF]
+    ;
+    ; 8MB covers the kernel binary + BSS + any GRUB-placed multiboot2 info
+    ; structure that GRUB may place above 4MB when the kernel grows large.
     ;
     ; Table layout:
     ;   PML4[0]   → pdpt_lo   (identity window)
     ;   PML4[511] → pdpt_hi   (higher-half kernel)
     ;   pdpt_lo[0]            → pd_lo
     ;   pdpt_hi[PDPT_HI_IDX]  → pd_hi
-    ;   pd_lo[0,1]            → 2MB huge pages at PA 0x000000 and 0x200000
-    ;   pd_hi[0,1]            → 2MB huge pages at PA 0x000000 and 0x200000
+    ;   pd_lo[0..3]           → 2MB huge pages at PA 0x000000..0x600000
+    ;   pd_hi[0..3]           → 2MB huge pages at PA 0x000000..0x600000
 
     ; PML4[0] → pdpt_lo  (identity: VA 0x000000 → PA 0x000000)
     mov eax, dword (pdpt_lo - KERN_VMA)
@@ -146,22 +149,29 @@ _start:
     mov ebx, dword (pdpt_hi - KERN_VMA)
     mov [ebx + PDPT_HI_IDX*8], eax
 
-    ; pd_lo[0]: 2MB huge page PA 0x000000 (identity, first 2MB)
-    ; pd_lo[1]: 2MB huge page PA 0x200000 (identity, second 2MB)
+    ; pd_lo[0..3]: 2MB huge pages PA 0x000000..0x600000 (identity, first 8MB)
     ; Flags: PRESENT(0x01) | WRITABLE(0x02) | HUGE(0x80) = 0x83
+    ; Each PD entry is 8 bytes; entries at offsets 0, 8, 16, 24.
     mov ebx, dword (pd_lo - KERN_VMA)
     mov dword [ebx],       0x00000083  ; PA=0x000000, PRESENT|WRITABLE|HUGE
     mov dword [ebx + 4],   0x00000000  ; high 32 bits of address
-    mov dword [ebx + 8],   0x00200083  ; PA=0x200000, PRESENT|WRITABLE|HUGE
+    mov dword [ebx + 8],   0x00200083  ; PA=0x200000
     mov dword [ebx + 12],  0x00000000
+    mov dword [ebx + 16],  0x00400083  ; PA=0x400000
+    mov dword [ebx + 20],  0x00000000
+    mov dword [ebx + 24],  0x00600083  ; PA=0x600000
+    mov dword [ebx + 28],  0x00000000
 
-    ; pd_hi[0]: 2MB huge page PA 0x000000 (kernel higher-half, first 2MB)
-    ; pd_hi[1]: 2MB huge page PA 0x200000 (kernel higher-half, second 2MB)
+    ; pd_hi[0..3]: 2MB huge pages PA 0x000000..0x600000 (kernel higher-half)
     mov ebx, dword (pd_hi - KERN_VMA)
     mov dword [ebx],       0x00000083
     mov dword [ebx + 4],   0x00000000
     mov dword [ebx + 8],   0x00200083
     mov dword [ebx + 12],  0x00000000
+    mov dword [ebx + 16],  0x00400083
+    mov dword [ebx + 20],  0x00000000
+    mov dword [ebx + 24],  0x00600083
+    mov dword [ebx + 28],  0x00000000
 
     ; ── Enable Physical Address Extension (required for long mode) ───────
     ; CR4.PAE = bit 5

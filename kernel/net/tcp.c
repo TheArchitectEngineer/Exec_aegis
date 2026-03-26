@@ -1,6 +1,8 @@
 /* kernel/net/tcp.c — TCP state machine (RFC 793), retransmit, TIME_WAIT */
 #include "tcp.h"
 #include "ip.h"
+#include "socket.h"
+#include "epoll.h"
 #include "../arch/x86_64/arch.h"   /* arch_get_ticks() */
 #include "../core/printk.h"
 #include <stddef.h>                 /* NULL */
@@ -203,6 +205,20 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                 conn->snd_una  = ack;
                 conn->state    = TCP_ESTABLISHED;
                 conn->retransmit_at = 0;
+                /* Wake accept() waiter on the listener socket */
+                if (conn->listener_id != SOCK_NONE) {
+                    sock_t *ls = sock_get(conn->listener_id);
+                    if (ls) {
+                        uint8_t next_tail = (uint8_t)((ls->accept_tail + 1) & 7);
+                        if (next_tail != ls->accept_head) {
+                            uint32_t conn_id = (uint32_t)(conn - s_tcp);
+                            ls->accept_queue[ls->accept_tail] = conn_id;
+                            ls->accept_tail = next_tail;
+                        }
+                        sock_wake(conn->listener_id);
+                        epoll_notify(conn->listener_id, EPOLLIN);
+                    }
+                }
             }
         }
         break;
@@ -215,6 +231,11 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                 conn->state    = TCP_ESTABLISHED;
                 tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
                 conn->retransmit_at = 0;
+                /* Wake connect() waiter on this socket */
+                if (conn->sock_id != SOCK_NONE) {
+                    sock_wake(conn->sock_id);
+                    epoll_notify(conn->sock_id, EPOLLOUT);
+                }
             }
         }
         break;
@@ -234,6 +255,11 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                     conn->rbuf_tail++;
                 }
                 conn->rcv_nxt += payload_len;
+                /* Wake blocked recv() on this socket */
+                if (conn->sock_id != SOCK_NONE) {
+                    sock_wake(conn->sock_id);
+                    epoll_notify(conn->sock_id, EPOLLIN);
+                }
             }
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
         }
@@ -241,6 +267,11 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             conn->rcv_nxt++;
             conn->state = TCP_CLOSE_WAIT;
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
+            /* Wake blocked recv() — EOF/hangup */
+            if (conn->sock_id != SOCK_NONE) {
+                sock_wake(conn->sock_id);
+                epoll_notify(conn->sock_id, EPOLLHUP);
+            }
         }
         break;
 
@@ -269,6 +300,10 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             conn->state       = TCP_TIME_WAIT;
             conn->timewait_at = (uint32_t)arch_get_ticks() + TCP_TIMEWAIT_TICKS;
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
+            if (conn->sock_id != SOCK_NONE) {
+                sock_wake(conn->sock_id);
+                epoll_notify(conn->sock_id, EPOLLHUP);
+            }
         }
         break;
 
