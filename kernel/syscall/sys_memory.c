@@ -109,7 +109,7 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     /* Guard: mmap_base must stay in user address space (below 0x800000000000).
      * Without this check, a large enough mapping would overflow mmap_base into
      * the kernel-half VA range, corrupting shared kernel page tables. */
-    if (base + len > 0x0000800000000000ULL || base + len < base)
+    if (base + len > USER_ADDR_MAX || base + len < base)
         return (uint64_t)-(int64_t)12;  /* -ENOMEM */
     uint64_t va;
     for (va = base; va < base + len; va += 4096UL) {
@@ -135,6 +135,8 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
                           VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
     }
 
+    if (proc->mmap_base + len > USER_ADDR_MAX || proc->mmap_base + len < proc->mmap_base)
+        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
     proc->mmap_base += len;
     return base;
 }
