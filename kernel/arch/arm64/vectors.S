@@ -48,6 +48,9 @@
     ldr     x12,       [sp, #(33*8)]
     msr     sp_el0,    x10
     msr     elr_el1,   x11
+    /* Validate SPSR: force EL0t (M[3:0]=0b0000), clear reserved bits.
+     * Prevents privilege escalation via crafted signal frames. */
+    and     x12, x12, #0xF0000000   /* Keep only NZCV flags */
     msr     spsr_el1,  x12
     ldp     x0,  x1,  [sp, #(0*8)]
     ldp     x2,  x3,  [sp, #(2*8)]
