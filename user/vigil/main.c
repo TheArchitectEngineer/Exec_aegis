@@ -18,7 +18,8 @@
 typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 
 /* Cap kind constants — must match kernel/cap/cap.h */
-#define SVC_CAP_AUTH    4u
+#define SVC_CAP_AUTH       4u
+#define SVC_CAP_NET_SOCKET 7u
 #define SVC_CAP_RIGHTS_READ 1u
 
 typedef struct {
@@ -29,7 +30,8 @@ typedef struct {
     pid_t    pid;
     int      restarts;
     int      active;
-    int      needs_auth;   /* 1 if caps file listed AUTH */
+    int      needs_auth;       /* 1 if caps file listed AUTH */
+    int      needs_net_socket; /* 1 if caps file listed NET_SOCKET */
 } service_t;
 
 static service_t s_svcs[VIGIL_MAX_SERVICES];
@@ -98,7 +100,8 @@ load_service(const char *name)
     char caps_buf[128] = "";
     snprintf(path, sizeof(path), "%s/%s/caps", VIGIL_SERVICES_DIR, name);
     read_file(path, caps_buf, sizeof(caps_buf));
-    s->needs_auth = (strstr(caps_buf, "AUTH") != NULL);
+    s->needs_auth       = (strstr(caps_buf, "AUTH")       != NULL);
+    s->needs_net_socket = (strstr(caps_buf, "NET_SOCKET") != NULL);
 
     s->pid      = -1;
     s->restarts = 0;
@@ -119,6 +122,8 @@ start_service(service_t *s)
          * vigil's caps[], which include CAP_KIND_CAP_GRANT. */
         if (s->needs_auth)
             syscall(361, (long)SVC_CAP_AUTH, (long)SVC_CAP_RIGHTS_READ);
+        if (s->needs_net_socket)
+            syscall(361, (long)SVC_CAP_NET_SOCKET, (long)SVC_CAP_RIGHTS_READ);
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed
