@@ -304,7 +304,7 @@ try_acquire(int fd)
             int n = (int)recvfrom(fd, &reply, sizeof(reply), 0,
                                  (struct sockaddr *)&from, &fromlen);
             if (n < 0) break;
-            if ((int)sizeof(dhcp_pkt_t) > n) continue;
+            if (n < 240) continue;  /* too short: need at least fixed header + magic */
             if (reply.xid != pkt.xid) continue;
             int opts_len = n - (int)((uint8_t *)reply.options - (uint8_t *)&reply);
             if (opts_len < 0) opts_len = 0;
@@ -332,6 +332,7 @@ try_acquire(int fd)
             int n = (int)recvfrom(fd, &reply, sizeof(reply), 0,
                                  (struct sockaddr *)&from, &fromlen);
             if (n < 0) break;
+            if (n < 240) continue;  /* too short */
             if (reply.xid != pkt.xid) continue;
             int opts_len = n - (int)((uint8_t *)reply.options - (uint8_t *)&reply);
             if (opts_len < 0) opts_len = 0;
@@ -369,6 +370,7 @@ try_renew(int fd)
             int n = (int)recvfrom(fd, &reply, sizeof(reply), 0,
                                  (struct sockaddr *)&from, &fromlen);
             if (n < 0) break;
+            if (n < 240) continue;  /* too short */
             if (reply.xid != pkt.xid) continue;
             int opts_len = n - (int)((uint8_t *)reply.options - (uint8_t *)&reply);
             if (opts_len < 0) opts_len = 0;
