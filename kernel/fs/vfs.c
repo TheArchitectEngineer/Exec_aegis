@@ -164,14 +164,13 @@ ext2_vfs_stat_fn(void *priv, k_stat_t *st)
     ext2_fd_priv_t *p = (ext2_fd_priv_t *)priv;
     int sz = ext2_file_size(p->ino);
     if (sz < 0) return -1;
+    ext2_inode_t inode;
+    if (ext2_read_inode(p->ino, &inode) != 0) return -1;
     __builtin_memset(st, 0, sizeof(*st));
     st->st_dev     = 2;           /* device 2 = nvme0 */
     st->st_ino     = (uint64_t)p->ino;
     st->st_nlink   = 1;
-    if (ext2_is_dir(p->ino))
-        st->st_mode = S_IFDIR | 0755;
-    else
-        st->st_mode = S_IFREG | 0644;
+    st->st_mode    = (uint32_t)inode.i_mode; /* preserves type + permissions from disk */
     st->st_size    = (int64_t)sz;
     st->st_blksize = 4096;
     st->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
@@ -349,14 +348,17 @@ vfs_stat_path(const char *path, k_stat_t *out)
         if (ext2_open(path, &ino) == 0) {
             int sz = ext2_file_size(ino);
             if (sz < 0) sz = 0;
+            ext2_inode_t inode;
+            uint32_t mode;
+            if (ext2_read_inode(ino, &inode) == 0)
+                mode = (uint32_t)inode.i_mode;
+            else
+                mode = S_IFREG | 0644;
             __builtin_memset(out, 0, sizeof(*out));
             out->st_dev     = 2;
             out->st_ino     = (uint64_t)ino;
             out->st_nlink   = 1;
-            if (ext2_is_dir(ino))
-                out->st_mode = S_IFDIR | 0755;
-            else
-                out->st_mode = S_IFREG | 0644;
+            out->st_mode    = mode;
             out->st_size    = (int64_t)sz;
             out->st_blksize = 4096;
             out->st_blocks  = (int64_t)(((uint64_t)sz + 511) / 512 * 8);
