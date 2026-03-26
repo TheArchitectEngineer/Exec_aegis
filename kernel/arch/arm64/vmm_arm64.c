@@ -55,7 +55,6 @@ static uint64_t s_pml4_phys;
  * as the two window slots. */
 static uint64_t s_window_pt[512] __attribute__((aligned(4096)));
 static volatile uint64_t *s_window_pte;
-static volatile uint64_t *s_window_pte2;
 
 /* Window VA: we pick an address in the identity-mapped region that doesn't
  * conflict with kernel code/data. Use a fixed VA past the kernel. */
@@ -78,28 +77,6 @@ vmm_window_unmap(void)
     *s_window_pte = 0;
     arch_vmm_invlpg(VMM_WINDOW_VA);
 }
-
-/* Window slot 2 — used by vmm_copy_user_pages (future). */
-static void *
-vmm_window_map2(uint64_t phys)
-{
-    *s_window_pte2 = phys | PTE_VALID | PTE_PAGE | PTE_AF |
-                     PTE_SH_INNER | PTE_ATTR_NORM | PTE_AP_RW_EL1;
-    arch_vmm_invlpg(VMM_WINDOW_VA + PAGE_SIZE_);
-    return (void *)(VMM_WINDOW_VA + PAGE_SIZE_);
-}
-
-static void
-vmm_window_unmap2(void)
-{
-    *s_window_pte2 = 0;
-    arch_vmm_invlpg(VMM_WINDOW_VA + PAGE_SIZE_);
-}
-
-/* Suppress unused warnings — these are needed when vmm_copy_user_pages
- * is fully implemented. Casting to void avoids the warning. */
-static void *(*volatile _wm2_ref)(uint64_t) = vmm_window_map2;
-static void (*volatile _wu2_ref)(void) = vmm_window_unmap2;
 
 /* ── Table allocation ──────────────────────────────────────────────── */
 
@@ -157,19 +134,16 @@ flags_to_pte(uint64_t flags)
 
 /* Intermediate (non-leaf) table entry: valid + table descriptor. */
 static uint64_t
-table_entry(uint64_t child_phys, uint64_t extra_flags)
+table_entry(uint64_t child_phys)
 {
-    (void)extra_flags;
-    /* ARM64 table descriptors: only valid+table bits needed.
-     * Hierarchical permission bits (APTable, UXNTable, PXNTable) at [63:59]
-     * default to 0 = no restriction. Do NOT set AP bits [7:6] in table
-     * descriptors — those are APTable and restrict child access. */
+    /* ARM64 table descriptors: valid + table bits only.
+     * APTable/UXNTable/PXNTable default to 0 = no restriction. */
     return child_phys | PTE_VALID | PTE_TABLE;
 }
 
 /* Ensure a child table exists at parent[idx]. Returns child phys addr. */
 static uint64_t
-ensure_table(uint64_t parent_phys, uint64_t idx, uint64_t extra_flags)
+ensure_table(uint64_t parent_phys, uint64_t idx)
 {
     uint64_t *parent = vmm_window_map(parent_phys);
     uint64_t entry = parent[idx];
@@ -178,7 +152,7 @@ ensure_table(uint64_t parent_phys, uint64_t idx, uint64_t extra_flags)
     if (!(entry & PTE_VALID)) {
         uint64_t child = alloc_table();
         parent = vmm_window_map(parent_phys);
-        parent[idx] = table_entry(child, extra_flags);
+        parent[idx] = table_entry(child);
         vmm_window_unmap();
         return child;
     }
@@ -255,8 +229,7 @@ vmm_init(void)
         /* Replace the block mapping at L2[win_l2_idx] with a table entry */
         l2_ram[win_l2_idx] = win_pt_phys | PTE_VALID | PTE_TABLE;
 
-        s_window_pte  = &s_window_pt[0];
-        s_window_pte2 = &s_window_pt[1];
+        s_window_pte = &s_window_pt[0];
     }
 
     s_pml4_phys = l0_phys;
@@ -286,9 +259,9 @@ vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
     uint64_t l2_idx = (virt >> 21) & 0x1FF;
     uint64_t l3_idx = (virt >> 12) & 0x1FF;
 
-    uint64_t l1_phys = ensure_table(s_pml4_phys, l0_idx, 0);
-    uint64_t l2_phys = ensure_table(l1_phys, l1_idx, 0);
-    uint64_t l3_phys = ensure_table(l2_phys, l2_idx, 0);
+    uint64_t l1_phys = ensure_table(s_pml4_phys, l0_idx);
+    uint64_t l2_phys = ensure_table(l1_phys, l1_idx);
+    uint64_t l3_phys = ensure_table(l2_phys, l2_idx);
 
     uint64_t *l3 = vmm_window_map(l3_phys);
     l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
@@ -345,9 +318,9 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     uint64_t l2_idx = (virt >> 21) & 0x1FF;
     uint64_t l3_idx = (virt >> 12) & 0x1FF;
 
-    uint64_t l1_phys = ensure_table(s_pml4_phys, l0_idx, VMM_FLAG_USER);
-    uint64_t l2_phys = ensure_table(l1_phys, l1_idx, VMM_FLAG_USER);
-    uint64_t l3_phys = ensure_table(l2_phys, l2_idx, VMM_FLAG_USER);
+    uint64_t l1_phys = ensure_table(s_pml4_phys, l0_idx);
+    uint64_t l2_phys = ensure_table(l1_phys, l1_idx);
+    uint64_t l3_phys = ensure_table(l2_phys, l2_idx);
 
     uint64_t *l3 = vmm_window_map(l3_phys);
     l3[l3_idx] = phys | flags_to_pte(flags | VMM_FLAG_PRESENT);
