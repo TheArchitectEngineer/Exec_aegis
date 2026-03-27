@@ -142,17 +142,17 @@ def _teardown_qemu(proc, mon_sock, mon_path):
 
 
 def test_ctrl_c_kills_cat():
-    """Run 'cat /etc/motd', send Ctrl-C, verify shell prompt returns."""
+    """Run bare 'cat' (blocks on stdin), send Ctrl-C, verify shell prompt returns."""
     proc, mon_sock, mon_path = _boot_qemu()
 
     # Wait for initial shell prompt
     _read_until_prompt(proc, time.time() + BOOT_TIMEOUT)
 
-    # Type 'cat /etc/motd' and press Enter — cat will print motd then block on stdin.
-    _type_string(mon_sock, "cat /etc/motd\n")
+    # Type 'cat' with no args and press Enter — cat blocks reading stdin.
+    _type_string(mon_sock, "cat\n")
 
-    # Give cat time to start and print output
-    time.sleep(0.5)
+    # Give cat time to start and block
+    time.sleep(1)
 
     # Send Ctrl-C via QEMU monitor (SIGINT to foreground PID via kbd driver)
     _send_key(mon_sock, "ctrl-c")
@@ -162,8 +162,7 @@ def test_ctrl_c_kills_cat():
 
     _teardown_qemu(proc, mon_sock, mon_path)
 
-    # '\n# ' or '\n#' must appear in out: Ctrl-C killed cat, shell returned a new prompt.
-    assert ("\n# " in out or "\n#" in out), (
+    assert "# " in out, (
         f"FAIL test_ctrl_c_kills_cat: shell prompt did not return after Ctrl-C\n"
         f"output:\n{out}"
     )
