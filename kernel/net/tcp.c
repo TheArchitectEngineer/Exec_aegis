@@ -282,6 +282,11 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             }
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
         }
+        if (flags & TCP_RST) {
+            conn->state = TCP_CLOSED;
+            if (conn->sock_id != SOCK_NONE) sock_wake(conn->sock_id);
+            break;
+        }
         if (flags & TCP_FIN) {
             conn->rcv_nxt++;
             conn->state = TCP_CLOSE_WAIT;
@@ -436,11 +441,13 @@ tcp_conn_recv(uint32_t conn_id, void *dst, uint16_t max_len)
     if (conn_id >= TCP_MAX_CONNS) return -1;
     tcp_conn_t *c = &s_tcp[conn_id];
     uint32_t avail = (c->rbuf_tail - c->rbuf_head + TCP_RBUF_SIZE) % TCP_RBUF_SIZE;
-    if (max_len == 0) return (int)avail;  /* peek */
     if (avail == 0) {
-        if (c->state == TCP_CLOSE_WAIT || c->state == TCP_CLOSED) return 0;  /* EOF */
-        return -11;  /* EAGAIN */
+        if (c->state == TCP_CLOSE_WAIT || c->state == TCP_CLOSED
+            || c->state == TCP_TIME_WAIT)
+            return 0;  /* EOF — FIN received, no more data */
+        return -11;  /* EAGAIN — buffer empty, connection alive */
     }
+    if (max_len == 0) return (int)avail;  /* peek: report available bytes */
     uint32_t n = avail < max_len ? avail : max_len;
     uint8_t *d = (uint8_t *)dst;
     uint32_t j;

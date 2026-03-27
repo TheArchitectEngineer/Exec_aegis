@@ -557,17 +557,31 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
             if (sid != SOCK_NONE) {
                 sock_t *s = sock_get(sid);
                 if (s) {
-                    if ((pfd.events & POLLIN) &&
-                        (s->udp_rx_head != s->udp_rx_tail ||
-                         (s->type == SOCK_TYPE_STREAM && s->state == SOCK_LISTENING &&
-                          s->accept_head != s->accept_tail) ||
-                         (s->type == SOCK_TYPE_STREAM && s->state == SOCK_CONNECTED &&
-                          tcp_conn_recv(s->tcp_conn_id, (void *)0, 0) > 0)))
-                        pfd.revents |= POLLIN;
-                    if (pfd.events & POLLOUT) pfd.revents |= POLLOUT;
+                    if (s->type == SOCK_TYPE_STREAM && s->state == SOCK_CONNECTED) {
+                        tcp_conn_t *tc = tcp_conn_get(s->tcp_conn_id);
+                        int peek = tcp_conn_recv(s->tcp_conn_id, (void *)0, 0);
+                        /* POLLIN: data available OR EOF (recv will return 0) */
+                        if ((pfd.events & POLLIN) && (peek > 0 || peek == 0))
+                            pfd.revents |= POLLIN;
+                        if (pfd.events & POLLOUT)
+                            pfd.revents |= POLLOUT;
+                        /* POLLHUP: TCP connection closed (FIN received or RST) */
+                        if (tc && (tc->state == TCP_CLOSE_WAIT || tc->state == TCP_CLOSED
+                                   || tc->state == TCP_TIME_WAIT))
+                            pfd.revents |= POLLHUP;
+                    } else if (s->type == SOCK_TYPE_STREAM && s->state == SOCK_LISTENING) {
+                        if ((pfd.events & POLLIN) && s->accept_head != s->accept_tail)
+                            pfd.revents |= POLLIN;
+                    } else if (s->type == SOCK_TYPE_DGRAM) {
+                        if ((pfd.events & POLLIN) && s->udp_rx_head != s->udp_rx_tail)
+                            pfd.revents |= POLLIN;
+                        if (pfd.events & POLLOUT)
+                            pfd.revents |= POLLOUT;
+                    }
                 }
             }
             if (pfd.revents) ready++;
+            /* revents already counted in ready above */
             copy_to_user((void *)(uintptr_t)(fds_ptr + i * sizeof(k_pollfd_t)),
                          &pfd, sizeof(k_pollfd_t));
         }
