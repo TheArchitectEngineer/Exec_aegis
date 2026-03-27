@@ -462,27 +462,27 @@ vmm_free_user_pml4(uint64_t pml4_phys)
         uint64_t pml4e = ((uint64_t *)vmm_window_map(pml4_phys))[i];
         vmm_window_unmap();
         if (!(pml4e & VMM_FLAG_PRESENT)) continue;
-        uint64_t pdpt_phys = pml4e & ~0xFFFUL;
+        uint64_t pdpt_phys = ARCH_PTE_ADDR(pml4e);
 
         for (j = 0; j < 512; j++) {
             uint64_t pdpte = ((uint64_t *)vmm_window_map(pdpt_phys))[j];
             vmm_window_unmap();
             if (!(pdpte & VMM_FLAG_PRESENT)) continue;
             if (pdpte & PTE_PS) continue; /* 1GB page — unexpected, skip */
-            uint64_t pd_phys = pdpte & ~0xFFFUL;
+            uint64_t pd_phys = ARCH_PTE_ADDR(pdpte);
 
             for (k = 0; k < 512; k++) {
                 uint64_t pde = ((uint64_t *)vmm_window_map(pd_phys))[k];
                 vmm_window_unmap();
                 if (!(pde & VMM_FLAG_PRESENT)) continue;
                 if (pde & PTE_PS) continue; /* 2MB page — unexpected, skip */
-                uint64_t pt_phys = pde & ~0xFFFUL;
+                uint64_t pt_phys = ARCH_PTE_ADDR(pde);
 
                 for (l = 0; l < 512; l++) {
                     uint64_t pte = ((uint64_t *)vmm_window_map(pt_phys))[l];
                     vmm_window_unmap();
                     if (!(pte & VMM_FLAG_PRESENT)) continue;
-                    pmm_free_page(pte & ~0xFFFUL);
+                    pmm_free_page(ARCH_PTE_ADDR(pte));
                 }
                 pmm_free_page(pt_phys);
             }
@@ -629,21 +629,21 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
         vmm_window_unmap();
         if (!(pml4e & VMM_FLAG_PRESENT)) continue;
 
-        uint64_t pdpt_phys = pml4e & ~0xFFFULL;
+        uint64_t pdpt_phys = ARCH_PTE_ADDR(pml4e);
         for (pdpti = 0; pdpti < 512; pdpti++) {
             uint64_t *pdpt = vmm_window_map(pdpt_phys);
             uint64_t pdpte = pdpt[pdpti];
             vmm_window_unmap();
             if (!(pdpte & VMM_FLAG_PRESENT)) continue;
 
-            uint64_t pd_phys = pdpte & ~0xFFFULL;
+            uint64_t pd_phys = ARCH_PTE_ADDR(pdpte);
             for (pdi = 0; pdi < 512; pdi++) {
                 uint64_t *pd = vmm_window_map(pd_phys);
                 uint64_t pde = pd[pdi];
                 vmm_window_unmap();
                 if (!(pde & VMM_FLAG_PRESENT)) continue;
 
-                uint64_t pt_phys = pde & ~0xFFFULL;
+                uint64_t pt_phys = ARCH_PTE_ADDR(pde);
                 for (pti = 0; pti < 512; pti++) {
                     uint64_t *pgtbl = vmm_window_map(pt_phys);
                     uint64_t pte = pgtbl[pti];
@@ -733,7 +733,7 @@ vmm_free_user_pages(uint64_t pml4_phys)
         vmm_window_unmap();
         if (!(pml4e & VMM_FLAG_PRESENT)) continue;
 
-        uint64_t pdpt_phys = pml4e & ~0xFFFULL;
+        uint64_t pdpt_phys = ARCH_PTE_ADDR(pml4e);
         for (pdpti = 0; pdpti < 512; pdpti++) {
             uint64_t *pdpt = vmm_window_map(pdpt_phys);
             uint64_t pdpte = pdpt[pdpti];
@@ -741,7 +741,7 @@ vmm_free_user_pages(uint64_t pml4_phys)
             if (!(pdpte & VMM_FLAG_PRESENT)) continue;
             if (pdpte & PTE_PS) continue; /* 1GB page — unexpected, skip */
 
-            uint64_t pd_phys = pdpte & ~0xFFFULL;
+            uint64_t pd_phys = ARCH_PTE_ADDR(pdpte);
             for (pdi = 0; pdi < 512; pdi++) {
                 uint64_t *pd = vmm_window_map(pd_phys);
                 uint64_t pde = pd[pdi];
@@ -749,7 +749,7 @@ vmm_free_user_pages(uint64_t pml4_phys)
                 if (!(pde & VMM_FLAG_PRESENT)) continue;
                 if (pde & PTE_PS) continue; /* 2MB page — unexpected, skip */
 
-                uint64_t pt_phys = pde & ~0xFFFULL;
+                uint64_t pt_phys = ARCH_PTE_ADDR(pde);
                 /* Hold window open across all PT slots: pmm_free_page does
                  * not call vmm_window_map so the mapping remains valid. */
                 uint64_t *pt = vmm_window_map(pt_phys);
@@ -757,7 +757,7 @@ vmm_free_user_pages(uint64_t pml4_phys)
                     uint64_t pte = pt[pti];
                     if (pte & VMM_FLAG_PRESENT) {
                         pt[pti] = 0;
-                        pmm_free_page(pte & ~0xFFFULL);
+                        pmm_free_page(ARCH_PTE_ADDR(pte));
                     }
                 }
                 vmm_window_unmap();
