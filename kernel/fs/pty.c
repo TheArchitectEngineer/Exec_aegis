@@ -2,7 +2,6 @@
 #include "tty.h"
 #include "vfs.h"
 #include "uaccess.h"
-#include "printk.h"
 #include "sched.h"
 #include "proc.h"
 #include "signal.h"
@@ -86,7 +85,6 @@ pty_slave_write_out(tty_t *tty, const char *buf, uint32_t len)
 	pty_pair_t *pair = (pty_pair_t *)tty->ctx;
 	uint32_t i;
 
-	printk("[PTY] write_out len=%u h=%u t=%u\n", len, pair->output_head, pair->output_tail);
 	if (!pair->master_open)
 		return -5; /* EIO */
 
@@ -95,7 +93,6 @@ pty_slave_write_out(tty_t *tty, const char *buf, uint32_t len)
 			break; /* output_buf full; partial write */
 		ring_push(pair->output_buf, &pair->output_head, (uint8_t)buf[i]);
 	}
-	printk("[PTY] write_out done i=%u h=%u\n", i, pair->output_head);
 	return (int)i;
 }
 
@@ -176,7 +173,6 @@ master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 
 	for (;;) {
 		uint32_t avail = ring_count(pair->output_head, pair->output_tail);
-		printk("[PTY] mread avail=%u so=%d h=%u t=%u\n", avail, pair->slave_open, pair->output_head, pair->output_tail);
 		if (avail > 0)
 			break;
 		/* Slave closed and buffer empty -- EOF */
