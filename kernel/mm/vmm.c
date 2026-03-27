@@ -481,8 +481,9 @@ vmm_free_user_pml4(uint64_t pml4_phys)
                 for (l = 0; l < 512; l++) {
                     uint64_t pte = ((uint64_t *)vmm_window_map(pt_phys))[l];
                     vmm_window_unmap();
-                    if (!(pte & VMM_FLAG_PRESENT)) continue;
-                    pmm_free_page(ARCH_PTE_ADDR(pte));
+                    if (pte == 0) continue;
+                    uint64_t phys = ARCH_PTE_ADDR(pte);
+                    if (phys) pmm_free_page(phys);
                 }
                 pmm_free_page(pt_phys);
             }
@@ -757,9 +758,11 @@ vmm_free_user_pages(uint64_t pml4_phys)
                 uint64_t *pt = vmm_window_map(pt_phys);
                 for (pti = 0; pti < 512; pti++) {
                     uint64_t pte = pt[pti];
-                    if (pte & VMM_FLAG_PRESENT) {
+                    if (pte != 0) {
                         pt[pti] = 0;
-                        pmm_free_page(ARCH_PTE_ADDR(pte));
+                        uint64_t phys = ARCH_PTE_ADDR(pte);
+                        if (phys)
+                            pmm_free_page(phys);
                     }
                 }
                 vmm_window_unmap();
