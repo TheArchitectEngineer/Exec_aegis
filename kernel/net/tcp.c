@@ -243,8 +243,10 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                 conn->state    = TCP_ESTABLISHED;
                 tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
                 conn->retransmit_at = 0;
-                /* Wake connect() waiter on this socket */
+                /* Transition socket to CONNECTED and wake connect() waiter */
                 if (conn->sock_id != SOCK_NONE) {
+                    sock_t *sk = sock_get(conn->sock_id);
+                    if (sk) sk->state = SOCK_CONNECTED;
                     sock_wake(conn->sock_id);
                     epoll_notify(conn->sock_id, EPOLLOUT);
                 }
