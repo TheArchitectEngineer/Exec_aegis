@@ -8,6 +8,7 @@
 #include "console.h"
 #include "kbd_vfs.h"
 #include "kbd.h"
+#include "vma.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -237,6 +238,16 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->cwd[1]           = '\0';
     proc->exit_status      = 0;
     proc->mmap_free_count  = 0;
+
+    /* Initialize VMA tracking */
+    vma_init((struct aegis_process *)proc);
+    /* Record user stack VMA */
+    vma_insert((struct aegis_process *)proc, USER_STACK_BASE, USER_STACK_NPAGES * 4096ULL,
+               0x01 | 0x02,  /* PROT_READ | PROT_WRITE */
+               VMA_STACK);
+    /* exe_path: set to /bin/init for the init process */
+    __builtin_memcpy(proc->exe_path, "/bin/init", 10);
+
     proc->pending_signals  = 0;
     proc->signal_mask      = 0;
     __builtin_memset(proc->sigactions, 0, sizeof(proc->sigactions));
@@ -359,4 +370,31 @@ void arch_save_current_fs_base(uint64_t val) {
     aegis_task_t *t = sched_current();
     if (t)
         t->fs_base = val;
+}
+
+aegis_process_t *
+proc_find_by_pid(uint32_t pid)
+{
+    aegis_task_t *cur = sched_current();
+    if (!cur)
+        return (aegis_process_t *)0;
+
+    /* Check current task first */
+    if (cur->is_user) {
+        aegis_process_t *p = (aegis_process_t *)cur;
+        if (p->pid == pid)
+            return p;
+    }
+
+    /* Walk the circular list */
+    aegis_task_t *t = cur->next;
+    while (t != cur) {
+        if (t->is_user) {
+            aegis_process_t *p = (aegis_process_t *)t;
+            if (p->pid == pid)
+                return p;
+        }
+        t = t->next;
+    }
+    return (aegis_process_t *)0;
 }
