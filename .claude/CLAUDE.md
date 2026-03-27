@@ -249,6 +249,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Thread support (Phase 29) | ✅ | clone(CLONE_VM); per-thread TLS; fd_table_t refcount; futex WAIT/WAKE; tgid; clear_child_tid; test_threads.py PASS |
 | mprotect + mmap freelist (Phase 30) | ✅ | Real mprotect (W^X via NX/EFER.NXE); 64-slot VA freelist (best-fit + coalescing); test_mmap.py PASS |
 | /proc filesystem (Phase 31) | ✅ | VMA tracking (170-slot kva table); procfs VFS; /proc/self/maps,status,stat,exe,cmdline,fd; /proc/meminfo; CAP_KIND_PROC_READ; test_proc.py PASS |
+| TTY/PTY layer (Phase 32) | ✅ | Shared tty_t line discipline; 16 PTY pairs (/dev/ptmx + /dev/pts/N); sessions (sid); setpgid relaxed; SIGTTIN/SIGTTOU; SIGHUP on session exit; test_pty.py PASS |
 
 ### Known deviations
 
@@ -315,7 +316,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 29 | **Threads** — `clone()`+`futex`; per-thread TLS; shared address space; `CAP_KIND_THREAD_CREATE` gate; musl pthreads support | ✅ Done |
 | 30 | **mprotect + mmap improvements** — real mprotect (W^X via NX); munmap VA freelist (64-slot best-fit + coalescing) | ✅ Done |
 | 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | ✅ Done |
-| 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | Not started |
+| 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | ✅ Done |
 | 33 | **Dynamic linking** — ELF interpreter (ld.so); shared library loading gated by `CAP_KIND_VFS_READ`; dlopen/dlsym | Not started |
 | 34 | Writable root — ramfs populated from initrd; full live-system writability; foundation for installer | Not started |
 | 35 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
@@ -354,7 +355,31 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ---
 
-*Last updated: 2026-03-27 — Phase 31 complete. /proc filesystem ✅. VMA tracking ✅. CAP_KIND_PROC_READ ✅. test_proc.py PASS.*
+*Last updated: 2026-03-27 — Phase 32 complete. TTY/PTY layer ✅. Shared line discipline ✅. 16 PTY pairs ✅. Sessions ✅. test_pty.py PASS.*
+
+---
+
+## Phase 32 — Forward Constraints
+
+**Phase 32 status: ✅ complete. `make test` passes. `test_pty.py` PASS.**
+
+1. **PTY pool is static (16 pairs, ~138KB BSS).** No dynamic growth.
+
+2. **No TIOCSTI (fake input injection).** Security risk. Deferred.
+
+3. **No packet mode (TIOCPKT).** Not needed for SSH/screen. Deferred.
+
+4. **No virtual consoles.** One console TTY + 16 PTYs.
+
+5. **No SIGHUP on PTY master close.** Only session leader exit triggers SIGHUP. Master close → EIO on slave.
+
+6. **SIGTTIN/SIGTTOU only on controlling terminal.** Background I/O to pipes/files unaffected.
+
+7. **Console output still goes through printk.** The console tty's write_out calls printk per-char. No direct framebuffer/serial write path for the tty layer.
+
+8. **grantpt/unlockpt are security no-ops.** grantpt returns 0 (musl ioctl). unlockpt clears a lock flag. No ownership changes — capability system gates access.
+
+9. **Signal delivery from console ISR preserved.** Ctrl-C/Z/\ on the physical console still deliver signals immediately from the keyboard ISR for responsiveness. PTY slaves deliver signals from tty_read in syscall context.
 
 ---
 
