@@ -74,7 +74,7 @@ typedef struct {
     int (*stat)(void *priv, k_stat_t *st);
 } vfs_ops_t;
 
-/* Open file descriptor. Embedded inline in aegis_process_t.fds[].
+/* Open file descriptor. Stored in fd_table_t.fds[].
  * ops == NULL means the slot is free. */
 typedef struct {
     const vfs_ops_t *ops;    /* NULL = free slot */

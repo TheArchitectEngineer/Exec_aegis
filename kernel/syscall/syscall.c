@@ -58,7 +58,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 178: num = 39;  break;  /* gettid → getpid */
     case 214: num = 12;  break;  /* brk */
     case 215: num = 11;  break;  /* munmap */
-    case 220: num = 57;  break;  /* clone → fork */
+    case 220: num = 56;  break;  /* clone */
     case 221: num = 59;  break;  /* execve */
     case 222: num = 9;   break;  /* mmap */
     case 226: num = 10;  break;  /* mprotect */
@@ -113,6 +113,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 130: return sys_rt_sigsuspend(arg1, arg2);
     case 20: return sys_writev(arg1, arg2, arg3);
     case 39: return sys_getpid();
+    case 56: return sys_clone(frame, arg1, arg2, arg3, arg4, arg5);
     case 57: return sys_fork(frame);
     case 59: return sys_execve(frame, arg1, arg2, arg3);
     case 60: return sys_exit(arg1);

@@ -125,6 +125,8 @@ uint64_t sys_getppid(void);
 uint64_t sys_set_tid_address(uint64_t a1);
 uint64_t sys_set_robust_list(uint64_t a1, uint64_t a2);
 uint64_t sys_arch_prctl(uint64_t a1, uint64_t a2);
+uint64_t sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
+                   uint64_t ptid, uint64_t ctid, uint64_t tls);
 uint64_t sys_fork(syscall_frame_t *frame);
 uint64_t sys_waitpid(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_execve(syscall_frame_t *frame,

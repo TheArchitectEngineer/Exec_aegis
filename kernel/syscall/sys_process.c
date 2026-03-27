@@ -4,6 +4,19 @@
 #define MAX_PROCESSES 64
 static uint32_t s_fork_count = 1;  /* starts at 1 for init */
 
+/* ── Clone flags (Linux ABI) ──────────────────────────────────────────────── */
+#define CLONE_VM             0x00000100u
+#define CLONE_FS             0x00000200u
+#define CLONE_FILES          0x00000400u
+#define CLONE_SIGHAND        0x00000800u
+#define CLONE_VFORK          0x00004000u
+#define CLONE_THREAD         0x00010000u
+#define CLONE_SYSVSEM        0x00040000u
+#define CLONE_SETTLS         0x00080000u
+#define CLONE_PARENT_SETTID  0x00100000u
+#define CLONE_CHILD_CLEARTID 0x00200000u
+#define CLONE_CHILD_SETTID   0x01000000u
+
 /*
  * sys_exit — syscall 60
  *
@@ -114,6 +127,237 @@ sys_arch_prctl(uint64_t arg1, uint64_t arg2)
         return 0;
     }
     return (uint64_t)-(int64_t)22;   /* EINVAL */
+}
+
+/*
+ * sys_clone — syscall 56
+ *
+ * Creates a new thread (CLONE_VM) or delegates to sys_fork (no CLONE_VM).
+ *
+ * flags       = clone flags | signal_number (low byte stripped)
+ * child_stack = user stack pointer for new thread (0 = copy parent's)
+ * ptid        = user pointer for CLONE_PARENT_SETTID
+ * ctid        = user pointer for CLONE_CHILD_SETTID / CLONE_CHILD_CLEARTID
+ * tls         = TLS pointer for CLONE_SETTLS
+ */
+uint64_t
+sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
+          uint64_t ptid, uint64_t ctid, uint64_t tls)
+{
+    /* Strip low byte (signal number — ignored). */
+    uint32_t cl = (uint32_t)(flags & ~0xFFu);
+
+    /* Without CLONE_VM this is a plain fork. */
+    if (!(cl & CLONE_VM))
+        return sys_fork(frame);
+
+    /* ── Thread creation (CLONE_VM set) ─────────────────────────────────── */
+
+    aegis_task_t    *parent_task = sched_current();
+    if (!parent_task || !parent_task->is_user)
+        return (uint64_t)-(int64_t)1;  /* EPERM */
+    aegis_process_t *parent = (aegis_process_t *)parent_task;
+
+    /* Capability gate: THREAD_CREATE required. */
+    if (cap_check(parent->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    /* Process limit. */
+    if (s_fork_count >= MAX_PROCESSES)
+        return (uint64_t)(int64_t)-11;  /* -EAGAIN */
+
+    /* 1. Allocate child PCB. */
+    aegis_process_t *child = kva_alloc_pages(1);
+    if (!child)
+        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+
+    /* 2. Share address space — same PML4, no page copy. */
+    child->pml4_phys = parent->pml4_phys;
+
+    /* 3. File descriptor table: share or copy. */
+    if (cl & CLONE_FILES) {
+        fd_table_ref(parent->fd_table);
+        child->fd_table = parent->fd_table;
+    } else {
+        child->fd_table = fd_table_copy(parent->fd_table);
+        if (!child->fd_table) {
+            kva_free_pages(child, 1);
+            return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+        }
+    }
+
+    /* 4. Copy capability tables. */
+    uint32_t ci;
+    for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
+        child->caps[ci] = parent->caps[ci];
+    for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
+        child->exec_caps[ci] = parent->exec_caps[ci];
+
+    /* 5. Scalar fields. */
+    child->brk       = parent->brk;
+    child->mmap_base = parent->mmap_base;
+    __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
+    child->pid       = proc_alloc_pid();
+    child->ppid      = parent->pid;
+    child->uid       = parent->uid;
+    child->gid       = parent->gid;
+    child->pgid      = parent->pgid;
+    child->umask     = parent->umask;
+
+    /* Thread-group membership. */
+    if (cl & CLONE_THREAD) {
+        child->tgid         = parent->tgid;
+        parent->thread_count++;
+    } else {
+        child->tgid         = child->pid;
+        child->thread_count = 1;
+    }
+
+    /* Signal state: inherit mask and dispositions; clear pending. */
+    child->signal_mask     = parent->signal_mask;
+    __builtin_memcpy(child->sigactions, parent->sigactions,
+                     sizeof(parent->sigactions));
+    child->pending_signals = 0;
+    child->stop_signum     = 0;
+    child->exit_status     = 0;
+
+    /* TLS */
+    if (cl & CLONE_SETTLS)
+        child->task.fs_base = tls;
+    else
+        child->task.fs_base = parent_task->fs_base;
+
+    /* clear_child_tid for futex-based thread join. */
+    if (cl & CLONE_CHILD_CLEARTID)
+        child->task.clear_child_tid = ctid;
+    else
+        child->task.clear_child_tid = 0;
+
+    child->task.state       = TASK_RUNNING;
+    child->task.waiting_for = 0;
+    child->task.is_user     = 1;
+    child->task.tid         = child->pid;
+    child->task.stack_pages = 4;
+
+    /* 6. Allocate child kernel stack (4 pages / 16 KB). */
+    uint8_t *kstack = kva_alloc_pages(4);
+    if (!kstack) {
+        kva_free_pages(child, 1);
+        return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+    }
+
+    /* 7. Build child initial kernel stack frame.
+     *
+     * Identical layout to sys_fork — a fake isr_common_stub + ctx_switch
+     * frame so the child's first scheduling returns through isr_post_dispatch
+     * → iretq to user space.  Only difference: when child_stack != 0, use
+     * child_stack instead of frame->user_rsp for the iretq RSP slot. */
+    uint64_t *sp = (uint64_t *)(kstack + 4 * 4096);
+    uint64_t user_rsp = child_stack ? child_stack : frame->user_rsp;
+
+#ifdef __aarch64__
+    extern void fork_child_return(void);
+
+    /* Build SAVE_ALL_EL0 frame (34 slots) for the trampoline to restore */
+    sp -= 34;
+    for (int fi = 0; fi < 34; fi++) sp[fi] = 0;
+    for (int fi = 0; fi < 31; fi++) sp[fi] = frame->regs[fi];
+    sp[0]  = 0;              /* x0 = 0 (clone returns 0 in child) */
+    sp[31] = user_rsp;       /* sp_el0 */
+    sp[32] = frame->elr;     /* elr_el1 (return to user) */
+    sp[33] = frame->spsr;    /* spsr_el1 */
+
+    /* ctx_switch callee-save frame: 12 slots */
+    *--sp = 0;                          /* x20 */
+    *--sp = 0;                          /* x19 */
+    *--sp = 0;                          /* x22 */
+    *--sp = 0;                          /* x21 */
+    *--sp = 0;                          /* x24 */
+    *--sp = 0;                          /* x23 */
+    *--sp = 0;                          /* x26 */
+    *--sp = 0;                          /* x25 */
+    *--sp = 0;                          /* x28 */
+    *--sp = 0;                          /* x27 */
+    *--sp = (uint64_t)(uintptr_t)fork_child_return; /* x30 (lr) */
+    *--sp = 0;                          /* x29 (fp) */
+#else
+    /* x86-64: build ISR + ctx_switch frame for isr_post_dispatch path. */
+
+    /* CPU ring-3 interrupt frame (ss = highest address) */
+    *--sp = 0x1B;                   /* ss = user data selector              */
+    *--sp = user_rsp;               /* user RSP (child stack or parent's)   */
+    *--sp = frame->rflags;          /* RFLAGS                               */
+    *--sp = 0x23;                   /* cs = user code selector              */
+    *--sp = frame->rip;             /* RIP = resume point after clone()     */
+
+    /* ISR stub: ISR_NOERR pushes error_code(0) then vector(0) */
+    *--sp = 0;                      /* error_code                           */
+    *--sp = 0;                      /* vector                               */
+
+    /* GPRs: isr_common_stub pushes rax first (high) → r15 last (low). */
+    *--sp = 0;                      /* rax = 0  (clone returns 0 in child)  */
+    *--sp = 0;                      /* rbx                                  */
+    *--sp = frame->rip;             /* rcx = return RIP (SYSCALL semantics) */
+    *--sp = 0;                      /* rdx                                  */
+    *--sp = 0;                      /* rsi                                  */
+    *--sp = 0;                      /* rdi                                  */
+    *--sp = 0;                      /* rbp                                  */
+    *--sp = frame->r8;              /* r8                                   */
+    *--sp = frame->r9;              /* r9                                   */
+    *--sp = frame->r10;             /* r10                                  */
+    *--sp = frame->rflags;          /* r11 = RFLAGS (SYSCALL semantics)     */
+    *--sp = 0;                      /* r12                                  */
+    *--sp = 0;                      /* r13                                  */
+    *--sp = 0;                      /* r14                                  */
+    *--sp = 0;                      /* r15                                  */
+
+    /* CR3 slot: restored by isr_post_dispatch before iretq */
+    *--sp = (uint64_t)child->pml4_phys;
+
+    /* ctx_switch callee-save frame: ret addr + r15-r12/rbp/rbx */
+    *--sp = (uint64_t)(uintptr_t)isr_post_dispatch; /* ret addr            */
+    *--sp = 0;  /* rbx                                                      */
+    *--sp = 0;  /* rbp                                                      */
+    *--sp = 0;  /* r12                                                      */
+    *--sp = 0;  /* r13                                                      */
+    *--sp = 0;  /* r14                                                      */
+    *--sp = 0;  /* r15  <- child->task.sp points here                       */
+#endif
+
+    child->task.sp               = (uint64_t)(uintptr_t)sp;
+    child->task.stack_base       = kstack;
+    child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4 * 4096);
+
+    /* Update TSS RSP0 for parent (it remains current) */
+    arch_set_kernel_stack(parent_task->kernel_stack_top);
+
+    /* 8. Add child to run queue. */
+    sched_add(&child->task);
+    s_fork_count++;
+
+    /* 9. CLONE_PARENT_SETTID: write child tid to parent's *ptid. */
+    if (cl & CLONE_PARENT_SETTID) {
+        uint32_t tid_val = child->pid;
+        vmm_write_user_bytes(parent->pml4_phys, ptid,
+                             &tid_val, sizeof(tid_val));
+    }
+
+    /* 10. CLONE_CHILD_SETTID: write child tid to child's *ctid.
+     * Same address space (CLONE_VM), so use parent's PML4. */
+    if (cl & CLONE_CHILD_SETTID) {
+        uint32_t tid_val = child->pid;
+        vmm_write_user_bytes(parent->pml4_phys, ctid,
+                             &tid_val, sizeof(tid_val));
+    }
+
+    /* 11. CLONE_VFORK: block parent until child exits or execs. */
+    if (cl & CLONE_VFORK) {
+        parent_task->waiting_for = child->pid;
+        sched_block();
+    }
+
+    return (uint64_t)child->pid;
 }
 
 /*
