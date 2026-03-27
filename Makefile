@@ -505,7 +505,8 @@ gdb: iso
 sym:
 	@addr2line -e $(BUILD)/aegis.elf -f -p $(ADDR)
 
-test: iso
+test:
+	$(MAKE) INIT=vigil iso
 	@bash tests/run_tests.sh
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
