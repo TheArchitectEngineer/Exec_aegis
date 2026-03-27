@@ -61,55 +61,14 @@ static const unsigned int s_dhcp_caps_size   = sizeof(s_dhcp_caps)   - 1;
 
 /* Binary blobs embedded via objcopy --input binary.
  * Symbols: _binary_<name>_start, _binary_<name>_end.
- * Size = end - start (computed at open time). */
-extern const unsigned char _binary_shell_bin_start[];
-extern const unsigned char _binary_shell_bin_end[];
-extern const unsigned char _binary_ls_bin_start[];
-extern const unsigned char _binary_ls_bin_end[];
-extern const unsigned char _binary_cat_bin_start[];
-extern const unsigned char _binary_cat_bin_end[];
-extern const unsigned char _binary_echo_bin_start[];
-extern const unsigned char _binary_echo_bin_end[];
-extern const unsigned char _binary_pwd_bin_start[];
-extern const unsigned char _binary_pwd_bin_end[];
-extern const unsigned char _binary_uname_bin_start[];
-extern const unsigned char _binary_uname_bin_end[];
-extern const unsigned char _binary_clear_bin_start[];
-extern const unsigned char _binary_clear_bin_end[];
-extern const unsigned char _binary_true_bin_start[];
-extern const unsigned char _binary_true_bin_end[];
-extern const unsigned char _binary_false_bin_start[];
-extern const unsigned char _binary_false_bin_end[];
-extern const unsigned char _binary_wc_bin_start[];
-extern const unsigned char _binary_wc_bin_end[];
-extern const unsigned char _binary_grep_bin_start[];
-extern const unsigned char _binary_grep_bin_end[];
-extern const unsigned char _binary_sort_bin_start[];
-extern const unsigned char _binary_sort_bin_end[];
-extern const unsigned char _binary_mkdir_bin_start[];
-extern const unsigned char _binary_mkdir_bin_end[];
-extern const unsigned char _binary_touch_bin_start[];
-extern const unsigned char _binary_touch_bin_end[];
-extern const unsigned char _binary_rm_bin_start[];
-extern const unsigned char _binary_rm_bin_end[];
-extern const unsigned char _binary_cp_bin_start[];
-extern const unsigned char _binary_cp_bin_end[];
-extern const unsigned char _binary_mv_bin_start[];
-extern const unsigned char _binary_mv_bin_end[];
-extern const unsigned char _binary_whoami_bin_start[];
-extern const unsigned char _binary_whoami_bin_end[];
-extern const unsigned char _binary_oksh_bin_start[];
-extern const unsigned char _binary_oksh_bin_end[];
+ * Size = end - start (computed at open time).
+ *
+ * Only login and vigil are statically linked and embedded in the initrd.
+ * All other user binaries are dynamically linked and live on the ext2 disk. */
 extern const unsigned char _binary_login_bin_start[];
 extern const unsigned char _binary_login_bin_end[];
 extern const unsigned char _binary_vigil_bin_start[];
 extern const unsigned char _binary_vigil_bin_end[];
-extern const unsigned char _binary_vigictl_bin_start[];
-extern const unsigned char _binary_vigictl_bin_end[];
-extern const unsigned char _binary_httpd_bin_start[];
-extern const unsigned char _binary_httpd_bin_end[];
-extern const unsigned char _binary_dhcp_bin_start[];
-extern const unsigned char _binary_dhcp_bin_end[];
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -123,30 +82,8 @@ typedef struct {
 
 static const initrd_entry_t s_files[] = {
     { "/etc/motd",  (const unsigned char *)s_motd, (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
-    { "/bin/sh",      _binary_shell_bin_start,     _binary_shell_bin_end },
-    { "/bin/ls",      _binary_ls_bin_start,        _binary_ls_bin_end },
-    { "/bin/cat",     _binary_cat_bin_start,       _binary_cat_bin_end },
-    { "/bin/echo",    _binary_echo_bin_start,      _binary_echo_bin_end },
-    { "/bin/pwd",     _binary_pwd_bin_start,       _binary_pwd_bin_end },
-    { "/bin/uname",   _binary_uname_bin_start,     _binary_uname_bin_end },
-    { "/bin/clear",   _binary_clear_bin_start,     _binary_clear_bin_end },
-    { "/bin/true",    _binary_true_bin_start,     _binary_true_bin_end },
-    { "/bin/false",   _binary_false_bin_start,    _binary_false_bin_end },
-    { "/bin/wc",      _binary_wc_bin_start,        _binary_wc_bin_end },
-    { "/bin/grep",    _binary_grep_bin_start,      _binary_grep_bin_end },
-    { "/bin/sort",    _binary_sort_bin_start,      _binary_sort_bin_end },
-    { "/bin/mkdir",   _binary_mkdir_bin_start,     _binary_mkdir_bin_end },
-    { "/bin/touch",   _binary_touch_bin_start,     _binary_touch_bin_end },
-    { "/bin/rm",      _binary_rm_bin_start,        _binary_rm_bin_end },
-    { "/bin/cp",      _binary_cp_bin_start,        _binary_cp_bin_end },
-    { "/bin/mv",      _binary_mv_bin_start,        _binary_mv_bin_end },
-    { "/bin/whoami",  _binary_whoami_bin_start,    _binary_whoami_bin_end },
-    { "/bin/oksh",    _binary_oksh_bin_start,      _binary_oksh_bin_end },
     { "/bin/login",   _binary_login_bin_start,     _binary_login_bin_end },
     { "/bin/vigil",   _binary_vigil_bin_start,     _binary_vigil_bin_end },
-    { "/bin/vigictl", _binary_vigictl_bin_start,   _binary_vigictl_bin_end },
-    { "/bin/httpd",   _binary_httpd_bin_start,     _binary_httpd_bin_end },
-    { "/bin/dhcp",    _binary_dhcp_bin_start,      _binary_dhcp_bin_end },
     { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
     { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
     { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },
@@ -164,7 +101,7 @@ static const initrd_entry_t s_files[] = {
 };
 
 
-static const uint32_t s_nfiles = 38;
+static const uint32_t s_nfiles = 16;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -299,12 +236,7 @@ static const dir_entry_t s_vigil_dhcp_entries[] = {
     { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_bin_entries[] = {
-    { "sh",     8 }, { "ls",     8 }, { "cat",    8 }, { "echo",   8 },
-    { "pwd",    8 }, { "uname",  8 }, { "clear",  8 }, { "true",   8 },
-    { "false",  8 }, { "wc",     8 }, { "grep",   8 }, { "sort",   8 },
-    { "mkdir",  8 }, { "touch",  8 }, { "rm",     8 }, { "cp",     8 },
-    { "mv",     8 }, { "whoami", 8 }, { "oksh",   8 }, { "login",  8 },
-    { "vigil",  8 }, { "vigictl", 8 }, { "httpd", 8 }, { "dhcp",   8 },
+    { "login",  8 }, { "vigil",  8 },
     { (const char *)0, 0 }
 };
 

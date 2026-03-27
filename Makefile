@@ -157,33 +157,13 @@ USERSPACE_SRCS = \
 # Programs embedded in initrd via objcopy --input binary
 OBJCOPY = x86_64-elf-objcopy
 
+# Only login and vigil are statically linked and embedded in the initrd.
+# All other user binaries are dynamically linked and live on the ext2 disk.
 USER_ELFS = \
-    user/shell/shell.elf \
-    user/ls/ls.elf \
-    user/cat/cat.elf \
-    user/echo/echo.elf \
-    user/pwd/pwd.elf \
-    user/uname/uname.elf \
-    user/clear/clear.elf \
-    user/true/true.elf \
-    user/false/false.elf \
-    user/wc/wc.elf \
-    user/grep/grep.elf \
-    user/sort/sort.elf \
-    user/mkdir/mkdir.elf \
-    user/touch/touch.elf \
-    user/rm/rm.elf \
-    user/cp/cp.elf \
-    user/mv/mv.elf \
-    user/whoami/whoami.elf \
-    user/oksh/oksh.elf \
     user/login/login.elf \
-    user/vigil/vigil \
-    user/vigictl/vigictl \
-    user/httpd/httpd.elf \
-    user/dhcp/dhcp
+    user/vigil/vigil
 
-BLOB_OBJS = $(patsubst %,$(BUILD)/blobs/%.o,$(notdir $(basename $(USER_ELFS)))) $(BUILD)/blobs/init.o
+BLOB_OBJS = $(BUILD)/blobs/login.o $(BUILD)/blobs/vigil.o $(BUILD)/blobs/init.o
 
 
 # ── Object file lists ─────────────────────────────────────────────────────────
@@ -201,7 +181,7 @@ USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
            $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(BLOB_OBJS)
 
-.PHONY: all iso disk run run-fb shell oksh login test clean gdb sym curl_bin
+.PHONY: all iso disk run run-fb shell oksh login test clean gdb sym curl_bin build-musl
 
 all: $(BUILD)/aegis.elf
 
@@ -316,139 +296,6 @@ user/pty_test/pty_test.elf: user/pty_test/main.c
 # Each user ELF → linkable .o with _binary_<name>_bin_start/end symbols.
 # Copy to build/blobs/<name>.bin, cd there, objcopy — so symbol names are clean.
 
-$(BUILD)/blobs/shell.o: user/shell/shell.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/shell.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  shell.bin shell.o
-
-$(BUILD)/blobs/ls.o: user/ls/ls.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/ls.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  ls.bin ls.o
-
-$(BUILD)/blobs/cat.o: user/cat/cat.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/cat.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  cat.bin cat.o
-
-$(BUILD)/blobs/echo.o: user/echo/echo.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/echo.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  echo.bin echo.o
-
-$(BUILD)/blobs/pwd.o: user/pwd/pwd.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/pwd.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  pwd.bin pwd.o
-
-$(BUILD)/blobs/uname.o: user/uname/uname.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/uname.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  uname.bin uname.o
-
-$(BUILD)/blobs/clear.o: user/clear/clear.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/clear.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  clear.bin clear.o
-
-$(BUILD)/blobs/true.o: user/true/true.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/true.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  true.bin true.o
-
-$(BUILD)/blobs/false.o: user/false/false.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/false.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  false.bin false.o
-
-$(BUILD)/blobs/wc.o: user/wc/wc.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/wc.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  wc.bin wc.o
-
-$(BUILD)/blobs/grep.o: user/grep/grep.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/grep.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  grep.bin grep.o
-
-$(BUILD)/blobs/sort.o: user/sort/sort.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/sort.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  sort.bin sort.o
-
-$(BUILD)/blobs/mkdir.o: user/mkdir/mkdir.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/mkdir.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  mkdir.bin mkdir.o
-
-$(BUILD)/blobs/touch.o: user/touch/touch.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/touch.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  touch.bin touch.o
-
-$(BUILD)/blobs/rm.o: user/rm/rm.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/rm.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  rm.bin rm.o
-
-$(BUILD)/blobs/cp.o: user/cp/cp.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/cp.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  cp.bin cp.o
-
-$(BUILD)/blobs/mv.o: user/mv/mv.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/mv.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  mv.bin mv.o
-
-$(BUILD)/blobs/whoami.o: user/whoami/whoami.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/whoami.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  whoami.bin whoami.o
-
-$(BUILD)/blobs/oksh.o: user/oksh/oksh.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/oksh.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  oksh.bin oksh.o
-
 $(BUILD)/blobs/login.o: user/login/login.elf
 	@mkdir -p $(BUILD)/blobs
 	@cp $< $(BUILD)/blobs/login.bin
@@ -462,27 +309,6 @@ $(BUILD)/blobs/vigil.o: user/vigil/vigil
 	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
 	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
 	  vigil.bin vigil.o
-
-$(BUILD)/blobs/vigictl.o: user/vigictl/vigictl
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/vigictl.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  vigictl.bin vigictl.o
-
-$(BUILD)/blobs/httpd.o: user/httpd/httpd.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/httpd.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  httpd.bin httpd.o
-
-$(BUILD)/blobs/dhcp.o: user/dhcp/dhcp
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $(BUILD)/blobs/dhcp.bin
-	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
-	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-	  dhcp.bin dhcp.o
 
 $(BUILD)/blobs/init.o: $(INIT_ELF_SRC) $(INIT_STAMP)
 	@mkdir -p $(BUILD)/blobs
@@ -504,6 +330,15 @@ build/curl/curl: build/bearssl-install/lib/libbearssl.a
 	bash tools/build-curl.sh
 
 curl_bin: build/curl/curl
+
+# musl shared library (dynamic linker)
+build/musl-dynamic/lib/libc.so:
+	bash tools/build-musl.sh
+
+build-musl: build/musl-dynamic/lib/libc.so
+
+user/dynlink_test/dynlink_test.elf: user/dynlink_test/main.c build/musl-dynamic/lib/libc.so
+	$(MAKE) -C user/dynlink_test
 
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
@@ -534,13 +369,18 @@ DISK_USER_BINS = \
 	user/wc/wc.elf user/grep/grep.elf user/sort/sort.elf \
 	user/mv/mv.elf user/cp/cp.elf user/rm/rm.elf \
 	user/mkdir/mkdir.elf user/touch/touch.elf \
+	user/whoami/whoami.elf \
+	user/oksh/oksh.elf \
 	user/httpd/httpd.elf \
+	user/vigictl/vigictl \
 	user/thread_test/thread_test.elf \
 	user/mmap_test/mmap_test.elf \
 	user/proc_test/proc_test.elf \
 	user/pty_test/pty_test.elf \
+	user/dynlink_test/dynlink_test.elf \
 	user/dhcp/dhcp \
-	build/curl/curl
+	build/curl/curl \
+	build/musl-dynamic/lib/libc.so
 
 disk: $(DISK)
 
@@ -553,10 +393,15 @@ $(DISK): $(DISK_USER_BINS)
 	    $(DISK)
 	dd if=/dev/zero of=/tmp/aegis-p1.img bs=512 count=$(P1_SECTORS) 2>/dev/null
 	/sbin/mke2fs -t ext2 -F -L aegis-root /tmp/aegis-p1.img
-	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
+	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\nmkdir /lib\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite /tmp/aegis-motd /etc/motd\n' \
+	# Dynamic linker / shared library — written as two separate files
+	# (ext2 does not support symlinks yet)
+	printf 'write build/musl-dynamic/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \
+	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	# User binaries (dynamically linked, loaded from ext2 at runtime)
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
@@ -689,4 +534,5 @@ clean:
 	$(MAKE) -C user/whoami clean 2>/dev/null; true
 	$(MAKE) -C user/oksh clean 2>/dev/null; true
 	$(MAKE) -C user/login clean 2>/dev/null; true
+	$(MAKE) -C user/dynlink_test clean 2>/dev/null; true
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml
