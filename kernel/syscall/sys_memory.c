@@ -148,6 +148,8 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
          uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
     (void)arg6;  /* offset — not validated; musl always passes 0 for MAP_ANONYMOUS */
+    printk("[MMAP] addr=%lx len=%lx prot=%lx flags=%lx fd=%lx\n",
+           arg1, arg2, arg3, arg4, (int64_t)arg5);
 
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
