@@ -22,6 +22,7 @@
 #include "kbd_vfs.h"
 #include "socket.h"
 #include "epoll.h"
+#include "random.h"
 #include <stdint.h>
 #include <stddef.h>
 

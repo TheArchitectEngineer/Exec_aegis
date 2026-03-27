@@ -639,6 +639,18 @@ sys_execve(syscall_frame_t *frame,
         }
     }
 
+    /* Write 16 bytes of random data for AT_RANDOM, then align.
+     * musl 1.2.x reads AT_RANDOM from auxv to seed its internal PRNG;
+     * without it, musl dereferences a null pointer during CRT init. */
+    sp_va -= 16;
+    {
+        uint8_t rnd[16];
+        random_get_bytes(rnd, 16);
+        if (vmm_write_user_bytes(proc->pml4_phys, sp_va, rnd, 16) != 0)
+            { ret = (uint64_t)-(int64_t)14; goto done; }
+    }
+    uint64_t at_random_va = sp_va;
+
     /* Align sp_va to 8 bytes for the pointer table */
     sp_va &= ~7ULL;
 
@@ -647,11 +659,11 @@ sys_execve(syscall_frame_t *frame,
      * + argc (argv pointers)
      * + 1 (argv NULL)
      * + 1 (envp NULL)
-     * + 10 (5 auxv key/value pairs)
-     * = argc + 13 qwords
+     * + 12 (6 auxv key/value pairs: PHDR, PHNUM, PAGESZ, ENTRY, RANDOM, NULL)
+     * = argc + 15 qwords
      */
     {
-    uint64_t table_qwords = (uint64_t)(argc2 + 13);
+    uint64_t table_qwords = (uint64_t)(argc2 + 15);
     uint64_t table_bytes  = table_qwords * 8ULL;
 
     /* Ensure RSP % 16 == 8 on entry to _start */
@@ -718,6 +730,14 @@ sys_execve(syscall_frame_t *frame,
             { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, er.entry) != 0)
+            { ret = (uint64_t)-(int64_t)14; goto done; }
+        wp += 8;
+
+        /* auxv: AT_RANDOM — pointer to 16 random bytes on user stack */
+        if (vmm_write_user_u64(proc->pml4_phys, wp, 25ULL) != 0)
+            { ret = (uint64_t)-(int64_t)14; goto done; }
+        wp += 8;
+        if (vmm_write_user_u64(proc->pml4_phys, wp, at_random_va) != 0)
             { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
