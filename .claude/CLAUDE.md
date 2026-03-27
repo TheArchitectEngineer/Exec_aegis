@@ -246,6 +246,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | ext2 stat (inode mode) | ✅ | vfs.c stat paths now read actual inode.i_mode from disk; fixes 0644→0775 for /bin/ |
 | BearSSL + curl build | ✅ | tools/fetch-bearssl.sh + tools/build-curl.sh; curl 8.x statically linked; ext2-only via make disk |
 | curl HTTPS e2e | ❌ | curl exec loads (311 pages) but exits silently — NET_SOCKET cap missing from execve baseline |
+| Thread support (Phase 29) | ✅ | clone(CLONE_VM); per-thread TLS; fd_table_t refcount; futex WAIT/WAKE; tgid; clear_child_tid; test_threads.py PASS |
 
 ### Known deviations
 
@@ -309,7 +310,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 26 | POSIX socket API + epoll | ✅ Done |
 | 27 | DHCP daemon, writable /etc+/root, BearSSL+curl, CSPRNG | 🔶 TCP connect fix done; curl HTTPS needs loopback + DNS testing |
 | 28 | **Loopback interface + TCP outbound** — lo0 device; fix TCP connect for external hosts (SYN-ACK→SOCK_CONNECTED done, needs e2e test); curl HTTPS e2e | Not started |
-| 29 | **Threads** — `clone()`+`futex`; per-thread TLS; shared address space; `CAP_KIND_THREAD_CREATE` gate; musl pthreads support | Not started |
+| 29 | **Threads** — `clone()`+`futex`; per-thread TLS; shared address space; `CAP_KIND_THREAD_CREATE` gate; musl pthreads support | ✅ Done |
 | 30 | **mprotect + mmap improvements** — real mprotect (W^X); file-backed mmap; MAP_SHARED; munmap freelist | Not started |
 | 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | Not started |
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | Not started |
@@ -375,4 +376,28 @@ Remove these after the curl test passes.
 
 ---
 
-*Last updated: 2026-03-26 — Phase 27 partial: DHCP daemon ✅, writable /etc+/root ✅, BearSSL+curl build ✅, ext2 execve ✅, ext2 double indirect ✅, ext2 stat mode ✅. Blocker: curl exits silently after exec — add NET_SOCKET cap to execve baseline in sys_process.c.*
+*Last updated: 2026-03-27 — Phase 29 complete: clone(CLONE_VM)+futex+fd_table_t refcount+per-thread TLS+tgid+clear_child_tid. test_threads.py PASS. curl HTTPS still ❌ (NET_SOCKET cap missing).*
+
+---
+
+## Phase 29 — Forward Constraints
+
+**Phase 29 status: ✅ complete. `make test` passes. `test_threads.py` PASS.**
+
+### Architecture constraints
+
+1. **`fd_table_t` refcounting has no locking.** Threads sharing an fd table via `CLONE_FILES` can race on `fd_table->fds[]` operations (open/close/dup). No spinlock protects the fd array. Single-core scheduler prevents true parallelism, but a multi-core port requires per-fd-table spinlocks.
+
+2. **Futex pool is 64 static slots.** `futex_waiter_t s_waiters[64]` — if more than 64 threads block on futexes simultaneously, `FUTEX_WAIT` returns `-EAGAIN`. Sufficient for early threading; a hash-table futex implementation is Phase 30+ work.
+
+3. **`mprotect` is a stub.** musl's `pthread_create` calls `mprotect(PROT_NONE)` for the thread stack guard page. Our stub returns 0 (success) but does not actually change page permissions. Guard page protection is Phase 30 (mprotect) work.
+
+4. **Thread stack mmap pages are never freed.** `sys_munmap` is a no-op stub. Thread stacks allocated via `mmap(MAP_ANONYMOUS)` for pthread_create are leaked when the thread exits. Real munmap with VA freelist is Phase 30 work.
+
+5. **`exit_group` kills threads via `sched_exit`.** Each thread in the group is individually removed from the run queue. There is no bulk-kill path — the exiting thread iterates the process list. With many threads this is O(n) per thread × O(n) process scan.
+
+6. **No `CLONE_FS` support.** The `CLONE_FS` flag (shared cwd/umask) is accepted but ignored. Each thread inherits the parent's cwd at clone time but subsequent `chdir` in one thread does not affect others. Full CLONE_FS requires a refcounted `fs_struct`.
+
+7. **Shared signals between threads are not implemented.** `CLONE_SIGHAND` is accepted but signal delivery still targets individual processes. Thread-group-wide signal delivery (e.g., `kill(pid, sig)` hitting any thread in the group) requires Phase 32 (TTY/PTY) work.
+
+8. **`CAP_KIND_THREAD_CREATE` is granted to all exec'd binaries.** Future sandboxing should support revoking this capability via vigil service config (e.g., `-THREAD_CREATE` in capabilities list).
