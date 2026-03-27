@@ -194,6 +194,7 @@ vmm_init(void)
     pdpt_hi[510] = pd_hi_phys   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
     pd_hi[0]     = 0x000000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
     pd_hi[1]     = 0x200000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
+    pd_hi[2]     = 0x400000UL   | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE) | (1UL << 7);
 
     /* Install the mapped-window PT into pd_hi[3].
      * pd_hi is a local pointer (identity-cast of pd_hi_phys) in scope here.
