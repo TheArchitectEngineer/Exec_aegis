@@ -1,5 +1,6 @@
 /* sys_process.c — Process lifecycle syscalls: exit, fork, execve, waitpid */
 #include "sys_impl.h"
+#include "futex.h"
 
 #define MAX_PROCESSES 64
 static uint32_t s_fork_count = 1;  /* starts at 1 for init */
@@ -29,8 +30,19 @@ sys_exit(uint64_t arg1)
     if (sched_current()->is_user) {
         aegis_process_t *proc = (aegis_process_t *)sched_current();
         proc->exit_status = arg1 & 0xFF;
+
+        /* clear_child_tid: write 0 and futex wake (for pthread_join) */
+        if (sched_current()->clear_child_tid) {
+            uint32_t zero = 0;
+            vmm_write_user_bytes(proc->pml4_phys,
+                                 sched_current()->clear_child_tid,
+                                 &zero, sizeof(zero));
+            futex_wake_addr(sched_current()->clear_child_tid, 1);
+        }
+
         if (proc->pid == 1) {
-            printk("[INIT] PID 1 exited with status %d — halting\n", (int)(int64_t)arg1);
+            printk("[INIT] PID 1 exited with status %u — halting\n",
+                   (uint32_t)(arg1 & 0xFF));
             arch_request_shutdown();
         }
     }
@@ -44,11 +56,35 @@ sys_exit(uint64_t arg1)
  */
 uint64_t sys_exit_group(uint64_t arg1)
 {
-    if (sched_current()->is_user) {
-        aegis_process_t *proc = (aegis_process_t *)sched_current();
+    aegis_task_t *cur = sched_current();
+    if (cur->is_user) {
+        aegis_process_t *proc = (aegis_process_t *)cur;
         proc->exit_status = arg1 & 0xFF;
-        if (proc->pid == 1) {
-            printk("[INIT] PID 1 exited with status %d — halting\n", (int)(int64_t)arg1);
+
+        /* Kill all other threads in the same thread group */
+        uint32_t my_tgid = proc->tgid;
+        aegis_task_t *t = cur->next;
+        while (t != cur) {
+            if (t->is_user) {
+                aegis_process_t *tp = (aegis_process_t *)t;
+                if (tp->tgid == my_tgid) {
+                    t->state = TASK_ZOMBIE;
+                    /* Do clear_child_tid for killed threads too */
+                    if (t->clear_child_tid) {
+                        uint32_t zero = 0;
+                        vmm_write_user_bytes(tp->pml4_phys,
+                                             t->clear_child_tid,
+                                             &zero, sizeof(zero));
+                        futex_wake_addr(t->clear_child_tid, 1);
+                    }
+                }
+            }
+            t = t->next;
+        }
+
+        if (proc->pid == 1 || proc->tgid == 1) {
+            printk("[INIT] PID 1 exited with status %u — halting\n",
+                   (uint32_t)(arg1 & 0xFF));
             arch_request_shutdown();
         }
     }
