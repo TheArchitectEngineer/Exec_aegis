@@ -426,7 +426,7 @@ vmm_map_user_page(uint64_t pml4_phys, uint64_t virt,
     uint64_t pt_phys   = ensure_table_phys(pd_phys,    pd_idx,   VMM_FLAG_USER);
 
     uint64_t *pt = vmm_window_map(pt_phys);
-    if (pt[pt_idx] != 0) {
+    if (pt[pt_idx] & VMM_FLAG_PRESENT) {
         vmm_window_unmap();
         printk("[VMM] FAIL: vmm_map_user_page double-map\n");
         for (;;) {}
@@ -531,9 +531,10 @@ vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
     uint64_t  pte = pt[pt_idx];
     vmm_window_unmap();
 
-    /* Return phys addr if PRESENT, or if phys bits are set (PROT_NONE page:
-     * PRESENT cleared by mprotect but physical address preserved in PTE). */
-    return ARCH_PTE_ADDR(pte);
+    /* Return phys for PRESENT pages. PROT_NONE pages (phys without PRESENT)
+     * are not found here — munmap leaks them. Acceptable: PROT_NONE guard
+     * pages are rare and small. */
+    return (pte & VMM_FLAG_PRESENT) ? ARCH_PTE_ADDR(pte) : 0;
 }
 
 void
@@ -560,7 +561,7 @@ vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
     }
 
     uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
-    if (pt[pt_idx] != 0)
+    if (pt[pt_idx] & VMM_FLAG_PRESENT)
         pt[pt_idx] = 0;
     vmm_window_unmap();
     arch_vmm_invlpg(virt);
