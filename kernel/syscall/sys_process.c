@@ -918,6 +918,10 @@ sys_execve(syscall_frame_t *frame,
 
     /* 6. Load new ELF */
     elf_load_result_t er;
+    elf_load_result_t interp_er;
+    int has_interp = 0;
+    __builtin_memset(&interp_er, 0, sizeof(interp_er));
+
     if (elf_load(proc->pml4_phys, elf_data, (size_t)elf_size, 0, &er) != 0)
         { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
     /* Free ext2 buffer immediately after ELF is loaded (pages already mapped). */
@@ -927,6 +931,42 @@ sys_execve(syscall_frame_t *frame,
         ext2_pages = 0;
     }
     proc->brk = er.brk;
+
+    /* 6a. If PT_INTERP present, load the interpreter at INTERP_BASE */
+    has_interp = (er.interp[0] != '\0');
+    if (has_interp) {
+        const uint8_t *interp_data;
+        uint64_t interp_size;
+        void    *interp_buf   = (void *)0;
+        uint64_t interp_pages = 0;
+
+        vfs_file_t interp_f;
+        if (initrd_open(er.interp, &interp_f) == 0) {
+            interp_data = (const uint8_t *)initrd_get_data(&interp_f);
+            interp_size = (uint64_t)initrd_get_size(&interp_f);
+        } else {
+            vfs_file_t vf;
+            int vr = vfs_open(er.interp, 0, &vf);
+            if (vr != 0) { ret = (uint64_t)-(int64_t)2; goto done; }  /* ENOENT */
+            interp_pages = (vf.size + 4095ULL) / 4096ULL;
+            interp_buf = kva_alloc_pages(interp_pages);
+            if (!interp_buf) { ret = (uint64_t)-(int64_t)12; goto done; }  /* ENOMEM */
+            int rr = vf.ops->read(vf.priv, interp_buf, 0, vf.size);
+            if (rr < 0) {
+                kva_free_pages(interp_buf, interp_pages);
+                ret = (uint64_t)-(int64_t)5; goto done;  /* EIO */
+            }
+            interp_data = (const uint8_t *)interp_buf;
+            interp_size = vf.size;
+        }
+
+        if (elf_load(proc->pml4_phys, interp_data, (size_t)interp_size,
+                     INTERP_BASE, &interp_er) != 0) {
+            if (interp_buf) kva_free_pages(interp_buf, interp_pages);
+            ret = (uint64_t)-(int64_t)8; goto done;  /* ENOEXEC */
+        }
+        if (interp_buf) kva_free_pages(interp_buf, interp_pages);
+    }
 
     /* 7. Allocate + map 4 user stack pages (16 KB) */
     {
@@ -996,11 +1036,13 @@ sys_execve(syscall_frame_t *frame,
      * + argc (argv pointers)
      * + 1 (argv NULL)
      * + 1 (envp NULL)
-     * + 12 (6 auxv key/value pairs: PHDR, PHNUM, PAGESZ, ENTRY, RANDOM, NULL)
-     * = argc + 15 qwords
+     * + auxv pairs × 2 qwords each:
+     *     6 base: PHDR, PHNUM, PAGESZ, ENTRY, RANDOM, NULL
+     *   + 2 if interp: AT_BASE, AT_PHENT
      */
     {
-    uint64_t table_qwords = (uint64_t)(argc2 + 15);
+    uint64_t auxv_qwords = has_interp ? 16 : 12;
+    uint64_t table_qwords = (uint64_t)(argc2) + 3 + auxv_qwords;
     uint64_t table_bytes  = table_qwords * 8ULL;
 
     /* Ensure RSP % 16 == 8 on entry to _start */
@@ -1078,6 +1120,15 @@ sys_execve(syscall_frame_t *frame,
             { ret = (uint64_t)-(int64_t)14; goto done; }
         wp += 8;
 
+        if (has_interp) {
+            /* auxv: AT_BASE (7) — interpreter load address */
+            vmm_write_user_u64(proc->pml4_phys, wp, 7ULL); wp += 8;
+            vmm_write_user_u64(proc->pml4_phys, wp, INTERP_BASE); wp += 8;
+            /* auxv: AT_PHENT (4) — program header entry size */
+            vmm_write_user_u64(proc->pml4_phys, wp, 4ULL); wp += 8;
+            vmm_write_user_u64(proc->pml4_phys, wp, 56ULL); wp += 8;
+        }
+
         /* auxv: AT_NULL (end sentinel) */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
             { ret = (uint64_t)-(int64_t)14; goto done; }
@@ -1099,8 +1150,8 @@ sys_execve(syscall_frame_t *frame,
         }
     }
 
-    /* 10. Redirect return to new ELF entry point */
-    FRAME_IP(frame) = er.entry;
+    /* 10. Redirect return to new ELF entry point (or interpreter if present) */
+    FRAME_IP(frame) = has_interp ? interp_er.entry : er.entry;
     FRAME_SP(frame) = sp_va;
     /* ret = 0 (success) */
         } /* argc2 scope */
