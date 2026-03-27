@@ -200,7 +200,7 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
          * stale PMM data would corrupt the allocator. */
         vmm_zero_page(phys);
         vmm_map_user_page(proc->pml4_phys, va, phys,
-                          VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_NX);
+                          VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
     }
 
     /* Advance bump allocator only if we used it (not freelist). */
