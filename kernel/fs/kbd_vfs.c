@@ -1,140 +1,73 @@
 #include "kbd_vfs.h"
+#include "tty.h"
 #include "vfs.h"
 #include "kbd.h"
-#include "proc.h"
-#include "sched.h"
 #include "printk.h"
 #include "uaccess.h"
 #include "syscall_util.h"
 #include <stdint.h>
 
-/* k_termios_t — kernel copy matching musl x86_64 struct termios (60 bytes).
- * Layout: c_iflag(4)+c_oflag(4)+c_cflag(4)+c_lflag(4)+c_line(1)+c_cc[32](32)
- *         +3_pad+c_ispeed(4)+c_ospeed(4) = 60 bytes.
- * Must match musl's struct termios so TCGETS/TCSETS exchange works directly. */
-#define K_NCCS   32
-#define K_ICANON 0x02U   /* c_lflag: canonical (line-buffered) mode */
-#define K_ECHO   0x08U   /* c_lflag: echo input characters */
-#define K_ISIG   0x01U   /* c_lflag: enable INTR/QUIT signal generation */
-#define K_ICRNL  0x100U  /* c_iflag: translate CR to NL on input */
-#define K_VMIN   6       /* c_cc index: minimum bytes for raw read */
-#define K_VTIME  5       /* c_cc index: timeout for raw read (tenths of sec) */
+/* ── Console tty singleton ──────────────────────────────────────── */
 
-typedef struct {
-    uint32_t c_iflag;
-    uint32_t c_oflag;
-    uint32_t c_cflag;
-    uint32_t c_lflag;
-    uint8_t  c_line;
-    uint8_t  c_cc[K_NCCS];
-    /* 3 bytes natural padding between c_cc[32] (offset 49) and c_ispeed (offset 52) */
-    uint32_t c_ispeed;
-    uint32_t c_ospeed;
-} k_termios_t;
+static tty_t s_console_tty;
 
-_Static_assert(sizeof(k_termios_t) == 60,
-    "k_termios_t must be 60 bytes to match musl struct termios");
-
-static k_termios_t s_termios;   /* kernel terminal attributes */
-static int         s_raw = 0;   /* cached: !(c_lflag & K_ICANON) */
-
-/* Simple line discipline — echoes characters as typed, handles backspace.
- * Buffers one line at a time; returns characters one-by-one to the caller.
- * TTY termios layer: s_raw=0 → cooked (canonical), s_raw=1 → raw. */
-#define KBD_LINE_MAX 512
-static char s_linebuf[KBD_LINE_MAX];
-static int  s_linebuf_len = 0;  /* total bytes ready in buffer (incl. \n) */
-static int  s_linebuf_pos = 0;  /* next byte to return to caller */
-
-static void
-kbd_vfs_termios_init(void)
+/* console_tty_write_out — backend callback: emit characters via printk.
+ * printk handles serial + VGA routing; the serial driver adds \r before \n
+ * internally, so we must NOT enable OPOST/ONLCR on the console tty. */
+static int
+console_tty_write_out(tty_t *tty, const char *buf, uint32_t len)
 {
-    __builtin_memset(&s_termios, 0, sizeof(s_termios));
-    s_termios.c_iflag        = K_ICRNL;
-    s_termios.c_lflag        = K_ICANON | K_ECHO | K_ISIG;
-    s_termios.c_cc[K_VMIN]  = 1;
-    s_termios.c_cc[K_VTIME] = 0;
-    s_raw = 0;
+	(void)tty;
+	for (uint32_t i = 0; i < len; i++)
+		printk("%c", buf[i]);
+	return (int)len;
 }
+
+/* console_tty_read_raw — backend callback: read one raw character from the
+ * PS/2 (or USB HID) keyboard ring buffer.  Blocks until a key is pressed
+ * or a signal interrupts. */
+static int
+console_tty_read_raw(tty_t *tty, char *out, int *interrupted)
+{
+	(void)tty;
+	*out = kbd_read_interruptible(interrupted);
+	return (*interrupted) ? 0 : 1;
+}
+
+/* console_tty_init — set up the console tty with defaults + callbacks. */
+static void
+console_tty_init(void)
+{
+	tty_init_defaults(&s_console_tty);
+	/* Console handles CRLF internally via printk/serial — disable OPOST
+	 * to avoid double \r\n. */
+	s_console_tty.termios.c_oflag = 0;
+	s_console_tty.write_out = console_tty_write_out;
+	s_console_tty.read_raw  = console_tty_read_raw;
+	tty_set_console(&s_console_tty);
+}
+
+/* ── VFS callbacks ──────────────────────────────────────────────── */
 
 static int
 kbd_vfs_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 {
 	(void)priv; (void)off;
 	if (len == 0) return 0;
-	char *kbuf = (char *)buf;
-
-	/* RAW mode: one character immediately, no echo, no line buffer */
-	if (s_raw) {
-		int interrupted;
-		char c = kbd_read_interruptible(&interrupted);
-		if (interrupted) return -4; /* EINTR */
-		kbuf[0] = c;
-		return 1;
-	}
-
-	/* COOKED mode: return buffered bytes from a previously-read line */
-	if (s_linebuf_pos < s_linebuf_len) {
-		kbuf[0] = s_linebuf[s_linebuf_pos++];
-		if (s_linebuf_pos >= s_linebuf_len) {
-			s_linebuf_len = 0;
-			s_linebuf_pos = 0;
-		}
-		return 1;
-	}
-
-	/* COOKED mode: read and echo characters until Enter */
-	for (;;) {
-		int  interrupted;
-		char c = kbd_read_interruptible(&interrupted);
-		if (interrupted) {
-			s_linebuf_len = 0;
-			s_linebuf_pos = 0;
-			return -4; /* EINTR */
-		}
-		if (c == '\r' || c == '\n') {
-			if (s_linebuf_len < KBD_LINE_MAX - 1)
-				s_linebuf[s_linebuf_len++] = '\n';
-			printk("\n");
-			break;
-		} else if (c == '\x04') { /* Ctrl-D / EOT: EOF */
-			printk("\n");
-			if (s_linebuf_len == 0) {
-				/* Empty line: signal EOF */
-				return 0;
-			}
-			/* Pending input: flush it without a newline */
-			break;
-		} else if (c == '\x7f' || c == '\x08') {
-			if (s_linebuf_len > 0) {
-				s_linebuf_len--;
-				printk("\b \b");
-			}
-		} else if ((uint8_t)c >= 0x20 && s_linebuf_len < KBD_LINE_MAX - 1) {
-			s_linebuf[s_linebuf_len++] = c;
-			printk("%c", c);
-		}
-	}
-
-	kbuf[0] = s_linebuf[s_linebuf_pos++];
-	if (s_linebuf_pos >= s_linebuf_len) {
-		s_linebuf_len = 0;
-		s_linebuf_pos = 0;
-	}
-	return 1;
+	return tty_read(&s_console_tty, (char *)buf, (uint32_t)len);
 }
 
 static int
 kbd_vfs_write_fn(void *priv, const void *buf, uint64_t len)
 {
 	(void)priv; (void)buf; (void)len;
-	return -38; /* ENOSYS — stdin is not writable */
+	return -38; /* ENOSYS -- stdin is not writable */
 }
 
 static void
 kbd_vfs_close_fn(void *priv)
 {
-	(void)priv; /* stateless singleton — nothing to release */
+	(void)priv; /* stateless singleton -- nothing to release */
 }
 
 static int
@@ -166,46 +99,34 @@ static vfs_file_t s_kbd_file = {
 	.size   = 0,
 };
 
-/* kbd_vfs_tcgets — copy kernel termios to user pointer.
- * Validates pointer before any copy. Returns 0 or negative errno. */
+/* kbd_vfs_tcgets — delegate to tty_ioctl TCGETS. */
 int
 kbd_vfs_tcgets(void *dst_user)
 {
-    if (!user_ptr_valid((uint64_t)(uintptr_t)dst_user, sizeof(k_termios_t)))
-        return -14; /* EFAULT */
-    copy_to_user(dst_user, &s_termios, sizeof(k_termios_t));
-    return 0;
+	return tty_ioctl(&s_console_tty, TCGETS, (uint64_t)(uintptr_t)dst_user);
 }
 
-/* kbd_vfs_tcsets — copy termios from user pointer to kernel.
- * Updates s_raw cached flag atomically with the store. */
+/* kbd_vfs_tcsets — delegate to tty_ioctl TCSETS. */
 int
 kbd_vfs_tcsets(const void *src_user)
 {
-    if (!user_ptr_valid((uint64_t)(uintptr_t)src_user, sizeof(k_termios_t)))
-        return -14; /* EFAULT */
-    k_termios_t tmp;
-    copy_from_user(&tmp, src_user, sizeof(k_termios_t));
-    s_termios = tmp;
-    /* s_raw is always derived from c_lflag — never an independent state */
-    s_raw = (s_termios.c_lflag & K_ICANON) ? 0 : 1;
-    return 0;
+	return tty_ioctl(&s_console_tty, TCSETS, (uint64_t)(uintptr_t)src_user);
 }
 
 /* kbd_vfs_is_tty — returns 1 if vfs_file uses the kbd_vfs ops (is a tty). */
 int
 kbd_vfs_is_tty(const vfs_file_t *f)
 {
-    return f->ops == &s_kbd_ops;
+	return f->ops == &s_kbd_ops;
 }
 
 vfs_file_t *
 kbd_vfs_open(void)
 {
-    static int s_inited = 0;
-    if (!s_inited) {
-        kbd_vfs_termios_init();
-        s_inited = 1;
-    }
-    return &s_kbd_file;
+	static int s_inited = 0;
+	if (!s_inited) {
+		console_tty_init();
+		s_inited = 1;
+	}
+	return &s_kbd_file;
 }

@@ -4,8 +4,7 @@
 #include "printk.h"
 #include "random.h"
 #include "signal.h"
-#include "proc.h"
-#include "sched.h"
+#include "tty.h"
 
 #define KBD_DATA 0x60
 
@@ -18,9 +17,8 @@ static volatile uint32_t s_tail = 0;  /* next read position  */
 /* Shift state */
 static volatile int s_shift = 0;
 
-/* Ctrl state and foreground process group for signal delivery */
-static volatile int      s_ctrl     = 0;
-static volatile uint32_t s_tty_pgrp = 0;
+/* Ctrl state */
+static volatile int s_ctrl = 0;
 
 /* US QWERTY scancode set 1 — unshifted (make codes 0x01–0x39) */
 static const char s_sc_lower[] = {
@@ -94,20 +92,23 @@ kbd_handler(void)
     /* Ctrl key: left Ctrl = 0x1D make, 0x9D break */
     if (sc == 0x1D) { s_ctrl = 1; return; }
 
-    /* Ctrl-C = Ctrl held + scancode 0x2E ('c') */
+    /* Ctrl-C = Ctrl held + scancode 0x2E ('c') — send SIGINT to fg pgrp */
     if (s_ctrl && sc == 0x2E) {
-        if (s_tty_pgrp != 0)
-            signal_send_pid(s_tty_pgrp, SIGINT);
+        uint32_t fg = tty_console()->fg_pgrp;
+        if (fg != 0)
+            signal_send_pgrp(fg, SIGINT);
         return;
     }
     if (s_ctrl && sc == 0x2C) {
-        if (s_tty_pgrp != 0)
-            signal_send_pid(s_tty_pgrp, SIGTSTP);
+        uint32_t fg = tty_console()->fg_pgrp;
+        if (fg != 0)
+            signal_send_pgrp(fg, SIGTSTP);
         return;
     }
     if (s_ctrl && sc == 0x2B) {
-        if (s_tty_pgrp != 0)
-            signal_send_pid(s_tty_pgrp, SIGQUIT);
+        uint32_t fg = tty_console()->fg_pgrp;
+        if (fg != 0)
+            signal_send_pgrp(fg, SIGQUIT);
         return;
     }
     /* Ctrl-D = EOF: push 0x04 (EOT) into ring buffer for line discipline */
@@ -172,18 +173,21 @@ kbd_usb_inject(uint8_t ascii)
         return;
     /* Intercept Ctrl-C (ETX=0x03), Ctrl-Z (SUB=0x1A), Ctrl-\ (FS=0x1C) */
     if (ascii == 0x03) {
-        if (s_tty_pgrp != 0)
-            signal_send_pid(s_tty_pgrp, SIGINT);
+        uint32_t fg = tty_console()->fg_pgrp;
+        if (fg != 0)
+            signal_send_pgrp(fg, SIGINT);
         return;
     }
     if (ascii == 0x1A) {
-        if (s_tty_pgrp != 0)
-            signal_send_pid(s_tty_pgrp, SIGTSTP);
+        uint32_t fg = tty_console()->fg_pgrp;
+        if (fg != 0)
+            signal_send_pgrp(fg, SIGTSTP);
         return;
     }
     if (ascii == 0x1C) {
-        if (s_tty_pgrp != 0)
-            signal_send_pid(s_tty_pgrp, SIGQUIT);
+        uint32_t fg = tty_console()->fg_pgrp;
+        if (fg != 0)
+            signal_send_pgrp(fg, SIGQUIT);
         return;
     }
     buf_push((char)ascii);
@@ -192,13 +196,13 @@ kbd_usb_inject(uint8_t ascii)
 void
 kbd_set_tty_pgrp(uint32_t pgid)
 {
-    s_tty_pgrp = pgid;
+    tty_console()->fg_pgrp = pgid;
 }
 
 uint32_t
 kbd_get_tty_pgrp(void)
 {
-    return s_tty_pgrp;
+    return tty_console()->fg_pgrp;
 }
 
 char
