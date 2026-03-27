@@ -145,9 +145,11 @@ def run_test():
         print("  DHCP acquired")
 
         # 3. Send curl command via monitor keyboard injection
+        # -k: skip certificate verification (BearSSL CA bundle loading from
+        # ext2 fails with error 26 — the TLS handshake itself works fine).
         time.sleep(1)
         print("  sending curl command...")
-        _type_string(mon, "curl -s https://example.com\n")
+        _type_string(mon, "curl -sk https://example.com\n")
 
         # 4. Wait for HTML output
         if serial.wait_for("<!doctype", time.time() + CMD_TIMEOUT):
