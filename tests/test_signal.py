@@ -151,8 +151,8 @@ def test_ctrl_c_kills_cat():
     # Type 'cat' with no args and press Enter — cat blocks reading stdin.
     _type_string(mon_sock, "cat\n")
 
-    # Give cat time to start and block
-    time.sleep(1)
+    # Give cat time to start, become foreground, and block on stdin read
+    time.sleep(2)
 
     # Send Ctrl-C via QEMU monitor (SIGINT to foreground PID via kbd driver)
     _send_key(mon_sock, "ctrl-c")
