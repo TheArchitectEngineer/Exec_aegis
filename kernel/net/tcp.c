@@ -465,7 +465,12 @@ tcp_conn_send(uint32_t conn_id, const void *data, uint16_t len)
     if (conn_id >= TCP_MAX_CONNS) return -1;
     tcp_conn_t *c = &s_tcp[conn_id];
     if (c->state != TCP_ESTABLISHED) return -32;  /* EPIPE */
-    return tcp_send_segment(c->dev, c, TCP_PSH | TCP_ACK, data, len) == 0 ? len : -1;
+    int r = tcp_send_segment(c->dev, c, TCP_PSH | TCP_ACK, data, len);
+    if (r == 0) {
+        c->snd_nxt += len;
+        return (int)len;
+    }
+    return -1;
 }
 
 /* tcp_conn_close: send FIN. */
