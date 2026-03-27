@@ -58,6 +58,14 @@ else
 INIT_ELF_SRC = user/hello/hello.elf
 endif
 
+# Stamp file forces init blob rebuild when INIT= changes.
+# Without this, 'make INIT=vigil iso' after 'make' (INIT=oksh) would
+# silently keep the old init binary because init.o is already up-to-date.
+INIT_STAMP = $(BUILD)/.init_stamp_$(INIT)
+$(INIT_STAMP):
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/.init_stamp_*
+	@touch $@
 
 # ── Source lists ─────────────────────────────────────────────────────────────
 ARCH_SRCS = \
@@ -449,7 +457,7 @@ $(BUILD)/blobs/dhcp.o: user/dhcp/dhcp
 	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
 	  dhcp.bin dhcp.o
 
-$(BUILD)/blobs/init.o: $(INIT_ELF_SRC)
+$(BUILD)/blobs/init.o: $(INIT_ELF_SRC) $(INIT_STAMP)
 	@mkdir -p $(BUILD)/blobs
 	@cp $< $(BUILD)/blobs/init.bin
 	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
