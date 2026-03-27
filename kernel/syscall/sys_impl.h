@@ -40,6 +40,7 @@ extern void isr_post_dispatch(void);
 #ifndef MAP_SHARED
 #define MAP_SHARED      0x01
 #define MAP_PRIVATE     0x02
+#define MAP_FIXED       0x10
 #define MAP_ANONYMOUS   0x20
 #define PROT_READ       0x01
 #define PROT_WRITE      0x02

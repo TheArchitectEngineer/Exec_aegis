@@ -170,10 +170,14 @@ mmap_free_alloc(aegis_process_t *proc, uint64_t len)
 /*
  * sys_mmap — syscall 9
  *
- * Supports MAP_ANONYMOUS | MAP_PRIVATE only.
- * addr must be 0 (kernel chooses VA from bump allocator at 0x0000700000000000).
- * prot must be subset of PROT_READ | PROT_WRITE.
- * fd must be -1 (arg5), offset ignored (arg6).
+ * Supports MAP_ANONYMOUS | MAP_PRIVATE, MAP_FIXED, and file-backed private mappings.
+ *
+ * MAP_FIXED (addr != 0, MAP_FIXED set): map at exact address; silently unmap
+ * existing pages first.  addr must be page-aligned, below 0x800000000000.
+ *
+ * File-backed (fd != -1, MAP_ANONYMOUS not set): read file content into mapped
+ * pages via VFS.  MAP_PRIVATE semantics — pages are independent of file after
+ * mapping.  offset must be page-aligned.
  *
  * Each allocated page is zeroed before mapping — MAP_ANONYMOUS guarantee.
  * OOM rollback: already-mapped pages are unmapped and freed before returning -ENOMEM.
@@ -183,44 +187,72 @@ uint64_t
 sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
          uint64_t arg4, uint64_t arg5, uint64_t arg6)
 {
-    (void)arg6;  /* offset — not validated; musl always passes 0 for MAP_ANONYMOUS */
-
     aegis_process_t *proc = (aegis_process_t *)sched_current();
+    uint64_t addr  = arg1;
+    uint64_t prot  = arg3;
+    uint64_t flags = arg4;
+    int64_t  fd    = (int64_t)arg5;
+    uint64_t off   = arg6;
 
-    /* Only support anonymous private mappings with addr==0. */
-    if (arg1 != 0)
-        return (uint64_t)-(int64_t)22;   /* EINVAL — fixed addr not supported */
-    /* S12: Reject MAP_FIXED addresses in kernel space (defense-in-depth).
-     * Currently arg1!=0 is rejected above; this guard protects against
-     * future relaxation of that check. */
-    if (arg1 != 0 && (arg1 >= 0xFFFF800000000000ULL || arg1 + arg2 < arg1))
-        return (uint64_t)(int64_t)-22;  /* -EINVAL */
-    if (!(arg4 & MAP_ANONYMOUS))
-        return (uint64_t)-(int64_t)22;   /* EINVAL — file-backed not supported */
-    if (arg4 & MAP_SHARED)
-        return (uint64_t)-(int64_t)22;   /* EINVAL — shared not supported */
-    if (arg3 & ~(uint64_t)(PROT_READ | PROT_WRITE | PROT_EXEC))
-        return (uint64_t)-(int64_t)22;   /* EINVAL — unknown prot bits */
-    if ((int64_t)arg5 != -1)
-        return (uint64_t)-(int64_t)9;    /* EBADF */
-
-    uint64_t len = (arg2 + 4095UL) & ~4095UL;  /* round up to page boundary */
+    uint64_t len = (arg2 + 4095UL) & ~4095UL;
     if (len == 0)
         return (uint64_t)-(int64_t)22;   /* EINVAL */
+    if (prot & ~(uint64_t)(PROT_READ | PROT_WRITE | PROT_EXEC))
+        return (uint64_t)-(int64_t)22;   /* EINVAL */
+    if (flags & MAP_SHARED)
+        return (uint64_t)-(int64_t)22;   /* EINVAL */
 
-    /* Try freelist first; fall back to bump allocator. */
-    uint64_t base = mmap_free_alloc(proc, len);
-    if (base == 0) {
-        base = proc->mmap_base;
-        if (base + len > USER_ADDR_MAX || base + len < base)
-            return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+    int file_backed = !(flags & MAP_ANONYMOUS) && fd != -1;
+    if (!file_backed && !(flags & MAP_ANONYMOUS))
+        return (uint64_t)-(int64_t)22;   /* EINVAL */
+    if (file_backed && (off & 0xFFFUL))
+        return (uint64_t)-(int64_t)22;   /* EINVAL — offset not page-aligned */
+
+    int is_fixed = (flags & MAP_FIXED) && addr != 0;
+    uint64_t base;
+
+    if (is_fixed) {
+        if (addr & 0xFFFUL)
+            return (uint64_t)-(int64_t)22;   /* EINVAL — not page-aligned */
+        if (addr >= 0x800000000000ULL || addr + len > 0x800000000000ULL ||
+            addr + len < addr)
+            return (uint64_t)-(int64_t)22;   /* EINVAL — out of user range */
+        /* Silently unmap existing pages in the target range */
+        uint64_t va;
+        for (va = addr; va < addr + len; va += 4096UL) {
+            uint64_t phys = vmm_phys_of_user(proc->pml4_phys, va);
+            if (phys) {
+                vmm_unmap_user_page(proc->pml4_phys, va);
+                pmm_free_page(phys);
+            }
+        }
+        vma_remove(proc, addr, len);
+        base = addr;
+    } else {
+        if (addr != 0)
+            return (uint64_t)-(int64_t)22;   /* EINVAL — addr must be 0 */
+        /* Try freelist first; fall back to bump allocator. */
+        base = mmap_free_alloc(proc, len);
+        if (base == 0) {
+            base = proc->mmap_base;
+            if (base + len > USER_ADDR_MAX || base + len < base)
+                return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+        }
     }
+
+    /* PTE flags: NX by default; clear NX only for PROT_EXEC */
+    uint64_t map_flags = VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_NX;
+    if (prot & PROT_WRITE)
+        map_flags |= VMM_FLAG_WRITABLE;
+    if (prot & PROT_EXEC)
+        map_flags &= ~VMM_FLAG_NX;
+
+    /* Allocate and map pages */
     uint64_t va;
     for (va = base; va < base + len; va += 4096UL) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
-            /* OOM: unmap already-mapped pages and return -ENOMEM.
-             * MAP_FAILED = (void *)-1 — musl's allocator checks for this. */
+            /* OOM: unmap already-mapped pages and return -ENOMEM */
             uint64_t v2;
             for (v2 = base; v2 < va; v2 += 4096UL) {
                 uint64_t p = vmm_phys_of_user(proc->pml4_phys, v2);
@@ -231,19 +263,47 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
             }
             return (uint64_t)-(int64_t)12;  /* -ENOMEM */
         }
-        /* MAP_ANONYMOUS guarantee: zero the page before mapping it.
-         * musl's heap allocator reads free-list metadata from fresh pages;
-         * stale PMM data would corrupt the allocator. */
         vmm_zero_page(phys);
-        vmm_map_user_page(proc->pml4_phys, va, phys,
-                          VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_NX);
+        vmm_map_user_page(proc->pml4_phys, va, phys, map_flags);
     }
 
-    /* Advance bump allocator only if we used it (not freelist). */
-    if (base >= proc->mmap_base)
+    /* File-backed: copy file content into the mapped pages */
+    if (file_backed) {
+        if ((uint32_t)fd < PROC_MAX_FDS &&
+            proc->fd_table->fds[(uint32_t)fd].ops &&
+            proc->fd_table->fds[(uint32_t)fd].ops->read) {
+            vfs_file_t *f = &proc->fd_table->fds[(uint32_t)fd];
+            uint64_t file_bytes = len;
+            if (f->size > 0 && off < f->size) {
+                uint64_t avail = f->size - off;
+                if (file_bytes > avail)
+                    file_bytes = avail;
+            } else if (f->size > 0 && off >= f->size) {
+                file_bytes = 0;
+            }
+            if (file_bytes > 0) {
+                uint8_t chunk[4096];
+                uint64_t copied = 0;
+                while (copied < file_bytes) {
+                    uint64_t want = file_bytes - copied;
+                    if (want > 4096) want = 4096;
+                    int rr = f->ops->read(f->priv, chunk,
+                                          off + copied, want);
+                    if (rr <= 0) break;
+                    vmm_write_user_bytes(proc->pml4_phys,
+                                         base + copied,
+                                         chunk, (uint64_t)rr);
+                    copied += (uint64_t)rr;
+                }
+            }
+        }
+    }
+
+    /* Advance bump allocator only if we used it (not freelist or MAP_FIXED). */
+    if (!is_fixed && base >= proc->mmap_base)
         proc->mmap_base = base + len;
 
-    vma_insert(proc, base, len, (uint32_t)(arg3 & 0x07), VMA_MMAP);
+    vma_insert(proc, base, len, (uint32_t)(prot & 0x07), VMA_MMAP);
 
     return base;
 }
