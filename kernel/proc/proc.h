@@ -27,7 +27,7 @@ typedef struct {
  * aegis_process_t instances and the memory past the aegis_task_t fields
  * is unrelated.
  */
-typedef struct {
+typedef struct aegis_process {
     aegis_task_t  task;                    /* MUST be first — scheduler casts to aegis_task_t * */
     uint64_t      pml4_phys;              /* physical address of this process's PML4 */
     fd_table_t   *fd_table;               /* shared, refcounted fd table (Phase 29) */
