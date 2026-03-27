@@ -45,6 +45,8 @@ static char *append_str(char *dst, const char *src)
 /* 0 = free, 1 = allocated. Start fully reserved; pmm_init frees usable pages. */
 static uint8_t pmm_bitmap[PMM_MAX_PAGES / 8];
 
+static uint64_t s_total_usable_bytes;
+
 /* _kernel_end is exported by the linker script after .bss.
  * The bitmap array itself is in .bss, so _kernel_end is after it. */
 extern char _kernel_end[];
@@ -100,6 +102,8 @@ void pmm_init(void)
         pmm_free_region(regions[i].base, regions[i].len);
         total_bytes += regions[i].len;
     }
+
+    s_total_usable_bytes = total_bytes;
 
     /* Step 3: re-reserve arch platform ranges (first 1MB on x86) */
     uint32_t                  nreserved = arch_mm_reserved_region_count();
@@ -183,4 +187,24 @@ void pmm_free_page(uint64_t addr)
         for (;;) {} /* NOTE: interrupts not disabled; harden when ISRs exist */
     }
     pmm_bitmap[idx / 8] &= (uint8_t)~bit;
+}
+
+uint64_t
+pmm_total_pages(void)
+{
+    return s_total_usable_bytes / PAGE_SIZE;
+}
+
+uint64_t
+pmm_free_pages(void)
+{
+    uint64_t free_count = 0;
+    for (uint64_t i = 0; i < PMM_MAX_PAGES / 8; i++) {
+        uint8_t inv = (uint8_t)~pmm_bitmap[i];
+        while (inv) {
+            free_count++;
+            inv &= (inv - 1);  /* clear lowest set bit */
+        }
+    }
+    return free_count;
 }

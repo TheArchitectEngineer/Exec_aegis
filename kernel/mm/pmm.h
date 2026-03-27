@@ -23,4 +23,11 @@ uint64_t pmm_alloc_page(void);
  * addr must be PAGE_SIZE-aligned. Panics on double-free or bad address. */
 void pmm_free_page(uint64_t addr);
 
+/* pmm_total_pages — return total managed physical pages. */
+uint64_t pmm_total_pages(void);
+
+/* pmm_free_pages — return count of currently free physical pages.
+ * Scans the bitmap; O(n) where n = PMM_MAX_PAGES/8. */
+uint64_t pmm_free_pages(void);
+
 #endif /* PMM_H */
