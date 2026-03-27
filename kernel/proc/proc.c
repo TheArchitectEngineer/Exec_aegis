@@ -73,7 +73,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 
     /* Load ELF into the user address space */
     elf_load_result_t er;
-    if (elf_load(proc->pml4_phys, elf_data, elf_len, &er) != 0) {
+    if (elf_load(proc->pml4_phys, elf_data, elf_len, 0, &er) != 0) {
         printk("[PROC] FAIL: ELF parse error\n");
         for (;;) {}
     }

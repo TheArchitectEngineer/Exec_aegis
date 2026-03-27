@@ -42,6 +42,7 @@ typedef struct {
 #define PF_W       2      /* program header write flag */
 #define ELFCLASS64 2
 #define ET_EXEC    2
+#define ET_DYN_LOCAL 3
 #define EM_X86_64   0x3E
 #define EM_AARCH64  0xB7
 
@@ -53,7 +54,7 @@ typedef struct {
 
 int
 elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
-         elf_load_result_t *out)
+         uint64_t base, elf_load_result_t *out)
 {
     (void)len;
 
@@ -65,13 +66,37 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
         printk("[ELF] FAIL: bad magic\n");
         return -1;
     }
-    if (eh->e_ident[4] != ELFCLASS64 || eh->e_type != ET_EXEC ||
+    if (eh->e_ident[4] != ELFCLASS64 ||
+        (eh->e_type != ET_EXEC && eh->e_type != ET_DYN_LOCAL) ||
         eh->e_machine != EM_CURRENT) {
-        printk("[ELF] FAIL: not a static ELF64 executable for this arch\n");
+        printk("[ELF] FAIL: not an ELF64 executable for this arch\n");
         return -1;
     }
 
+    out->base = base;
+    out->interp[0] = '\0';
+
     const Elf64_Phdr *phdrs = (const Elf64_Phdr *)(data + eh->e_phoff);
+
+    /* Scan for PT_INTERP before loading segments */
+    {
+        uint16_t pi;
+        for (pi = 0; pi < eh->e_phnum; pi++) {
+            const Elf64_Phdr *ph = &phdrs[pi];
+            if (ph->p_type != PT_INTERP)
+                continue;
+            uint64_t plen = ph->p_filesz;
+            if (plen == 0 || plen > 255)
+                plen = 255;
+            const char *src = (const char *)(data + ph->p_offset);
+            uint64_t ci;
+            for (ci = 0; ci < plen && src[ci] != '\0'; ci++)
+                out->interp[ci] = src[ci];
+            out->interp[ci] = '\0';
+            break;
+        }
+    }
+
     uint64_t seg_end = 0;
     /* first_pt_load_vaddr: p_vaddr of the first PT_LOAD segment.
      * Used to compute phdr_va = first_pt_load_vaddr + e_phoff, which is
@@ -90,7 +115,7 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
             found_pt_load = 1;
         }
 
-        uint64_t this_end = ph->p_vaddr + ph->p_memsz;
+        uint64_t this_end = ph->p_vaddr + base + ph->p_memsz;
         if (this_end > seg_end)
             seg_end = this_end;
 
@@ -105,8 +130,8 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
          * va_offset  = byte offset of p_vaddr within the first page
          * page_count = pages covering [va_base, p_vaddr + p_memsz)
          */
-        uint64_t va_base   = ph->p_vaddr & ~4095UL;
-        uint64_t va_offset = ph->p_vaddr & 4095UL;
+        uint64_t va_base   = (ph->p_vaddr + base) & ~4095UL;
+        uint64_t va_offset = (ph->p_vaddr + base) & 4095UL;
 
         /* S1: Guard against integer overflow in page_count calculation.
          * A crafted ELF with p_memsz near UINT64_MAX wraps the addition
@@ -179,9 +204,9 @@ elf_load(uint64_t pml4_phys, const uint8_t *data, size_t len,
         return -1;
     }
 
-    out->entry       = eh->e_entry;
+    out->entry       = eh->e_entry + base;
     out->brk         = (seg_end + 4095UL) & ~4095UL;
-    out->phdr_va     = first_pt_load_vaddr + eh->e_phoff;
+    out->phdr_va     = first_pt_load_vaddr + base + eh->e_phoff;
     out->phdr_count  = eh->e_phnum;
     return 0;
 }

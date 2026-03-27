@@ -11,18 +11,25 @@
  *                (= first PT_LOAD's p_vaddr + e_phoff)
  *   phdr_count:  number of program headers (e_phnum) -- for AT_PHNUM auxv entry
  */
+#define ET_DYN       3
+#define PT_INTERP    3
+#define INTERP_BASE  0x40000000ULL
+
 typedef struct {
     uint64_t entry;
     uint64_t brk;
     uint64_t phdr_va;
     uint32_t phdr_count;
+    uint64_t base;
+    char     interp[256];
 } elf_load_result_t;
 
 /* elf_load -- parse ELF64; map all PT_LOAD segments into pml4_phys.
  * Returns 0 on success; fills *out. Returns -1 on parse error.
- * phdr_va = first PT_LOAD p_vaddr + e_phoff (VA of program header table).
+ * base is added to all virtual addresses (0 for ET_EXEC, INTERP_BASE for interp).
+ * phdr_va = first PT_LOAD p_vaddr + base + e_phoff (VA of program header table).
  * phdr_count = e_phnum. */
 int elf_load(uint64_t pml4_phys, const uint8_t *data,
-             size_t len, elf_load_result_t *out);
+             size_t len, uint64_t base, elf_load_result_t *out);
 
 #endif /* AEGIS_ELF_H */

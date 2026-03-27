@@ -918,7 +918,7 @@ sys_execve(syscall_frame_t *frame,
 
     /* 6. Load new ELF */
     elf_load_result_t er;
-    if (elf_load(proc->pml4_phys, elf_data, (size_t)elf_size, &er) != 0)
+    if (elf_load(proc->pml4_phys, elf_data, (size_t)elf_size, 0, &er) != 0)
         { ret = (uint64_t)-(int64_t)8; goto done; }  /* ENOEXEC */
     /* Free ext2 buffer immediately after ELF is loaded (pages already mapped). */
     if (ext2_buf) {
