@@ -134,3 +134,8 @@ python3 tests/test_threads.py
 # on ext2 disk. Skipped automatically if build/disk.img is not present.
 echo "--- test_mmap ---"
 python3 tests/test_mmap.py
+
+# Phase 31 /proc filesystem test — boots INIT=vigil with proc_test on ext2
+# disk. Skipped automatically if build/disk.img is not present.
+echo "--- test_proc ---"
+python3 tests/test_proc.py
