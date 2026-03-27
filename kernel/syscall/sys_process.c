@@ -2,6 +2,7 @@
 #include "sys_impl.h"
 #include "futex.h"
 #include "vma.h"
+#include "tty.h"
 
 #define MAX_PROCESSES 64
 static uint32_t s_fork_count = 1;  /* starts at 1 for init */
@@ -39,6 +40,16 @@ sys_exit(uint64_t arg1)
                                  sched_current()->clear_child_tid,
                                  &zero, sizeof(zero));
             futex_wake_addr(sched_current()->clear_child_tid, 1);
+        }
+
+        /* Session leader exit: SIGHUP + SIGCONT to foreground group */
+        if (proc->pid == proc->sid) {
+            tty_t *ctty = tty_find_controlling(proc->sid);
+            if (ctty && ctty->fg_pgrp) {
+                signal_send_pgrp(ctty->fg_pgrp, SIGHUP);
+                signal_send_pgrp(ctty->fg_pgrp, SIGCONT);
+                ctty->session_id = 0; /* disassociate terminal */
+            }
         }
 
         if (proc->pid == 1) {
@@ -81,6 +92,16 @@ uint64_t sys_exit_group(uint64_t arg1)
                 }
             }
             t = t->next;
+        }
+
+        /* Session leader exit: SIGHUP + SIGCONT to foreground group */
+        if (proc->pid == proc->sid) {
+            tty_t *ctty = tty_find_controlling(proc->sid);
+            if (ctty && ctty->fg_pgrp) {
+                signal_send_pgrp(ctty->fg_pgrp, SIGHUP);
+                signal_send_pgrp(ctty->fg_pgrp, SIGCONT);
+                ctty->session_id = 0; /* disassociate terminal */
+            }
         }
 
         if (proc->pid == 1 || proc->tgid == 1) {
