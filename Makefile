@@ -138,7 +138,8 @@ FS_SRCS = \
     kernel/fs/ext2_dir.c \
     kernel/fs/ramfs.c \
     kernel/fs/procfs.c \
-    kernel/fs/tty.c
+    kernel/fs/tty.c \
+    kernel/fs/pty.c
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \

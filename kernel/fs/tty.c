@@ -1,4 +1,5 @@
 #include "tty.h"
+#include "pty.h"
 #include "printk.h"
 #include "uaccess.h"
 #include "signal.h"
@@ -24,9 +25,15 @@ void tty_set_console(tty_t *tty)
 
 tty_t *tty_find_controlling(uint32_t session_id)
 {
-    /* Phase 32 stub: only the console tty exists. */
+    tty_t *t;
+
+    /* Check the console tty first. */
     if (s_console_tty && s_console_tty->session_id == session_id)
         return s_console_tty;
+    /* Search the PTY pool. */
+    t = pty_find_by_session(session_id);
+    if (t)
+        return t;
     return (tty_t *)0;
 }
 
