@@ -130,13 +130,13 @@ def run_session(commands):
     mon_sock.setblocking(False)
 
     all_output = []
-    boot_out = _read_until(proc, time.time() + BOOT_TIMEOUT, "\n#")
+    boot_out = _read_until(proc, time.time() + BOOT_TIMEOUT, "# ")
     all_output.append(boot_out)
 
     for cmd_str in commands:
         _type_string(mon_sock, cmd_str + "\n")
         time.sleep(0.1)
-        out = _read_until(proc, time.time() + CMD_TIMEOUT, "\n#")
+        out = _read_until(proc, time.time() + CMD_TIMEOUT, "# ")
         all_output.append(out)
 
     proc.kill()
@@ -181,7 +181,7 @@ def main():
         print("[PASS] ext2 mounted nvme0p1")
 
     # 3. Shell prompt appeared
-    if "\n#" not in output:
+    if "# " not in output:
         print("[FAIL] shell prompt never appeared")
         passed = False
     else:
