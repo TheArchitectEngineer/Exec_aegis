@@ -398,7 +398,7 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     else if (pty_is_slave(f))
         tty = pty_get_tty(f);
 
-    switch (arg2) {
+    switch ((uint32_t)arg2) {
     case TIOCGWINSZ: {
         if (tty)
             return (uint64_t)(int64_t)tty_ioctl(tty, (uint32_t)arg2, arg3);
@@ -429,7 +429,7 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         if (!ws_tty) return (uint64_t)-(int64_t)25; /* ENOTTY */
         return (uint64_t)(int64_t)tty_ioctl(ws_tty, (uint32_t)arg2, arg3);
     }
-    case 0x541BUL: { /* FIONREAD — bytes available in pipe */
+    case 0x541BU: { /* FIONREAD — bytes available in pipe */
         int32_t avail = 0;
         if (f->ops == &g_pipe_read_ops) {
             pipe_t *p = (pipe_t *)f->priv;
@@ -440,7 +440,7 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         copy_to_user((void *)(uintptr_t)arg3, &avail, sizeof(avail));
         return 0;
     }
-    case 0x80045430UL: { /* TIOCGPTN — get PTY number */
+    case 0x80045430U: { /* TIOCGPTN — get PTY number */
         if (!pty_is_master(f))
             return (uint64_t)-(int64_t)25; /* ENOTTY */
         pty_pair_t *pair = (pty_pair_t *)f->priv;
@@ -450,7 +450,7 @@ sys_ioctl(uint64_t arg1, uint64_t arg2, uint64_t arg3)
         copy_to_user((void *)(uintptr_t)arg3, &n, sizeof(n));
         return 0;
     }
-    case 0x40045431UL: { /* TIOCSPTLCK — lock/unlock PTY */
+    case 0x40045431U: { /* TIOCSPTLCK — lock/unlock PTY */
         if (!pty_is_master(f))
             return (uint64_t)-(int64_t)25; /* ENOTTY */
         pty_pair_t *pair = (pty_pair_t *)f->priv;
