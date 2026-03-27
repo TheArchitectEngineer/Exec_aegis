@@ -129,3 +129,8 @@ python3 tests/test_curl.py
 # Skipped automatically if build/disk.img is not present.
 echo "--- test_threads ---"
 python3 tests/test_threads.py
+
+# Phase 30 mprotect + mmap freelist test — boots INIT=vigil with mmap_test
+# on ext2 disk. Skipped automatically if build/disk.img is not present.
+echo "--- test_mmap ---"
+python3 tests/test_mmap.py
