@@ -305,15 +305,24 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 | Phase | Content | Status |
 |-------|---------|--------|
-| 25 | Ethernet/ARP/IPv4/ICMP/TCP/UDP stack | ✅ Done — test_net_stack.py PASS |
-| 26 | POSIX socket API + epoll + Vigil AF_UNIX IPC (`sys_socket`/`bind`/`listen`/`accept`/`connect`/`send`/`recv`/`epoll_*`) | ✅ Done — test_socket.py PASS |
-| 27 | DHCP + DNS daemon; writable /etc + /root (ramfs); BearSSL 0.6 + curl 8.13.0 (ext2) | 🔶 Partial — curl loads but exits silently; NET_SOCKET cap fix needed |
-| 28 | Writable root — ramfs-root populated from initrd; full live-system writability; foundation for installer | Not started |
-| 29 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
-| 30 | Framebuffer / VESA | Not started |
-| 31 | AMD Display Core | Not started |
-| 32 | Release | Not started |
-| 33 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
+| 25 | Ethernet/ARP/IPv4/ICMP/TCP/UDP stack | ✅ Done |
+| 26 | POSIX socket API + epoll | ✅ Done |
+| 27 | DHCP daemon, writable /etc+/root, BearSSL+curl, CSPRNG | 🔶 TCP connect fix done; curl HTTPS needs loopback + DNS testing |
+| 28 | **Loopback interface + TCP outbound** — lo0 device; fix TCP connect for external hosts (SYN-ACK→SOCK_CONNECTED done, needs e2e test); curl HTTPS e2e | Not started |
+| 29 | **Threads** — `clone()`+`futex`; per-thread TLS; shared address space; `CAP_KIND_THREAD_CREATE` gate; musl pthreads support | Not started |
+| 30 | **mprotect + mmap improvements** — real mprotect (W^X); file-backed mmap; MAP_SHARED; munmap freelist | Not started |
+| 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | Not started |
+| 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | Not started |
+| 33 | **Dynamic linking** — ELF interpreter (ld.so); shared library loading gated by `CAP_KIND_VFS_READ`; dlopen/dlsym | Not started |
+| 34 | Writable root — ramfs populated from initrd; full live-system writability; foundation for installer | Not started |
+| 35 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
+| 36 | Framebuffer / VESA | Not started |
+| 37 | AMD Display Core | Not started |
+| 38 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
+| 39 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated | Not started |
+| 40 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
+| 41 | Release | Not started |
+| 42 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 **RTL8125 testing note:** The machine has RTL8125B (ASUS, PCI 0a:00.0, IOMMU group 18) managed by host `r8169`. WiFi is MT7921K (0b:00.0). Do NOT test RTL8125 until WiFi is confirmed working — you will lose remote access.
 
