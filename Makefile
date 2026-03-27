@@ -309,6 +309,9 @@ user/mmap_test/mmap_test.elf: user/mmap_test/main.c
 user/proc_test/proc_test.elf: user/proc_test/main.c
 	$(MAKE) -C user/proc_test
 
+user/pty_test/pty_test.elf: user/pty_test/main.c
+	$(MAKE) -C user/pty_test
+
 # ── Binary blob embedding (objcopy) ──────────────────────────────────────────
 # Each user ELF → linkable .o with _binary_<name>_bin_start/end symbols.
 # Copy to build/blobs/<name>.bin, cd there, objcopy — so symbol names are clean.
@@ -535,6 +538,7 @@ DISK_USER_BINS = \
 	user/thread_test/thread_test.elf \
 	user/mmap_test/mmap_test.elf \
 	user/proc_test/proc_test.elf \
+	user/pty_test/pty_test.elf \
 	user/dhcp/dhcp \
 	build/curl/curl
 
@@ -552,7 +556,7 @@ $(DISK): $(DISK_USER_BINS)
 	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w /tmp/aegis-p1.img
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd

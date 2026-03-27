@@ -139,3 +139,8 @@ python3 tests/test_mmap.py
 # disk. Skipped automatically if build/disk.img is not present.
 echo "--- test_proc ---"
 python3 tests/test_proc.py
+
+# Phase 32 PTY smoke test — boots INIT=vigil with pty_test on ext2 disk.
+# Skipped automatically if build/disk.img is not present.
+echo "--- test_pty ---"
+python3 tests/test_pty.py
