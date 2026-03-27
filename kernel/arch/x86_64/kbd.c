@@ -94,19 +94,22 @@ kbd_handler(void)
 
     /* Ctrl-C = Ctrl held + scancode 0x2E ('c') — send SIGINT to fg pgrp */
     if (s_ctrl && sc == 0x2E) {
-        uint32_t fg = tty_console()->fg_pgrp;
+        tty_t *con = tty_console();
+        uint32_t fg = con ? con->fg_pgrp : 0;
         if (fg != 0)
             signal_send_pgrp(fg, SIGINT);
         return;
     }
     if (s_ctrl && sc == 0x2C) {
-        uint32_t fg = tty_console()->fg_pgrp;
+        tty_t *con = tty_console();
+        uint32_t fg = con ? con->fg_pgrp : 0;
         if (fg != 0)
             signal_send_pgrp(fg, SIGTSTP);
         return;
     }
     if (s_ctrl && sc == 0x2B) {
-        uint32_t fg = tty_console()->fg_pgrp;
+        tty_t *con = tty_console();
+        uint32_t fg = con ? con->fg_pgrp : 0;
         if (fg != 0)
             signal_send_pgrp(fg, SIGQUIT);
         return;
@@ -173,19 +176,22 @@ kbd_usb_inject(uint8_t ascii)
         return;
     /* Intercept Ctrl-C (ETX=0x03), Ctrl-Z (SUB=0x1A), Ctrl-\ (FS=0x1C) */
     if (ascii == 0x03) {
-        uint32_t fg = tty_console()->fg_pgrp;
+        tty_t *con = tty_console();
+        uint32_t fg = con ? con->fg_pgrp : 0;
         if (fg != 0)
             signal_send_pgrp(fg, SIGINT);
         return;
     }
     if (ascii == 0x1A) {
-        uint32_t fg = tty_console()->fg_pgrp;
+        tty_t *con = tty_console();
+        uint32_t fg = con ? con->fg_pgrp : 0;
         if (fg != 0)
             signal_send_pgrp(fg, SIGTSTP);
         return;
     }
     if (ascii == 0x1C) {
-        uint32_t fg = tty_console()->fg_pgrp;
+        tty_t *con = tty_console();
+        uint32_t fg = con ? con->fg_pgrp : 0;
         if (fg != 0)
             signal_send_pgrp(fg, SIGQUIT);
         return;
@@ -193,16 +199,25 @@ kbd_usb_inject(uint8_t ascii)
     buf_push((char)ascii);
 }
 
+/* Deferred foreground pgrp — set before console tty is initialized.
+ * Applied to tty_console()->fg_pgrp once the console tty exists. */
+static volatile uint32_t s_deferred_pgrp = 0;
+
 void
 kbd_set_tty_pgrp(uint32_t pgid)
 {
-    tty_console()->fg_pgrp = pgid;
+    tty_t *con = tty_console();
+    if (con)
+        con->fg_pgrp = pgid;
+    else
+        s_deferred_pgrp = pgid;
 }
 
 uint32_t
 kbd_get_tty_pgrp(void)
 {
-    return tty_console()->fg_pgrp;
+    tty_t *con = tty_console();
+    return con ? con->fg_pgrp : s_deferred_pgrp;
 }
 
 char
