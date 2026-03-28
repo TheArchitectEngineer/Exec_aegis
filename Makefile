@@ -154,6 +154,7 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_signal.c \
     kernel/syscall/sys_socket.c \
     kernel/syscall/sys_random.c \
+    kernel/syscall/sys_disk.c \
     kernel/syscall/futex.c \
     kernel/proc/proc.c \
     kernel/elf/elf.c \
@@ -382,6 +383,22 @@ build-musl: build/musl-dynamic/usr/lib/libc.so
 user/dynlink_test/dynlink_test.elf: user/dynlink_test/main.c build/musl-dynamic/usr/lib/libc.so
 	$(MAKE) -C user/dynlink_test
 
+# ── GRUB boot images for installer ─────────────────────────────────────────
+# boot.img: MBR bootstrap (440 bytes) — loads core.img from BIOS boot partition
+# core.img: main GRUB binary with ext2 + multiboot2 support
+GRUB_BOOT = $(BUILD)/grub-boot.img
+GRUB_CORE = $(BUILD)/grub-core.img
+
+$(GRUB_BOOT):
+	@mkdir -p $(BUILD)
+	cp /usr/lib/grub/i386-pc/boot.img $(GRUB_BOOT)
+
+$(GRUB_CORE):
+	@mkdir -p $(BUILD)
+	grub-mkimage -O i386-pc -o $(GRUB_CORE) \
+	    -p '(hd0,gpt2)/boot/grub' \
+	    biosdisk part_gpt ext2 normal multiboot2 boot configfile
+
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
@@ -428,7 +445,7 @@ rootfs: $(ROOTFS)
 disk: $(DISK)
 
 # ── rootfs.img: standalone ext2 filesystem image (embedded in ISO as module) ──
-$(ROOTFS): $(DISK_USER_BINS)
+$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(GRUB_BOOT) $(GRUB_CORE)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
 	/sbin/mke2fs -t ext2 -F -L aegis-root $(ROOTFS)
@@ -489,6 +506,11 @@ $(ROOTFS): $(DISK_USER_BINS)
 	printf 'mkdir /etc/ssl\nmkdir /etc/ssl/certs\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
+	    | /sbin/debugfs -w $(ROOTFS)
+	# Kernel binary + GRUB boot images for installer
+	printf 'mkdir /boot\nmkdir /boot/grub\n' \
+	    | /sbin/debugfs -w $(ROOTFS)
+	printf 'write $(BUILD)/aegis.elf /boot/aegis.elf\nwrite $(GRUB_BOOT) /boot/grub/boot.img\nwrite $(GRUB_CORE) /boot/grub/core.img\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	@rm -f /tmp/aegis-motd
 	@echo "Root filesystem image created: $(ROOTFS)"
