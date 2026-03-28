@@ -95,6 +95,10 @@ smp_start_aps(void)
 
         /* Allocate per-AP kernel stack (4 pages = 16KB) */
         void *stack_base = kva_alloc_pages(AP_STACK_PAGES);
+        if (!stack_base) {
+            printk("[SMP] WARN: AP %u stack alloc failed\n", i);
+            continue;
+        }
         uint64_t stack_top = (uint64_t)(uintptr_t)stack_base +
                              AP_STACK_PAGES * 4096;
 
