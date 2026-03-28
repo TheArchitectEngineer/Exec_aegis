@@ -468,6 +468,8 @@ sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
         case SO_RCVTIMEO: {
             /* optval is struct timeval {tv_sec, tv_usec} — 16 bytes */
             if (optlen >= 16) {
+                if (!user_ptr_valid(optval, 16))
+                    return (uint64_t)-(int64_t)14; /* EFAULT */
                 int64_t tv_sec;
                 int64_t tv_usec;
                 copy_from_user(&tv_sec,  (const void *)(uintptr_t)optval,     8);
@@ -479,6 +481,8 @@ sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
         }
         case SO_SNDTIMEO: {
             if (optlen >= 16) {
+                if (!user_ptr_valid(optval, 16))
+                    return (uint64_t)-(int64_t)14; /* EFAULT */
                 int64_t tv_sec;
                 int64_t tv_usec;
                 copy_from_user(&tv_sec,  (const void *)(uintptr_t)optval,     8);
@@ -487,13 +491,13 @@ sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
             }
             return 0;
         }
-        default: return 0;  /* ignore unknown options gracefully */
+        default: return (uint64_t)-(int64_t)92;  /* ENOPROTOOPT */
         }
     }
     if (level == IPPROTO_TCP && optname == TCP_NODELAY) {
         return 0;  /* TCP_NODELAY acknowledged but not implemented */
     }
-    return 0;  /* unknown level: succeed silently */
+    return (uint64_t)-(int64_t)92;  /* ENOPROTOOPT: unknown level */
 }
 
 /* ── sys_getsockopt ────────────────────────────────────────────────────── */
