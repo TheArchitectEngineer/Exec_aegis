@@ -115,14 +115,25 @@ def run_test():
             print("FAIL: shell prompt not found in boot 1")
             sys.exit(1)
 
-        # Run installer, answer y
+        # Run installer, answer prompts
         time.sleep(1)
         _type_string(mon, "installer\n")
         ok, _ = _wait_for(proc.stdout.fileno(), "[y/N]", CMD_TIMEOUT)
         if not ok:
-            print("FAIL: installer prompt not found")
+            print("FAIL: installer disk prompt not found")
             sys.exit(1)
         _type_string(mon, "y\n")
+
+        # Answer user setup prompts
+        ok, _ = _wait_for(proc.stdout.fileno(), "Username", 10)
+        if ok:
+            _type_string(mon, "\n")  # accept default (root)
+        ok, _ = _wait_for(proc.stdout.fileno(), "Password:", 10)
+        if ok:
+            _type_string(mon, "testpass\n")
+        ok, _ = _wait_for(proc.stdout.fileno(), "Confirm", 10)
+        if ok:
+            _type_string(mon, "testpass\n")
 
         # Wait for installation to complete
         ok, buf = _wait_for(proc.stdout.fileno(), "Installation complete", CMD_TIMEOUT)
