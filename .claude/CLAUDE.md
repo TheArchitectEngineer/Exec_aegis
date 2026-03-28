@@ -254,6 +254,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | TTY/PTY layer (Phase 32) | ✅ | Shared tty_t line discipline; 16 PTY pairs (/dev/ptmx + /dev/pts/N); sessions (sid); setpgid relaxed; SIGTTIN/SIGTTOU; SIGHUP on session exit; test_pty.py PASS |
 | Dynamic linking (Phase 33) | ✅ | PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; musl libc.so; vigil+login static; test_dynlink.py PASS |
 | Writable root (Phase 34) | ✅ | ext2-first VFS; rootfs.img in ISO as multiboot2 module; RAM blkdev; Aegis GPT GUIDs; 0-1GB identity map; test_integrated 15/16 PASS |
+| Installer (Phase 35) | ✅ | Text-mode installer; GPT+GRUB+rootfs copy; sys_blkdev_io/list/gpt_rescan; CAP_KIND_DISK_ADMIN; test_installer PASS |
 
 ### Known deviations
 
@@ -323,7 +324,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | ✅ Done |
 | 33 | **Dynamic linking** — ELF interpreter (musl ldso); PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; most binaries dynamic | ✅ Done |
 | 34 | **Writable root** — ext2-first VFS; embedded rootfs.img in ISO as multiboot2 module; RAM blkdev for live boot; Aegis GPT GUID family; NVMe-fail warning | ✅ Done |
-| 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install GRUB | Not started |
+| 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install GRUB | ✅ Done |
 | 36 | Framebuffer / VESA | Not started |
 | 37 | AMD Display Core | Not started |
 | 38 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
@@ -413,7 +414,7 @@ Volume labels (`mke2fs -L aegis-root`) are mutable and checked after reading the
 
 ---
 
-*Last updated: 2026-03-28 — Phase 34 complete. Writable root: ext2-first VFS, rootfs.img embedded in ISO as multiboot2 module, RAM blkdev (ramdisk0), Aegis GPT GUID family, 0-1GB identity map for large RAM, all QEMU at 2G. Boot oracle PASS. test_integrated 15/16 PASS (DHCP timing).*
+*Last updated: 2026-03-28 — Phase 35 complete. Installer: text-mode TUI, GPT creation with Aegis GUIDs, rootfs copy from ramdisk to NVMe, GRUB installation (BIOS+GPT), sys_blkdev_io/list/gpt_rescan syscalls, CAP_KIND_DISK_ADMIN. test_installer PASS (two-boot: install + verify NVMe ext2).*
 
 ---
 
@@ -438,6 +439,28 @@ Volume labels (`mke2fs -L aegis-root`) are mutable and checked after reading the
 8. **curl double-faults with 2G RAM.** Pre-existing issue — curl's TLS stack overflows with the larger memory layout. Needs separate investigation.
 
 9. **test_ext2 writes to /home, not /tmp.** `/tmp` is now ramfs (volatile). Persistence tests must use ext2-backed paths.
+
+---
+
+## Phase 35 — Forward Constraints
+
+**Phase 35 status: ✅ complete. test_installer PASS.**
+
+1. **No UEFI boot.** BIOS+GPT only. UEFI requires EFI System Partition + different GRUB image. SeaBIOS cannot boot NVMe directly via INT 13h — installed system needs UEFI firmware (OVMF) for true NVMe-only boot. Test uses ISO as GRUB loader with NVMe data path.
+
+2. **Single NVMe only.** Installer targets `nvme0`. No device selection menu.
+
+3. **No resize/dual-boot.** Installer wipes entire disk. No partition resizing, no dual-boot.
+
+4. **GRUB prefix hardcoded.** `(hd0,gpt2)/boot/grub`. If partition layout changes, rebuild core.img.
+
+5. **DISK_ADMIN in execve baseline.** Every exec'd binary gets `CAP_KIND_DISK_ADMIN`. Phase 38 security audit should restrict to specific binaries.
+
+6. **No installed-system kernel update path.** Must re-run installer to update kernel.
+
+7. **grub.cfg uses (hd0,gpt2) not UUID.** Works for single-disk. Multi-disk needs `search --fs-uuid`.
+
+8. **Installer runs from shell, not vigil.** The user must manually invoke `/bin/installer`. It gets DISK_ADMIN via the execve baseline.
 
 ---
 
