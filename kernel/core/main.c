@@ -9,6 +9,7 @@
 #include "vfs.h"
 #include "console.h"
 #include "acpi.h"
+#include "smp.h"
 #include "lapic.h"
 #include "ioapic.h"
 #include "pcie.h"
@@ -61,6 +62,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
     fb_init();              /* linear framebuffer — [FB] OK or silent        */
     cap_init();             /* capability stub — [CAP] OK                    */
+    smp_percpu_init_bsp();  /* per-CPU data — [SMP] OK                       */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */
     pic_init();             /* remap 8259A — [PIC] OK                        */
     pit_init();             /* 100 Hz timer — [PIT] OK                       */

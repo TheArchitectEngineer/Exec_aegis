@@ -288,6 +288,32 @@ arch_set_fs_base(uint64_t addr)
 }
 
 /* -------------------------------------------------------------------------
+ * Phase 38b: GS segment base (per-CPU data)
+ * ------------------------------------------------------------------------- */
+
+/* arch_set_gs_base — write addr to IA32_GS_BASE MSR (0xC0000101).
+ * Sets the active GS segment base. In kernel mode, GS.base points to the
+ * per-CPU percpu_t structure. */
+static inline void
+arch_set_gs_base(uint64_t addr)
+{
+    uint32_t lo = (uint32_t)addr;
+    uint32_t hi = (uint32_t)(addr >> 32);
+    __asm__ volatile("wrmsr" : : "c"(0xC0000101U), "a"(lo), "d"(hi));
+}
+
+/* arch_write_kernel_gs_base — write addr to IA32_KERNEL_GS_BASE MSR (0xC0000102).
+ * This value is swapped into GS.base by the SWAPGS instruction at syscall/
+ * interrupt entry from ring 3. */
+static inline void
+arch_write_kernel_gs_base(uint64_t addr)
+{
+    uint32_t lo = (uint32_t)addr;
+    uint32_t hi = (uint32_t)(addr >> 32);
+    __asm__ volatile("wrmsr" : : "c"(0xC0000102U), "a"(lo), "d"(hi));
+}
+
+/* -------------------------------------------------------------------------
  * Arch-portable helpers — used by kernel/core/, kernel/drivers/, kernel/net/
  * Each architecture provides its own implementation in arch.h.
  * ------------------------------------------------------------------------- */
