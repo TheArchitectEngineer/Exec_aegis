@@ -358,15 +358,13 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ---
 
-*Last updated: 2026-03-27 — Phase 33 (dynamic linking) complete. PT_INTERP+ET_DYN in elf_load, MAP_FIXED+file-backed mmap, musl libc.so on ext2, initrd slimmed to 16 files (vigil+login+config). Pending remote verification.*
+*Last updated: 2026-03-27 — Phase 33 complete. Dynamic linking: PT_INTERP+ET_DYN, MAP_FIXED+file-backed mmap, musl libc.so on ext2, initrd 20 files (vigil+login+shell+echo+cat+ls+config). test_integrated 16/16 PASS. Test suite consolidated: 11 QEMU boots → 1.*
 
 ---
 
 ## Phase 33 — Forward Constraints
 
-**Phase 33 status: 🔶 Kernel infrastructure done + verified. Test suite needs fixes.**
-
-Boot oracle PASS. Dynamic linking verified (interpreter loads, echo/cat/ls/pipes work via ext2). Full test suite not yet green — see test debt below.
+**Phase 33 status: ✅ complete. Boot oracle PASS. `test_integrated.py` 16/16 PASS.**
 
 1. **No ASLR.** Interpreter loads at fixed INTERP_BASE (0x40000000). PIE binaries load at fixed base. ASLR is future work. Debug builds must disable ASLR to keep `make sym` working.
 
