@@ -383,10 +383,11 @@ user/dynlink_test/dynlink_test.elf: user/dynlink_test/main.c build/musl-dynamic/
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
-$(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg
+$(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg $(ROOTFS)
 	@mkdir -p $(ISO_DIR)/boot/grub
 	cp $(BUILD)/aegis.elf $(ISO_DIR)/boot/aegis.elf
 	cp tools/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
+	cp $(ROOTFS) $(ISO_DIR)/boot/rootfs.img
 	grub-mkrescue -o $@ $(ISO_DIR)
 
 # ── Run targets ───────────────────────────────────────────────────────────────
@@ -422,77 +423,86 @@ DISK_USER_BINS = \
 	build/curl/curl \
 	build/musl-dynamic/usr/lib/libc.so
 
+ROOTFS = $(BUILD)/rootfs.img
+
+rootfs: $(ROOTFS)
 disk: $(DISK)
 
-$(DISK): $(DISK_USER_BINS)
+# ── rootfs.img: standalone ext2 filesystem image (embedded in ISO as module) ──
+$(ROOTFS): $(DISK_USER_BINS)
 	@mkdir -p $(BUILD)
-	dd if=/dev/zero of=$(DISK) bs=1M count=64 2>/dev/null
-	$(SGDISK) \
-	    --new=1:34:122879   --typecode=1:8300 --change-name=1:aegis-root \
-	    --new=2:122880:0    --typecode=2:8200 --change-name=2:aegis-swap \
-	    $(DISK)
-	dd if=/dev/zero of=/tmp/aegis-p1.img bs=512 count=$(P1_SECTORS) 2>/dev/null
-	/sbin/mke2fs -t ext2 -F -L aegis-root /tmp/aegis-p1.img
+	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
+	/sbin/mke2fs -t ext2 -F -L aegis-root $(ROOTFS)
 	printf 'mkdir /bin\nmkdir /etc\nmkdir /tmp\nmkdir /home\nmkdir /lib\nmkdir /root\nmkdir /proc\nmkdir /dev\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	@printf "Welcome to Aegis\n" > /tmp/aegis-motd
 	# Dynamic linker / shared library — written as two separate files
 	# (ext2 does not support symlinks yet)
 	printf 'write build/musl-dynamic/usr/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/usr/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	# User binaries (dynamically linked, loaded from ext2 at runtime)
 	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/oksh/oksh.elf /bin/oksh\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite /tmp/aegis-motd /etc/motd\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/oksh\n' > /tmp/aegis-passwd
 	printf 'root:$$6$$5a3b9c1d2e4f6789$$fvwyIjdmyvB59hifGMRFrcwhBb4cH0.3nRy2j2LpCk.aNIFNyvYQJ36Bsl94miFbD/JHICz8O1dXoegZ0OmOg.:19000:0:99999:7:::\n' > /tmp/aegis-shadow
 	printf 'root:x:0:root\nwheel:x:999:root\n' > /tmp/aegis-group
 	printf 'write /tmp/aegis-passwd /etc/passwd\nwrite /tmp/aegis-shadow /etc/shadow\nwrite /tmp/aegis-group /etc/group\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-passwd /tmp/aegis-shadow /tmp/aegis-group
 	# /etc/hosts and /etc/profile for writable root
 	printf '127.0.0.1 localhost\n10.0.2.15 aegis\n104.18.27.120 example.com\n' > /tmp/aegis-hosts
 	printf "PS1='root@aegis:\$${PWD:-/}# '\nexport PS1\nPATH=/bin\nexport PATH\n" > /tmp/aegis-profile
 	printf 'write /tmp/aegis-hosts /etc/hosts\nwrite /tmp/aegis-profile /etc/profile\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-hosts /tmp/aegis-profile
 	# Vigil init directories and service declarations
 	printf 'mkdir /var\nmkdir /run\nmkdir /etc/vigil\nmkdir /etc/vigil/services\nmkdir /etc/vigil/services/getty\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'exec /bin/login\n' > /tmp/aegis-vigil-run
 	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-vigil-policy
 	printf 'VFS_OPEN VFS_READ VFS_WRITE AUTH\n' > /tmp/aegis-vigil-caps
 	printf 'root\n' > /tmp/aegis-vigil-user
 	printf 'write /tmp/aegis-vigil-run /etc/vigil/services/getty/run\nwrite /tmp/aegis-vigil-policy /etc/vigil/services/getty/policy\nwrite /tmp/aegis-vigil-caps /etc/vigil/services/getty/caps\nwrite /tmp/aegis-vigil-user /etc/vigil/services/getty/user\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-vigil-run /tmp/aegis-vigil-policy /tmp/aegis-vigil-caps /tmp/aegis-vigil-user
 	# httpd vigil service — binds :80, serves HTTP
 	printf 'mkdir /etc/vigil/services/httpd\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'exec /bin/httpd\n' > /tmp/aegis-httpd-run
 	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-httpd-policy
 	printf 'NET_SOCKET VFS_OPEN VFS_READ\n' > /tmp/aegis-httpd-caps
 	printf 'root\n' > /tmp/aegis-httpd-user
 	printf 'write /tmp/aegis-httpd-run /etc/vigil/services/httpd/run\nwrite /tmp/aegis-httpd-policy /etc/vigil/services/httpd/policy\nwrite /tmp/aegis-httpd-caps /etc/vigil/services/httpd/caps\nwrite /tmp/aegis-httpd-user /etc/vigil/services/httpd/user\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-httpd-run /tmp/aegis-httpd-policy /tmp/aegis-httpd-caps /tmp/aegis-httpd-user
 	# dhcp vigil service — DHCP client with NET_ADMIN cap
 	printf 'mkdir /etc/vigil/services/dhcp\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'exec /bin/dhcp\n' > /tmp/aegis-dhcp-run
 	printf 'respawn\nmax_restarts=10\n' > /tmp/aegis-dhcp-policy
 	printf 'NET_ADMIN NET_SOCKET\n' > /tmp/aegis-dhcp-caps
 	printf 'root\n' > /tmp/aegis-dhcp-user
 	printf 'write /tmp/aegis-dhcp-run /etc/vigil/services/dhcp/run\nwrite /tmp/aegis-dhcp-policy /etc/vigil/services/dhcp/policy\nwrite /tmp/aegis-dhcp-caps /etc/vigil/services/dhcp/caps\nwrite /tmp/aegis-dhcp-user /etc/vigil/services/dhcp/user\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-dhcp-run /tmp/aegis-dhcp-policy /tmp/aegis-dhcp-caps /tmp/aegis-dhcp-user
 	# curl binary and CA bundle on ext2
 	printf 'mkdir /etc/ssl\nmkdir /etc/ssl/certs\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
+	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
-	    | /sbin/debugfs -w /tmp/aegis-p1.img
-	dd if=/tmp/aegis-p1.img of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
-	@rm -f /tmp/aegis-p1.img /tmp/aegis-motd
+	    | /sbin/debugfs -w $(ROOTFS)
+	@rm -f /tmp/aegis-motd
+	@echo "Root filesystem image created: $(ROOTFS)"
+
+# ── disk.img: GPT disk wrapping rootfs.img (for NVMe testing) ──
+$(DISK): $(ROOTFS)
+	@mkdir -p $(BUILD)
+	dd if=/dev/zero of=$(DISK) bs=1M count=64 2>/dev/null
+	$(SGDISK) \
+	    --new=1:34:122879   --typecode=1:A3618F24-0C76-4B3D-0001-000000000000 --change-name=1:aegis-root \
+	    --new=2:122880:0    --typecode=2:A3618F24-0C76-4B3D-0002-000000000000 --change-name=2:aegis-swap \
+	    $(DISK)
+	dd if=$(ROOTFS) of=$(DISK) bs=512 seek=2048 conv=notrunc 2>/dev/null
 	@echo "Disk image created: $(DISK)"
 
 comma := ,
@@ -504,7 +514,7 @@ run: iso
 	qemu-system-x86_64 \
 	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
-	    -serial stdio -vga std -no-reboot -m 128M \
+	    -serial stdio -vga std -no-reboot -m 2G \
 	    $(NVME_FLAGS) \
 	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
@@ -518,7 +528,7 @@ run-fb: iso
 	qemu-system-x86_64 \
 	    -machine q35 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
-	    -serial stdio -vga none -device virtio-vga -no-reboot -m 128M \
+	    -serial stdio -vga none -device virtio-vga -no-reboot -m 2G \
 	    $(NVME_FLAGS) \
 	    -device qemu-xhci -device usb-kbd \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
@@ -542,7 +552,7 @@ gdb: iso
 	@qemu-system-x86_64 \
 	    -cdrom $(BUILD)/aegis.iso -boot order=d \
 	    -serial file:$(BUILD)/debug.log \
-	    -vga std -no-reboot -m 128M \
+	    -vga std -no-reboot -m 2G \
 	    -s -S \
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
 	    -display none & \
