@@ -99,6 +99,7 @@ static uint64_t                  *s_dcbaa             = NULL;
 /* Per-slot HID state (index 0 unused; xHCI slots are 1-based) */
 static int        s_hid_slots[XHCI_MAX_SLOTS];        /* 1 = active HID device */
 static uint8_t    s_hid_slot_type[XHCI_MAX_SLOTS];   /* USB_DEV_NONE/KBD/MOUSE */
+static uint8_t    s_slot_port[XHCI_MAX_SLOTS];       /* port_num for each slot */
 static uint8_t   *s_hid_buf[XHCI_MAX_SLOTS];          /* VA of 8-byte report */
 static uint64_t   s_hid_buf_phys[XHCI_MAX_SLOTS];     /* PA of report buffer */
 static xhci_trb_t *s_xfer_ring[XHCI_MAX_SLOTS];       /* transfer ring VA */
@@ -680,10 +681,12 @@ enumerate_port(uint32_t port_num)
             issue_set_protocol(slot_id);
             s_hid_slots[slot_id]     = 1;
             s_hid_slot_type[slot_id] = USB_DEV_KBD;
+            s_slot_port[slot_id]     = (uint8_t)port_num;
         } else if (proto == 2) {
             issue_set_protocol(slot_id);
             s_hid_slots[slot_id]     = 1;
             s_hid_slot_type[slot_id] = USB_DEV_MOUSE;
+            s_slot_port[slot_id]     = (uint8_t)port_num;
         } else {
             return;
         }
@@ -896,6 +899,44 @@ xhci_poll(void)
             /* Re-arm: schedule the next interrupt IN */
             xhci_schedule_interrupt_in(slot, XHCI_EP1_IN_DCI,
                                        s_hid_buf_phys[slot], 8u);
+        }
+
+        if (trb_type == XHCI_TRB_PORT_STATUS_CHG) {
+            /* Port ID is in bits [31:24] of param (low dword).
+             * xHCI spec §6.4.2.3: Port Status Change Event TRB
+             * param[31:24] = Port ID (1-based). */
+            uint8_t port_id = (uint8_t)((trb->param >> 24) & 0xFFu);
+            if (port_id >= 1 && port_id <= s_max_ports) {
+                volatile uint32_t *portsc_reg =
+                    (volatile uint32_t *)((volatile uint8_t *)s_op + 0x400u +
+                                          (port_id - 1u) * 16u);
+                uint32_t portsc = *portsc_reg;
+
+                if (portsc & XHCI_PORTSC_CSC) {
+                    /* Clear CSC (RW1C bit 17). Write 1 to CSC while preserving
+                     * non-RW1C bits and not accidentally clearing other RW1C
+                     * bits. PORTSC RW1C bits: CSC(17), PEC(18), WRC(19),
+                     * OCC(20), PRC(21), PLC(22), CEC(23).
+                     * Mask = 0x00FE0000. Write 1 only to CSC. */
+                    *portsc_reg = (portsc & ~0x00FE0000u) | XHCI_PORTSC_CSC;
+
+                    if (portsc & XHCI_PORTSC_CCS) {
+                        /* Device connected — enumerate silently (s_post_boot=1) */
+                        enumerate_port(port_id);
+                    } else {
+                        /* Device disconnected — deactivate slot */
+                        uint32_t s;
+                        for (s = 1; s < XHCI_MAX_SLOTS; s++) {
+                            if (s_slot_port[s] == port_id && s_hid_slots[s]) {
+                                s_hid_slots[s]     = 0;
+                                s_hid_slot_type[s]  = USB_DEV_NONE;
+                                s_slot_port[s]      = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         next_trb:
