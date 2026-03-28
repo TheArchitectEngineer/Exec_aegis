@@ -517,11 +517,18 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(ESP_IMG)
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	# Kernel binary + EFI ESP image for installer
+	# Kernel binary + EFI ESP image — use loop mount to avoid sparse files
 	printf 'mkdir /boot\nmkdir /boot/grub\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	printf 'write $(BUILD)/aegis.elf /boot/aegis.elf\nwrite $(ESP_IMG) /boot/esp.img\n' \
+	printf 'write $(BUILD)/aegis.elf /boot/aegis.elf\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
+	@# esp.img MUST be written via loop mount, not debugfs.
+	@# debugfs creates sparse files; the kernel ext2 read returns zeros for
+	@# unallocated blocks, but the FAT16 directory structure is non-contiguous
+	@# and the installer's sequential read misses file data sectors.
+	sudo mount -o loop $(ROOTFS) /mnt && \
+	    cp $(ESP_IMG) /mnt/boot/esp.img && \
+	    sudo umount /mnt
 	@rm -f /tmp/aegis-motd
 	@echo "Root filesystem image created: $(ROOTFS)"
 
