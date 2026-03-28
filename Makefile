@@ -212,65 +212,66 @@ $(CAP_LIB): kernel/cap/src/lib.rs kernel/cap/Cargo.toml
 # ── INIT binary (hello or shell) ──────────────────────────────────────────────
 # Stamp file detects INIT variable changes and forces rebuild of init_bin.c
 # ── Program ELF binaries ──────────────────────────────────────────────────────
-user/ls/ls.elf:
+# Dynamic user binaries depend on musl shared build (for musl-gcc wrapper)
+MUSL_BUILT = build/musl-dynamic/usr/lib/libc.so
+
+user/ls/ls.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/ls
 
-user/cat/cat.elf:
+user/cat/cat.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/cat
 
-user/echo/echo.elf:
+user/echo/echo.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/echo
 
-user/pwd/pwd.elf:
+user/pwd/pwd.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/pwd
 
-user/uname/uname.elf:
+user/uname/uname.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/uname
 
-user/clear/clear.elf:
+user/clear/clear.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/clear
 
-user/true/true.elf:
+user/true/true.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/true
 
-user/false/false.elf:
+user/false/false.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/false
 
-user/wc/wc.elf:
+user/wc/wc.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/wc
 
-user/grep/grep.elf:
+user/grep/grep.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/grep
 
-user/sort/sort.elf:
+user/sort/sort.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/sort
 
-user/mkdir/mkdir.elf:
+user/mkdir/mkdir.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/mkdir
 
-user/touch/touch.elf:
+user/touch/touch.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/touch
 
-user/rm/rm.elf:
+user/rm/rm.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/rm
 
-user/cp/cp.elf:
+user/cp/cp.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/cp
 
-user/mv/mv.elf:
+user/mv/mv.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/mv
 
-user/whoami/whoami.elf:
+user/whoami/whoami.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/whoami
 
+# Static binaries — no musl dependency
 user/shell/shell.elf:
 	$(MAKE) -C user/shell
 
-user/oksh/oksh.elf:
+user/oksh/oksh.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/oksh
-
-user/shell/shell.elf:
-	$(MAKE) -C user/shell
 
 user/login/login.elf:
 	$(MAKE) -C user/login
@@ -278,25 +279,25 @@ user/login/login.elf:
 user/vigil/vigil: user/vigil/main.c
 	$(MAKE) -C user/vigil
 
-user/vigictl/vigictl: user/vigictl/main.c
+user/vigictl/vigictl: user/vigictl/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/vigictl
 
-user/httpd/httpd.elf:
+user/httpd/httpd.elf: $(MUSL_BUILT)
 	$(MAKE) -C user/httpd
 
-user/dhcp/dhcp: user/dhcp/main.c
+user/dhcp/dhcp: user/dhcp/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/dhcp
 
-user/thread_test/thread_test.elf: user/thread_test/main.c
+user/thread_test/thread_test.elf: user/thread_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/thread_test
 
-user/mmap_test/mmap_test.elf: user/mmap_test/main.c
+user/mmap_test/mmap_test.elf: user/mmap_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/mmap_test
 
-user/proc_test/proc_test.elf: user/proc_test/main.c
+user/proc_test/proc_test.elf: user/proc_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/proc_test
 
-user/pty_test/pty_test.elf: user/pty_test/main.c
+user/pty_test/pty_test.elf: user/pty_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/pty_test
 
 # ── Binary blob embedding (objcopy) ──────────────────────────────────────────
