@@ -38,6 +38,9 @@ LDFLAGS = -T tools/linker.ld -nostdlib
 
 BUILD   = build
 ISO_DIR = $(BUILD)/isodir
+DISK    = $(BUILD)/disk.img
+ROOTFS  = $(BUILD)/rootfs.img
+SGDISK  = /usr/sbin/sgdisk
 
 # ── INIT variable ───────────────────────────────────────────────────────────
 # INIT=oksh (default): embeds user/oksh/oksh.elf as init process
@@ -393,9 +396,6 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg $(ROOTFS)
 # ── Run targets ───────────────────────────────────────────────────────────────
 iso: $(BUILD)/aegis.iso
 
-DISK    = $(BUILD)/disk.img
-ROOTFS  = $(BUILD)/rootfs.img
-SGDISK  = /usr/sbin/sgdisk
 # nvme0p1: sgdisk aligns start to LBA 2048, end 122879 = 120832 sectors = ~59 MB
 P1_SECTORS = 120832
 
