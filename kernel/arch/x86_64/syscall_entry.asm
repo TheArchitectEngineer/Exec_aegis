@@ -191,7 +191,11 @@ syscall_entry:
 ; under the wrong CR3, causing a triple fault on the very next stack access.
 proc_enter_user:
     pop  rax          ; user PML4 physical address
-    mov  cr3, rax     ; switch to user PML4 — safe, on KSTACK_VA (shared)
+    mov  cr3, rax     ; switch to user PML4 — flushes TLB
+    ; Diagnostic: force stack read AFTER CR3 switch to test page walk.
+    ; If the kernel stack is not mapped in the user PML4, this faults
+    ; BEFORE iretq, giving a clearer #PF with CR2 = kernel stack VA.
+    mov  rbx, [rsp]   ; read RIP from iretq frame — triggers page walk
     swapgs            ; switch to user GS.base before entering ring 3
     iretq
 
