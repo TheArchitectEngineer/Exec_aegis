@@ -305,7 +305,7 @@ static int write_grub_cfg(void)
         "set default=0\n"
         "insmod all_video\n"
         "insmod gfxterm\n"
-        "set gfxmode=1024x768x32,auto\n"
+        "set gfxmode=auto\n"
         "terminal_input console\n"
         "terminal_output gfxterm\n"
         "\n"

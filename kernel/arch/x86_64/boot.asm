@@ -37,9 +37,9 @@ multiboot_header_start:
     dw 5        ; type = MULTIBOOT_HEADER_TAG_FRAMEBUFFER
     dw 0        ; flags = 0 (required, not optional)
     dd 20       ; tag size in bytes
-    dd 1024     ; preferred width  (0 = any)
-    dd 768      ; preferred height (0 = any)
-    dd 32       ; preferred depth  (0 = any)
+    dd 0        ; preferred width  (0 = any — use native resolution)
+    dd 0        ; preferred height (0 = any)
+    dd 32       ; preferred depth  (32bpp required)
 
     align 8
     ; End tag (type=0, flags=0, size=8)
