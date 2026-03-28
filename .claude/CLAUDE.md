@@ -573,7 +573,52 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 38 SMP complete + boot oracle PASSES on DO box. Fixed: GS.base zeroed by gdt_init GS reload (skip it), sched_tick before sched_start (s_sched_ready guard), LAPIC timer before ctx_switch (moved to task_idle). Phase 36 mouse + Phase 37 lumen untested on hardware. ISO at ~/aegis.iso ready for ThinkPad. Next: test on ThinkPad bare metal (SMP + mouse + lumen), then continue to Phase 39 (Glyph widget toolkit).*
+*Last updated: 2026-03-28 — Phases 36-38 + chronos NTP + deep audit/cleanup complete. Boot oracle PASS on DO box. ISO ready for ThinkPad testing. See audit section below for findings.*
+
+---
+
+## Deep Audit & Cleanup (Post-Phase 38)
+
+Five-agent audit/cleanup run after completing Phases 36-38. Results below.
+
+### Completed (done)
+
+- [x] **printk format bugs fixed** — `%d`→`%u` in idt.c (backtrace index), pcie.c (device count); `%04x`/`%02x`→`%x` in pcie.c, virtio_net.c (MAC format)
+- [x] **Stale comments cleaned** — removed Phase N references from sys_process.c, sys_file.c, sys_memory.c, proc.c, sched.c, signal.c, sys_signal.c; fixed inaccurate claims about nanosleep/munmap behavior
+- [x] **Dead code check** — no unused static functions/variables found; `g_kernel_rsp`/`g_user_rsp` already removed; no `#if 0` blocks
+
+### TODO — Arch-Agnostic Violations (3 critical, unguarded)
+
+- [ ] `kernel/fs/pty.c:129,187` — raw `sti; hlt; cli` inline asm. **Fix:** replace with `arch_wait_for_irq()` from arch.h
+- [ ] `kernel/drivers/usb_mouse.c:76,82` — raw `sti`/`cli`. **Fix:** replace with `arch_enable_irq()`/`arch_disable_irq()`
+- [ ] `kernel/sched/sched.h:56` — `movq %%gs:16` inline asm in agnostic header. **Fix:** introduce `arch_get_current_task()` abstraction in arch.h
+
+### TODO — Syscall Security Gaps (from capability audit)
+
+- [ ] **CRITICAL: sys_fb_map (513)** — no capability check. Any process can map framebuffer. Needs `CAP_KIND_FB_ACCESS` or similar.
+- [ ] **CRITICAL: sys_clock_settime (227)** — no capability check. Any process can set wall clock. Needs `CAP_KIND_TIME_ADMIN` or reuse NET_ADMIN.
+- [ ] **CRITICAL: sys_setfg (360)** — no capability check. Any process can steal keyboard focus.
+- [ ] **CRITICAL: sys_accept** — missing `user_ptr_valid` for addr parameter before `copy_to_user`.
+- [ ] **CRITICAL: sys_execve grants ALL capabilities** — `DISK_ADMIN` + `AUTH` in baseline (known, flagged in Phase 35 constraints). Tighten to vigil exec_caps mechanism.
+- [ ] **MEDIUM: sys_mkdir/unlink/rename** — no `CAP_KIND_VFS_WRITE` check.
+- [ ] **MEDIUM: sys_kill** — any process can signal any other (except PID 1). Needs capability gate.
+- [ ] **MEDIUM: sys_getsockname/getpeername** — null addrlen causes write to address 0.
+- [ ] **MEDIUM: sys_setsockopt** — validates 4 bytes but reads 16 for SO_RCVTIMEO.
+- [ ] **MEDIUM: sys_blkdev_io** — static bounce buffer not reentrant (shared across concurrent callers).
+
+### TODO — Spinlock Issues (from partial audit)
+
+- [ ] **Lock ordering violation: ip_lock → arp_lock.** `ip_send` holds `ip_lock`, calls `eth_send` which acquires `arp_lock`. Spec says arp_lock > ip_lock. Fix: release ip_lock before calling eth_send, or merge the locks.
+- [ ] **kbd ring buffer unprotected** — `s_buf`/`s_head`/`s_tail` in kbd.c accessed from both ISR (IRQ1) and syscall context without a lock. Single-core safe (ISR atomic), but SMP needs protection.
+- [ ] **PS/2 mouse packet state unprotected** — `s_packet`/`s_byte_index` in ps2_mouse.c accessed only from IRQ12 handler (single ISR, safe on SMP since only one CPU handles IRQ12 via IOAPIC routing).
+- [ ] **fb.c shadow buffer + ANSI state unprotected** — `s_shadow`, `s_esc_buf` in fb.c accessed from printk path without lock.
+
+### TODO — Other Findings
+
+- [ ] `kernel/core/random.c:41` — `rdtsc` reimplemented locally instead of using arch.h. Should be `arch_get_cycles()`.
+- [ ] `signal.c` — x86 register manipulation (~100 lines) in arch-agnostic file. Properly `#ifdef`-gated but should be in `kernel/arch/x86_64/signal_deliver.c`.
+- [ ] Define `ARCH_USER_CS`/`ARCH_USER_SS` constants instead of magic `0x23`/`0x1B` in proc.c and sys_process.c.
+- [ ] `sys_select` is a stub returning 0 — programs using select() get incorrect results.
 
 ---
 
