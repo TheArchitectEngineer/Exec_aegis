@@ -21,6 +21,7 @@ _Static_assert(offsetof(aegis_task_t, sp) == 0,
 
 static uint32_t      s_next_tid = 0;
 static uint32_t      s_task_count = 0;
+static volatile int  s_sched_ready = 0;  /* set by sched_start; guards sched_tick */
 
 static spinlock_t sched_lock = SPINLOCK_INIT;
 
@@ -452,6 +453,7 @@ sched_start(void)
         for (;;) {}
     }
 
+    s_sched_ready = 1;  /* guard: sched_tick now safe to context-switch */
     printk("[SCHED] OK: scheduler started, %u tasks\n", s_task_count);
 
     /* One-way switch into the first task.
@@ -483,6 +485,8 @@ sched_start(void)
 void
 sched_tick(void)
 {
+    if (!s_sched_ready)                    /* PIT fires before sched_start */
+        return;
     aegis_task_t *cur = sched_current();
     if (!cur)                              /* no tasks spawned yet */
         return;
