@@ -339,20 +339,15 @@ mouse_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 
     if (max_events == 0) return 0;
 
-    /* First event: block if necessary */
+    /* Non-blocking: drain available events only */
     mouse_event_t evt;
-    mouse_read_blocking(&evt);
-    __builtin_memcpy((uint8_t *)buf + count * sizeof(mouse_event_t),
-                     &evt, sizeof(mouse_event_t));
-    count++;
-
-    /* Drain remaining available events without blocking */
     while (count < max_events && mouse_poll(&evt)) {
         __builtin_memcpy((uint8_t *)buf + count * sizeof(mouse_event_t),
                          &evt, sizeof(mouse_event_t));
         count++;
     }
 
+    if (count == 0) return -11;  /* -EAGAIN */
     return (int)(count * sizeof(mouse_event_t));
 }
 
