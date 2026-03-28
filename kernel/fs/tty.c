@@ -120,10 +120,18 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
 
     /* RAW mode: return one byte at a time */
     if (!(lflag & K_ICANON)) {
-        interrupted = 0;
-        int rc = tty->read_raw(tty, &ch, &interrupted);
-        if (rc <= 0)
-            return interrupted ? -4 : rc;
+        uint8_t vmin = tty->termios.c_cc[K_VMIN];
+
+        /* VMIN=0: non-blocking — poll for available data, return 0 if none */
+        if (vmin == 0 && tty->poll_raw) {
+            if (!tty->poll_raw(tty, &ch))
+                return 0;   /* no data — POSIX: return 0 for VMIN=0 */
+        } else {
+            interrupted = 0;
+            int rc = tty->read_raw(tty, &ch, &interrupted);
+            if (rc <= 0)
+                return interrupted ? -4 : rc;
+        }
         /* CR→NL if ICRNL */
         if ((iflag & K_ICRNL) && ch == '\r')
             ch = '\n';

@@ -131,6 +131,20 @@ pty_slave_read_raw(tty_t *tty, char *out, int *interrupted)
 	}
 }
 
+/* pty_slave_poll_raw -- non-blocking single-char poll from the master's
+ * input ring buffer.  Returns 1 if a character was available (stored in
+ * *out), 0 if the buffer is empty.  Used when VMIN=0. */
+static int
+pty_slave_poll_raw(tty_t *tty, char *out)
+{
+	pty_pair_t *pair = (pty_pair_t *)tty->ctx;
+	if (ring_count(pair->input_head, pair->input_tail) > 0) {
+		*out = (char)ring_pull(pair->input_buf, &pair->input_tail);
+		return 1;
+	}
+	return 0;
+}
+
 /* ── Controlling terminal helper ──────────────────────────────────── */
 
 /*
@@ -162,7 +176,8 @@ try_acquire_ctty(pty_pair_t *pair)
 /*
  * master_read_fn -- read from the output_buf (what the slave wrote).
  * buf is a kernel buffer (kbuf from sys_read). Blocks until data
- * available or slave closes.
+ * available or slave closes.  Respects vfs_read_nonblock (O_NONBLOCK):
+ * returns -EAGAIN immediately when no data and nonblock is set.
  */
 static int
 master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
@@ -181,6 +196,9 @@ master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 		/* Slave closed and buffer empty -- EOF */
 		if (!pair->slave_open)
 			return 0;
+		/* O_NONBLOCK: return -EAGAIN instead of blocking */
+		if (vfs_read_nonblock)
+			return -11; /* EAGAIN */
 		/* Check for pending signals */
 		if (signal_check_pending())
 			return -4; /* EINTR */
@@ -390,6 +408,7 @@ ptmx_open(int flags, vfs_file_t *out)
 	tty_init_defaults(&pair->tty);
 	pair->tty.write_out = pty_slave_write_out;
 	pair->tty.read_raw  = pty_slave_read_raw;
+	pair->tty.poll_raw  = pty_slave_poll_raw;
 	pair->tty.ctx       = pair;
 
 	try_acquire_ctty(pair);

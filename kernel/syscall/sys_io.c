@@ -5,6 +5,12 @@
 #define EISDIR 21
 #endif
 
+/* vfs_read_nonblock — set by sys_read before calling f->ops->read() when the
+ * fd has O_NONBLOCK set.  Blocking VFS read ops (PTY master, pipes) check this
+ * global and return -EAGAIN instead of sleeping.  Reset to 0 after the call.
+ * Safe on single-core: syscalls are non-preemptible. */
+int vfs_read_nonblock = 0;
+
 /*
  * sys_write — syscall 1
  *
@@ -179,7 +185,9 @@ sys_read(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     uint64_t n = arg3;
     if (n > SYS_READ_BUF) n = SYS_READ_BUF;
     if (n > to_end)       n = to_end;
+    vfs_read_nonblock = (f->flags & VFS_O_NONBLOCK) ? 1 : 0;
     int64_t got = (int64_t)f->ops->read(f->priv, kbuf, f->offset, n);
+    vfs_read_nonblock = 0;
     if (got < 0) return (uint64_t)got;   /* propagate -errno (e.g. -EPIPE) */
     if (got == 0) return 0;              /* clean EOF */
     copy_to_user((void *)(uintptr_t)arg2, kbuf, (uint64_t)got);

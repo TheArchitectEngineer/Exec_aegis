@@ -199,8 +199,9 @@ comp_composite(compositor_t *c)
     memcpy(c->fb.buf, c->back.buf,
            (size_t)c->fb.pitch * (size_t)c->fb.h * sizeof(uint32_t));
 
-    /* cursor drawn directly to fb (over the flipped image) */
-    cursor_show(c->cursor_x, c->cursor_y);
+    /* Cursor is drawn by the caller (main event loop) after composite,
+     * so that save-under captures the final composited image and not
+     * a stale cursor sprite. */
 
     c->needs_redraw = 0;
 }

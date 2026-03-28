@@ -74,6 +74,10 @@ typedef struct tty {
     /* Backend callbacks — set by console or PTY driver */
     int  (*write_out)(struct tty *tty, const char *buf, uint32_t len);
     int  (*read_raw)(struct tty *tty, char *out, int *interrupted);
+    /* poll_raw — non-blocking single-char read.  Returns 1 and stores
+     * the character in *out if available, 0 if no data.  Used when
+     * VMIN=0 (non-blocking raw mode).  NULL = not supported. */
+    int  (*poll_raw)(struct tty *tty, char *out);
     void *ctx;   /* backend-private data */
 } tty_t;
 

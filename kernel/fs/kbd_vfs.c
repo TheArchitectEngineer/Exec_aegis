@@ -34,6 +34,16 @@ console_tty_read_raw(tty_t *tty, char *out, int *interrupted)
 	return (*interrupted) ? 0 : 1;
 }
 
+/* console_tty_poll_raw — non-blocking single-char poll from keyboard
+ * ring buffer.  Returns 1 and stores the character in *out if available,
+ * 0 if no data.  Used when VMIN=0 (non-blocking raw mode). */
+static int
+console_tty_poll_raw(tty_t *tty, char *out)
+{
+	(void)tty;
+	return kbd_poll(out);
+}
+
 /* console_tty_init — set up the console tty with defaults + callbacks. */
 static void
 console_tty_init(void)
@@ -44,6 +54,7 @@ console_tty_init(void)
 	s_console_tty.termios.c_oflag = 0;
 	s_console_tty.write_out = console_tty_write_out;
 	s_console_tty.read_raw  = console_tty_read_raw;
+	s_console_tty.poll_raw  = console_tty_poll_raw;
 	/* Apply deferred fg_pgrp set before console was initialized */
 	s_console_tty.fg_pgrp   = kbd_get_tty_pgrp();
 	tty_set_console(&s_console_tty);

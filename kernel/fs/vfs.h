@@ -87,6 +87,13 @@ typedef struct {
 
 _Static_assert(sizeof(vfs_file_t) == 40, "vfs_file_t must be 40 bytes");
 
+/* O_NONBLOCK flag value (Linux x86-64).  Stored in vfs_file_t.flags by
+ * fcntl(F_SETFL).  sys_read sets vfs_read_nonblock before calling a VFS
+ * read op so that blocking drivers (PTY master, pipes) can return -EAGAIN
+ * instead of sleeping.  Single-core: no locking needed. */
+#define VFS_O_NONBLOCK 0x800U
+extern int vfs_read_nonblock;
+
 /* vfs_init — print [VFS] OK line and register built-in drivers.
  * Called from kernel_main before sched_init. */
 void vfs_init(void);
