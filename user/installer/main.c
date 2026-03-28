@@ -100,8 +100,8 @@ static const unsigned char BIOS_BOOT_GUID[16] = {
 /* Write GPT to disk. Returns 0 on success. */
 static int write_gpt(const char *devname, unsigned long long disk_blocks)
 {
-    unsigned char sector[512];
-    unsigned char entries[128 * 128];  /* 128 entries × 128 bytes = 16KB */
+    static unsigned char sector[512];
+    static unsigned char entries[128 * 128];  /* 128 entries × 128 bytes = 16KB */
     unsigned long long last_lba = disk_blocks - 1;
 
     /* Partition 1: BIOS Boot — LBA 34 to 2047 (1 MB) */
@@ -219,7 +219,7 @@ static int copy_rootfs(const char *dst_dev, unsigned long long dst_blocks)
     }
 
     /* Copy 8 sectors at a time */
-    unsigned char buf[4096];
+    static unsigned char buf[4096];
     unsigned long long lba;
     unsigned long long total = src_blocks;
     unsigned long long last_pct = 0;
@@ -255,8 +255,8 @@ static int read_file(const char *path, unsigned char *buf, int maxlen)
 
 static int install_grub(const char *devname)
 {
-    unsigned char boot_img[512];
-    unsigned char core_buf[65536];  /* core.img, typically 30-60KB */
+    static unsigned char boot_img[512];
+    static unsigned char core_buf[65536];  /* core.img, typically 30-60KB */
 
     /* Read boot.img from live filesystem */
     int boot_sz = read_file("/boot/grub/boot.img", boot_img, 512);
@@ -273,7 +273,7 @@ static int install_grub(const char *devname)
     }
 
     /* Read current MBR (preserve GPT protective entry at offset 446) */
-    unsigned char mbr[512];
+    static unsigned char mbr[512];
     if (blkdev_io(devname, 0, 1, mbr, 0) < 0) return -1;
 
     /* Overwrite MBR bootstrap (bytes 0-439) with boot.img */
@@ -286,7 +286,7 @@ static int install_grub(const char *devname)
     unsigned long long core_sectors = ((unsigned long long)core_sz + 511) / 512;
     unsigned long long lba;
     for (lba = 0; lba < core_sectors; lba++) {
-        unsigned char sector[512];
+        static unsigned char sector[512];
         memset(sector, 0, 512);
         unsigned long long off = lba * 512;
         unsigned long long remain = (unsigned long long)core_sz - off;
