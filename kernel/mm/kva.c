@@ -32,13 +32,19 @@ void *
 kva_alloc_pages(uint64_t n)
 {
     if (n == 0) return NULL;   /* caller passed 0 — no pages to allocate */
+
+    /* Reserve VA range under kva_lock, then release before calling into PMM.
+     * Lock ordering: pmm_lock > kva_lock.  Holding kva_lock while calling
+     * pmm_alloc_page() would invert that order and deadlock on SMP. */
     irqflags_t fl = spin_lock_irqsave(&kva_lock);
     uint64_t base = s_kva_next;
+    s_kva_next += n * 4096UL;
+    spin_unlock_irqrestore(&kva_lock, fl);
+
     uint64_t i;
     for (i = 0; i < n; i++) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
-            spin_unlock_irqrestore(&kva_lock, fl);
             printk("[KVA] FAIL: out of memory\n");
             for (;;) {}
         }
@@ -46,12 +52,10 @@ kva_alloc_pages(uint64_t n)
          * pd_hi which is shared with user PML4s (same physical pd_hi page).
          * Absent VMM_FLAG_USER, the MMU blocks user-mode access to these PTEs.
          * Setting VMM_FLAG_USER would expose all kernel objects to ring-3. */
-        vmm_map_page(s_kva_next, phys, VMM_FLAG_WRITABLE);
-        s_kva_next += 4096UL;
+        vmm_map_page(base + i * 4096UL, phys, VMM_FLAG_WRITABLE);
     }
-    spin_unlock_irqrestore(&kva_lock, fl);
-    /* SAFETY: base is a higher-half VA set from s_kva_next at function entry;
-     * all n pages at [base, s_kva_next) have been mapped via vmm_map_page. */
+    /* SAFETY: base is a higher-half VA reserved atomically from s_kva_next;
+     * all n pages at [base, base + n*4096) have been mapped via vmm_map_page. */
     return (void *)base;
 }
 
@@ -59,12 +63,20 @@ void *
 kva_map_phys_pages(uint64_t phys_base, uint32_t num_pages)
 {
     if (num_pages == 0) return NULL;
+
+    /* Reserve VA range under kva_lock, then map outside the lock.
+     * vmm_map_page does not acquire pmm_lock so no ordering issue here,
+     * but keeping the critical section minimal is still good practice. */
+    irqflags_t fl = spin_lock_irqsave(&kva_lock);
     uint64_t base = s_kva_next;
+    s_kva_next += (uint64_t)num_pages * 4096UL;
+    spin_unlock_irqrestore(&kva_lock, fl);
+
     uint32_t i;
     for (i = 0; i < num_pages; i++) {
-        vmm_map_page(s_kva_next, phys_base + (uint64_t)i * 4096UL,
+        vmm_map_page(base + (uint64_t)i * 4096UL,
+                     phys_base + (uint64_t)i * 4096UL,
                      VMM_FLAG_WRITABLE);
-        s_kva_next += 4096UL;
     }
     return (void *)base;
 }
