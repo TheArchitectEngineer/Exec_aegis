@@ -157,14 +157,17 @@ USERSPACE_SRCS = \
 # Programs embedded in initrd via objcopy --input binary
 OBJCOPY = x86_64-elf-objcopy
 
-# Boot-critical static binaries in initrd: login, vigil, shell.
+# Boot-critical static binaries in initrd: login, vigil, shell, echo, cat, ls.
+# echo/cat/ls are needed by INIT=shell tests (test_ext2, test_gpt).
 # All other user binaries are dynamically linked and live on the ext2 disk.
 USER_ELFS = \
     user/login/login.elf \
     user/vigil/vigil \
     user/shell/shell.elf
 
-BLOB_OBJS = $(BUILD)/blobs/login.o $(BUILD)/blobs/vigil.o $(BUILD)/blobs/shell.o $(BUILD)/blobs/init.o
+BLOB_OBJS = $(BUILD)/blobs/login.o $(BUILD)/blobs/vigil.o $(BUILD)/blobs/shell.o \
+            $(BUILD)/blobs/echo.o $(BUILD)/blobs/cat.o $(BUILD)/blobs/ls.o \
+            $(BUILD)/blobs/init.o
 
 
 # ── Object file lists ─────────────────────────────────────────────────────────
@@ -320,6 +323,29 @@ $(BUILD)/blobs/shell.o: user/shell/shell.elf
 	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
 	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
 	  shell.bin shell.o
+
+# Static initrd copies of echo/cat/ls — compiled directly, NOT from user/*/Makefile
+# (those produce dynamic binaries for ext2). These are only used by INIT=shell tests.
+$(BUILD)/blobs/echo.o: user/echo/main.c
+	@mkdir -p $(BUILD)/blobs
+	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $(BUILD)/blobs/echo.bin $<
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  echo.bin echo.o
+
+$(BUILD)/blobs/cat.o: user/cat/main.c
+	@mkdir -p $(BUILD)/blobs
+	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $(BUILD)/blobs/cat.bin $<
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  cat.bin cat.o
+
+$(BUILD)/blobs/ls.o: user/ls/main.c
+	@mkdir -p $(BUILD)/blobs
+	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $(BUILD)/blobs/ls.bin $<
+	@cd $(BUILD)/blobs && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 \
+	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+	  ls.bin ls.o
 
 $(BUILD)/blobs/init.o: $(INIT_ELF_SRC) $(INIT_STAMP)
 	@mkdir -p $(BUILD)/blobs
@@ -518,6 +544,7 @@ sym:
 
 test:
 	$(MAKE) INIT=vigil iso
+	$(MAKE) disk
 	@bash tests/run_tests.sh
 
 # ── Clean ─────────────────────────────────────────────────────────────────────

@@ -71,6 +71,12 @@ extern const unsigned char _binary_vigil_bin_start[];
 extern const unsigned char _binary_vigil_bin_end[];
 extern const unsigned char _binary_shell_bin_start[];
 extern const unsigned char _binary_shell_bin_end[];
+extern const unsigned char _binary_echo_bin_start[];
+extern const unsigned char _binary_echo_bin_end[];
+extern const unsigned char _binary_cat_bin_start[];
+extern const unsigned char _binary_cat_bin_end[];
+extern const unsigned char _binary_ls_bin_start[];
+extern const unsigned char _binary_ls_bin_end[];
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -87,6 +93,9 @@ static const initrd_entry_t s_files[] = {
     { "/bin/login",   _binary_login_bin_start,     _binary_login_bin_end },
     { "/bin/vigil",   _binary_vigil_bin_start,     _binary_vigil_bin_end },
     { "/bin/sh",      _binary_shell_bin_start,     _binary_shell_bin_end },
+    { "/bin/echo",    _binary_echo_bin_start,      _binary_echo_bin_end },
+    { "/bin/cat",     _binary_cat_bin_start,       _binary_cat_bin_end },
+    { "/bin/ls",      _binary_ls_bin_start,        _binary_ls_bin_end },
     { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
     { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
     { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },
@@ -104,7 +113,7 @@ static const initrd_entry_t s_files[] = {
 };
 
 
-static const uint32_t s_nfiles = 17;
+static const uint32_t s_nfiles = 20;
 
 /* Helper: return file size for an entry. */
 static uint32_t
