@@ -96,7 +96,10 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
-    ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */
+    /* I/O APIC disabled temporarily — causes #GP on ThinkPad X13 (Zen 2).
+     * PIC continues to handle interrupts until IOAPIC routing is debugged.
+     * The LAPIC is still enabled for IPI and EOI. */
+    /* ioapic_init(); */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
