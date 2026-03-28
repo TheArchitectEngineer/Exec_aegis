@@ -26,6 +26,7 @@ timeout 60s qemu-system-x86_64 \
 sed 's/\x1b\[[?0-9;]*[A-Za-z]//g; s/\x1bc//g; s/\r//g' "$RAW" \
     | grep '^\[' \
     | grep -v '^\[DHCP\]' \
+    | grep -v '^\[SHELL\]' \
     | sed 's/mounted ramdisk0, [0-9]* blocks/mounted ramdisk0, NBLK blocks/' \
     > "$ACTUAL" || true
 
