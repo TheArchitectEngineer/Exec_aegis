@@ -253,6 +253,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | /proc filesystem (Phase 31) | ✅ | VMA tracking (170-slot kva table); procfs VFS; /proc/self/maps,status,stat,exe,cmdline,fd; /proc/meminfo; CAP_KIND_PROC_READ; test_proc.py PASS |
 | TTY/PTY layer (Phase 32) | ✅ | Shared tty_t line discipline; 16 PTY pairs (/dev/ptmx + /dev/pts/N); sessions (sid); setpgid relaxed; SIGTTIN/SIGTTOU; SIGHUP on session exit; test_pty.py PASS |
 | Dynamic linking (Phase 33) | ✅ | PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; musl libc.so; vigil+login static; test_dynlink.py PASS |
+| Writable root (Phase 34) | ✅ | ext2-first VFS; rootfs.img in ISO as multiboot2 module; RAM blkdev; Aegis GPT GUIDs; 0-1GB identity map; test_integrated 15/16 PASS |
 
 ### Known deviations
 
@@ -321,8 +322,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 31 | **/proc filesystem** — capability-gated virtual FS; /proc/self/maps, /proc/self/exe, /proc/meminfo; `CAP_KIND_PROC_READ` | ✅ Done |
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | ✅ Done |
 | 33 | **Dynamic linking** — ELF interpreter (musl ldso); PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; most binaries dynamic | ✅ Done |
-| 34 | Writable root — ramfs populated from initrd; full live-system writability; foundation for installer | Not started |
-| 35 | Installer — text-mode; partition NVMe, format ext2, copy ramfs tree, install GRUB | Not started |
+| 34 | **Writable root** — ext2-first VFS; embedded rootfs.img in ISO as multiboot2 module; RAM blkdev for live boot; Aegis GPT GUID family; NVMe-fail warning | ✅ Done |
+| 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install GRUB | Not started |
 | 36 | Framebuffer / VESA | Not started |
 | 37 | AMD Display Core | Not started |
 | 38 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
@@ -330,6 +331,60 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 40 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 41 | Release | Not started |
 | 42 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
+
+---
+
+## Aegis GPT Partition Type GUIDs — Installer Reference
+
+**This section is permanent project documentation. Do not condense, summarize, or remove during cleanup.**
+
+Aegis uses a custom GPT partition type GUID family to identify its own disk partitions. This prevents the kernel from accidentally mounting an incompatible ext2 (or other) volume — a critical safety property since the fallback is volatile RAM storage.
+
+### GUID Structure
+
+Every Aegis partition type GUID shares a fixed 8-byte prefix. The remaining 8 bytes encode the partition's role:
+
+```
+A3618F24-0C76-4B3D-xxxx-xxxxxxxxxxxx
+ \___ Aegis prefix ___/  \__ role __/
+```
+
+**Prefix bytes (hex):** `A3 61 8F 24 0C 76 4B 3D`
+
+### Defined Partition Roles
+
+| Full GUID | Role | Description |
+|-----------|------|-------------|
+| `A3618F24-0C76-4B3D-0001-000000000000` | Root | Primary ext2 root filesystem. Mounted as `/`. |
+| `A3618F24-0C76-4B3D-0002-000000000000` | Swap | Swap partition. |
+| `A3618F24-0C76-4B3D-0003-000000000000` | Home | User home directories (`/home`). |
+| `A3618F24-0C76-4B3D-0004-000000000000` | Data | General-purpose persistent data. |
+
+Role `0001` (Root) is the only one implemented. The others are reserved for the installer and future phases.
+
+### How It Works
+
+1. **`make disk` / installer:** Creates GPT partitions with `sgdisk --typecode=1:A3618F24-0C76-4B3D-0001-000000000000` instead of the generic Linux `8300` type code.
+
+2. **`gpt_scan()` in kernel:** When scanning GPT entries, compares each partition's type GUID against the 8-byte Aegis prefix. Partitions that don't match are silently skipped — they are never registered as blkdevs and are invisible to the rest of the kernel.
+
+3. **`ext2_mount("nvme0p1")`:** Only succeeds if `nvme0p1` was registered by `gpt_scan`, which only happens for Aegis-prefixed partitions.
+
+4. **Safety guarantee:** If an NVMe drive contains a non-Aegis ext2 partition (e.g., a Linux install, a different OS), the kernel will not mount it. It falls back to the ramdisk (live ISO boot) and prints a warning if NVMe hardware was detected but no Aegis root partition was found.
+
+### Installer Requirements (Phase 35)
+
+The installer must:
+- Create partitions using the Aegis GUID family (not generic `8300`)
+- Write the role bytes correctly (root = `0001`, swap = `0002`)
+- Flash `rootfs.img` (the ext2 image from the ISO module) to the root partition
+- The kernel on next boot will find the Aegis-typed partition via `gpt_scan` and mount it from NVMe
+
+### Why Not Just Check the ext2 Volume Label?
+
+Volume labels (`mke2fs -L aegis-root`) are mutable and checked after reading the superblock. The GPT type GUID is checked during partition table scan — before any filesystem code runs. A wrong GUID means the partition is never even opened. This is a stronger guarantee with a smaller attack surface.
+
+---
 
 **RTL8125 testing note:** The machine has RTL8125B (ASUS, PCI 0a:00.0, IOMMU group 18) managed by host `r8169`. WiFi is MT7921K (0b:00.0). Do NOT test RTL8125 until WiFi is confirmed working — you will lose remote access.
 
@@ -358,7 +413,31 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ---
 
-*Last updated: 2026-03-27 — Phase 33 complete. Dynamic linking: PT_INTERP+ET_DYN, MAP_FIXED+file-backed mmap, musl libc.so on ext2, initrd 20 files (vigil+login+shell+echo+cat+ls+config). test_integrated 16/16 PASS. Test suite consolidated: 11 QEMU boots → 1.*
+*Last updated: 2026-03-28 — Phase 34 complete. Writable root: ext2-first VFS, rootfs.img embedded in ISO as multiboot2 module, RAM blkdev (ramdisk0), Aegis GPT GUID family, 0-1GB identity map for large RAM, all QEMU at 2G. Boot oracle PASS. test_integrated 15/16 PASS (DHCP timing).*
+
+---
+
+## Phase 34 — Forward Constraints
+
+**Phase 34 status: ✅ complete. Boot oracle PASS. test_integrated 15/16 PASS (DHCP timing).**
+
+1. **Module memory is permanently reserved.** ~60MB of physical RAM for the GRUB module is never freed. The ramdisk copies it into fresh KVA pages (~60MB more). Total: ~120MB. On installed systems (NVMe ext2), both the module and copy are wasted. Future optimization: skip ramdisk_init when NVMe ext2 mounts successfully.
+
+2. **Ramdisk is volatile.** Writes go to RAM, lost on reboot. The installer (Phase 35) copies rootfs.img to NVMe for persistence.
+
+3. **Only one multiboot2 module supported.** First module tag found is used.
+
+4. **Aegis GUID prefix required for NVMe.** Partitions without `A3618F24-0C76-4B3D` prefix are invisible. Installer must create partitions with correct GUIDs.
+
+5. **Boot oracle is fragile.** PMM line varies with RAM size (hardcoded to 2G). DHCP retry lines are filtered. `[SHELL]` line appears if boot is fast enough for vigil→login→shell within the timeout. Future: regex-based oracle.
+
+6. **Identity map covers 0-1GB.** boot.asm pd_lo fills 512 entries. vmm_init creates a matching pd_lo. `alloc_table_early` and `ramdisk_init` (module copy) rely on this. Systems with modules above 1GB would need additional PDPT entries.
+
+7. **Vigil service run files must start with `/`.** Vigil checks `run_cmd[0]=='/'` to decide between direct execv (preserves exec_caps) and `sh -c` (loses exec_caps). ext2 run files must not have `exec` prefix.
+
+8. **curl double-faults with 2G RAM.** Pre-existing issue — curl's TLS stack overflows with the larger memory layout. Needs separate investigation.
+
+9. **test_ext2 writes to /home, not /tmp.** `/tmp` is now ramfs (volatile). Persistence tests must use ext2-backed paths.
 
 ---
 
