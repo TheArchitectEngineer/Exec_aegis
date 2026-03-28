@@ -144,27 +144,7 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
         return 0;
     }
 
-    /* Determine next-hop MAC. */
-    mac_addr_t next_hop_mac;
-
-    if (dst_ip == htonl(0xFFFFFFFFu)) {
-        /* Limited broadcast — no ARP needed. */
-        _ip_memset(&next_hop_mac, 0xff, sizeof(next_hop_mac));
-    } else {
-        /* Same subnet? */
-        ip4_addr_t via;
-        if (s_my_ip == 0 || (dst_ip & s_netmask) == (s_my_ip & s_netmask))
-            via = dst_ip;
-        else
-            via = s_gateway;
-
-        if (arp_resolve(dev, via, &next_hop_mac) != 0) {
-            spin_unlock_irqrestore(&ip_lock, ip_fl);
-            return -1; /* ARP timeout */
-        }
-    }
-
-    /* Build 20-byte IPv4 header. */
+    /* Build 20-byte IPv4 header in shared buffer under ip_lock. */
     ip_hdr_t *hdr   = (ip_hdr_t *)s_ip_buf;
     uint16_t  total = (uint16_t)(sizeof(ip_hdr_t) + len);
 
@@ -182,9 +162,36 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
 
     _ip_memcpy(s_ip_buf + sizeof(ip_hdr_t), payload, len);
 
-    int ret = eth_send(dev, &next_hop_mac, ETHERTYPE_IP, s_ip_buf, total);
+    /* Copy assembled packet to stack-local buffer and snapshot config so we
+     * can release ip_lock before calling arp_resolve/eth_send (which acquire
+     * arp_lock).  Lock ordering: arp_lock > ip_lock — holding ip_lock while
+     * acquiring arp_lock would be an inversion. */
+    uint8_t local_pkt[1500];
+    _ip_memcpy(local_pkt, s_ip_buf, total);
+    ip4_addr_t my_ip   = s_my_ip;
+    ip4_addr_t netmask = s_netmask;
+    ip4_addr_t gateway = s_gateway;
     spin_unlock_irqrestore(&ip_lock, ip_fl);
-    return ret;
+
+    /* Determine next-hop MAC (outside ip_lock). */
+    mac_addr_t next_hop_mac;
+
+    if (dst_ip == htonl(0xFFFFFFFFu)) {
+        /* Limited broadcast — no ARP needed. */
+        _ip_memset(&next_hop_mac, 0xff, sizeof(next_hop_mac));
+    } else {
+        /* Same subnet? */
+        ip4_addr_t via;
+        if (my_ip == 0 || (dst_ip & netmask) == (my_ip & netmask))
+            via = dst_ip;
+        else
+            via = gateway;
+
+        if (arp_resolve(dev, via, &next_hop_mac) != 0)
+            return -1; /* ARP timeout */
+    }
+
+    return eth_send(dev, &next_hop_mac, ETHERTYPE_IP, local_pkt, total);
 }
 
 /* ---- ICMP -------------------------------------------------------------- */

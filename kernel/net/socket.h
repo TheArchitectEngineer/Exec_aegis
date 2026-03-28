@@ -70,6 +70,10 @@ int sock_alloc(uint8_t type);
 /* sock_get: return pointer to sock_t for sock_id, or NULL if invalid/free. */
 sock_t *sock_get(uint32_t sock_id);
 
+/* sock_get_nolock: return pointer without acquiring sock_lock.
+ * Only safe when caller holds a lock that prevents concurrent sock_free. */
+sock_t *sock_get_nolock(uint32_t sock_id);
+
 /* sock_free: mark slot free. Called on close. */
 void sock_free(uint32_t sock_id);
 

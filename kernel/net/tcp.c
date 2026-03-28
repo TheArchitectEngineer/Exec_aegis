@@ -157,6 +157,18 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     const tcp_hdr_t *seg = (const tcp_hdr_t *)tcp_data;
 
+    /* Deferred socket wake/notify — collected under tcp_lock, executed after
+     * release.  Avoids tcp_lock → sock_lock ordering inversion. */
+    #define TCP_RX_WAKE_MAX 4
+    uint32_t wake_ids[TCP_RX_WAKE_MAX];
+    uint32_t wake_epoll_events[TCP_RX_WAKE_MAX];
+    uint32_t wake_count = 0;
+    /* Deferred sock state transition (SYN_SENT → CONNECTED). */
+    uint32_t connect_sock_id = SOCK_NONE;
+    /* Deferred accept queue push (SYN_RCVD → ESTABLISHED). */
+    uint32_t accept_listener_id = SOCK_NONE;
+    uint32_t accept_conn_id = 0;
+
     tcp_pseudo_hdr_t ph;
     ph.src     = src_ip;
     ph.dst     = dst_ip;
@@ -225,18 +237,14 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                 conn->state    = TCP_ESTABLISHED;
                 printk("[TCP] ESTABLISHED port=%u\n", (uint32_t)conn->local_port);
                 conn->retransmit_at = 0;
-                /* Wake accept() waiter on the listener socket */
+                /* Defer accept() queue push + wake to after tcp_lock release */
                 if (conn->listener_id != SOCK_NONE) {
-                    sock_t *ls = sock_get(conn->listener_id);
-                    if (ls) {
-                        uint8_t next_tail = (uint8_t)((ls->accept_tail + 1) & 7);
-                        if (next_tail != ls->accept_head) {
-                            uint32_t conn_id = (uint32_t)(conn - s_tcp);
-                            ls->accept_queue[ls->accept_tail] = conn_id;
-                            ls->accept_tail = next_tail;
-                        }
-                        sock_wake(conn->listener_id);
-                        epoll_notify(conn->listener_id, EPOLLIN);
+                    accept_listener_id = conn->listener_id;
+                    accept_conn_id = (uint32_t)(conn - s_tcp);
+                    if (wake_count < TCP_RX_WAKE_MAX) {
+                        wake_ids[wake_count] = conn->listener_id;
+                        wake_epoll_events[wake_count] = EPOLLIN;
+                        wake_count++;
                     }
                 }
             }
@@ -251,12 +259,14 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                 conn->state    = TCP_ESTABLISHED;
                 tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
                 conn->retransmit_at = 0;
-                /* Transition socket to CONNECTED and wake connect() waiter */
+                /* Defer connect() wake + state transition */
                 if (conn->sock_id != SOCK_NONE) {
-                    sock_t *sk = sock_get(conn->sock_id);
-                    if (sk) sk->state = SOCK_CONNECTED;
-                    sock_wake(conn->sock_id);
-                    epoll_notify(conn->sock_id, EPOLLOUT);
+                    connect_sock_id = conn->sock_id;
+                    if (wake_count < TCP_RX_WAKE_MAX) {
+                        wake_ids[wake_count] = conn->sock_id;
+                        wake_epoll_events[wake_count] = EPOLLOUT;
+                        wake_count++;
+                    }
                 }
             }
         }
@@ -277,27 +287,36 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                     conn->rbuf_tail++;
                 }
                 conn->rcv_nxt += payload_len;
-                /* Wake blocked recv() on this socket */
-                if (conn->sock_id != SOCK_NONE) {
-                    sock_wake(conn->sock_id);
-                    epoll_notify(conn->sock_id, EPOLLIN);
+                /* Defer recv() wake */
+                if (conn->sock_id != SOCK_NONE &&
+                    wake_count < TCP_RX_WAKE_MAX) {
+                    wake_ids[wake_count] = conn->sock_id;
+                    wake_epoll_events[wake_count] = EPOLLIN;
+                    wake_count++;
                 }
             }
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
         }
         if (flags & TCP_RST) {
             conn->state = TCP_CLOSED;
-            if (conn->sock_id != SOCK_NONE) sock_wake(conn->sock_id);
+            if (conn->sock_id != SOCK_NONE &&
+                wake_count < TCP_RX_WAKE_MAX) {
+                wake_ids[wake_count] = conn->sock_id;
+                wake_epoll_events[wake_count] = 0; /* wake only, no epoll */
+                wake_count++;
+            }
             break;
         }
         if (flags & TCP_FIN) {
             conn->rcv_nxt++;
             conn->state = TCP_CLOSE_WAIT;
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
-            /* Wake blocked recv() — EOF/hangup */
-            if (conn->sock_id != SOCK_NONE) {
-                sock_wake(conn->sock_id);
-                epoll_notify(conn->sock_id, EPOLLHUP);
+            /* Defer recv() EOF/hangup wake */
+            if (conn->sock_id != SOCK_NONE &&
+                wake_count < TCP_RX_WAKE_MAX) {
+                wake_ids[wake_count] = conn->sock_id;
+                wake_epoll_events[wake_count] = EPOLLHUP;
+                wake_count++;
             }
         }
         break;
@@ -327,9 +346,11 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             conn->state       = TCP_TIME_WAIT;
             conn->timewait_at = (uint32_t)arch_get_ticks() + TCP_TIMEWAIT_TICKS;
             tcp_send_segment(dev, conn, TCP_ACK, NULL, 0);
-            if (conn->sock_id != SOCK_NONE) {
-                sock_wake(conn->sock_id);
-                epoll_notify(conn->sock_id, EPOLLHUP);
+            if (conn->sock_id != SOCK_NONE &&
+                wake_count < TCP_RX_WAKE_MAX) {
+                wake_ids[wake_count] = conn->sock_id;
+                wake_epoll_events[wake_count] = EPOLLHUP;
+                wake_count++;
             }
         }
         break;
@@ -352,6 +373,38 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     }
 out:
     spin_unlock_irqrestore(&tcp_lock, fl);
+
+    /* ── Deferred socket operations (outside tcp_lock) ───────────────────
+     * sock_get/sock_wake acquire sock_lock.  Calling them under tcp_lock
+     * would violate the lock ordering (sock_lock > tcp_lock). */
+
+    /* SYN_SENT → CONNECTED: update sock state before waking. */
+    if (connect_sock_id != SOCK_NONE) {
+        sock_t *sk = sock_get(connect_sock_id);
+        if (sk) sk->state = SOCK_CONNECTED;
+    }
+
+    /* Accept queue push for SYN_RCVD → ESTABLISHED. */
+    if (accept_listener_id != SOCK_NONE) {
+        sock_t *ls = sock_get(accept_listener_id);
+        if (ls) {
+            uint8_t next_tail = (uint8_t)((ls->accept_tail + 1) & 7);
+            if (next_tail != ls->accept_head) {
+                ls->accept_queue[ls->accept_tail] = accept_conn_id;
+                ls->accept_tail = next_tail;
+            }
+        }
+    }
+
+    {
+        uint32_t w;
+        for (w = 0; w < wake_count; w++) {
+            sock_wake(wake_ids[w]);
+            if (wake_epoll_events[w] != 0)
+                epoll_notify(wake_ids[w], wake_epoll_events[w]);
+        }
+    }
+    #undef TCP_RX_WAKE_MAX
 }
 
 void tcp_tick(void)

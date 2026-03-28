@@ -148,6 +148,19 @@ sock_t *sock_get(uint32_t sock_id)
     return s;
 }
 
+/* sock_get_nolock: return pointer without acquiring sock_lock.
+ * Only safe when caller holds a lock that prevents concurrent sock_free
+ * (e.g. tcp_lock or udp_lock — the binding/conn table references keep
+ * the socket alive).  Used to avoid lock ordering inversions. */
+sock_t *sock_get_nolock(uint32_t sock_id)
+{
+    if (sock_id >= SOCK_TABLE_SIZE)
+        return (sock_t *)0;
+    if (s_socks[sock_id].state == SOCK_FREE)
+        return (sock_t *)0;
+    return &s_socks[sock_id];
+}
+
 void sock_free(uint32_t sock_id)
 {
     irqflags_t fl = spin_lock_irqsave(&sock_lock);

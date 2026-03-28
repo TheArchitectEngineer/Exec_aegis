@@ -89,6 +89,9 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     if (len < (uint16_t)sizeof(udp_hdr_t)) return;
     irqflags_t fl = spin_lock_irqsave(&udp_lock);
 
+    /* Deferred socket wake/notify — avoids udp_lock → sock_lock inversion. */
+    uint32_t wake_sid = SOCK_NONE;
+
     const udp_hdr_t *hdr      = (const udp_hdr_t *)udp_data;
     uint16_t udp_claimed = ntohs(hdr->length);
     if (udp_claimed < (uint16_t)sizeof(udp_hdr_t)) goto udp_out;  /* malformed */
@@ -112,7 +115,7 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
         if (s_udp[i].port == dst_port && s_udp[i].port != 0) {
             uint32_t sid = s_udp[i].sock_id;
             if (sid == SOCK_NONE) goto udp_out;
-            sock_t *s = sock_get(sid);
+            sock_t *s = sock_get_nolock(sid);
             if (!s) goto udp_out;
             /* Find a free UDP RX slot */
             uint8_t next = (uint8_t)((s->udp_rx_tail + 1) & (UDP_RX_SLOTS - 1));
@@ -127,8 +130,7 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             slot->src_port = src_port;
             slot->in_use   = 1;
             s->udp_rx_tail = next;
-            sock_wake(sid);
-            epoll_notify(sid, EPOLLIN);
+            wake_sid = sid;
             goto udp_out;
         }
     }
@@ -136,6 +138,12 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     /* No binding: drop silently. */
 udp_out:
     spin_unlock_irqrestore(&udp_lock, fl);
+
+    /* Wake + epoll notify outside udp_lock (sock_lock > udp_lock). */
+    if (wake_sid != SOCK_NONE) {
+        sock_wake(wake_sid);
+        epoll_notify(wake_sid, EPOLLIN);
+    }
 }
 
 /* udp_bind: register a sock_id for the given port. Returns 0 or -1. */
