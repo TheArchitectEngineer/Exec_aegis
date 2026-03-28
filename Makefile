@@ -393,8 +393,9 @@ $(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg $(ROOTFS)
 # ── Run targets ───────────────────────────────────────────────────────────────
 iso: $(BUILD)/aegis.iso
 
-DISK = $(BUILD)/disk.img
-SGDISK     = /usr/sbin/sgdisk
+DISK    = $(BUILD)/disk.img
+ROOTFS  = $(BUILD)/rootfs.img
+SGDISK  = /usr/sbin/sgdisk
 # nvme0p1: sgdisk aligns start to LBA 2048, end 122879 = 120832 sectors = ~59 MB
 P1_SECTORS = 120832
 
@@ -422,8 +423,6 @@ DISK_USER_BINS = \
 	user/dhcp/dhcp \
 	build/curl/curl \
 	build/musl-dynamic/usr/lib/libc.so
-
-ROOTFS = $(BUILD)/rootfs.img
 
 rootfs: $(ROOTFS)
 disk: $(DISK)
