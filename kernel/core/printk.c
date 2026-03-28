@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "arch.h"
 #include "printk.h"
+#include "spinlock.h"
 #include "../drivers/fb.h"
 
 /*
@@ -13,7 +14,12 @@
  *
  * Supported conversions: %s %c %u %lu %x %lx %%
  * No dynamic allocation. No VLAs. Stack buffer for integer formatting only.
+ *
+ * printk_lock serialises output so two CPUs (or an ISR and a thread) cannot
+ * interleave characters.  IRQs are saved/restored around the lock.
  */
+
+static spinlock_t printk_lock = SPINLOCK_INIT;
 
 /* Emit a single character to all active output sinks. */
 static void
@@ -93,6 +99,7 @@ printk(const char *fmt, ...)
     /* 24 bytes: enough for UINT64_MAX in decimal (20 digits) + NUL,
      * or for 16 hex digits + NUL.  No VLA. */
     char numbuf[24];
+    irqflags_t flags = spin_lock_irqsave(&printk_lock);
 
     va_start(ap, fmt);
 
@@ -163,6 +170,7 @@ printk(const char *fmt, ...)
                 } else {
                     /* fmt now points at NUL; the outer loop will exit. */
                     va_end(ap);
+                    spin_unlock_irqrestore(&printk_lock, flags);
                     return;
                 }
             }
@@ -180,4 +188,5 @@ printk(const char *fmt, ...)
     }
 
     va_end(ap);
+    spin_unlock_irqrestore(&printk_lock, flags);
 }

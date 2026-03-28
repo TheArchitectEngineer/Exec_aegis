@@ -613,7 +613,7 @@ sys_select(uint64_t nfds, uint64_t rfds, uint64_t wfds,
            uint64_t efds, uint64_t timeout)
 {
     (void)nfds; (void)rfds; (void)wfds; (void)efds; (void)timeout;
-    return 0;
+    return (uint64_t)-38;  /* ENOSYS — select not implemented */
 }
 
 /* ── sys_epoll_create1 ──────────────────────────────────────────────────── */
