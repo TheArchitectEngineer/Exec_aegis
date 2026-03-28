@@ -515,7 +515,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	printf 'mkdir /etc/vigil/services/dhcp\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf '/bin/dhcp\n' > /tmp/aegis-dhcp-run
-	printf 'respawn\nmax_restarts=10\n' > /tmp/aegis-dhcp-policy
+	printf 'oneshot\n' > /tmp/aegis-dhcp-policy
 	printf 'NET_ADMIN NET_SOCKET\n' > /tmp/aegis-dhcp-caps
 	printf 'root\n' > /tmp/aegis-dhcp-user
 	printf 'write /tmp/aegis-dhcp-run /etc/vigil/services/dhcp/run\nwrite /tmp/aegis-dhcp-policy /etc/vigil/services/dhcp/policy\nwrite /tmp/aegis-dhcp-caps /etc/vigil/services/dhcp/caps\nwrite /tmp/aegis-dhcp-user /etc/vigil/services/dhcp/user\n' \

@@ -41,7 +41,7 @@ static const char s_httpd_caps[]   = "NET_SOCKET VFS_OPEN VFS_READ\n";
 
 /* dhcp vigil service config */
 static const char s_dhcp_run[]    = "/bin/dhcp\n";
-static const char s_dhcp_policy[] = "respawn\nmax_restarts=10\n";
+static const char s_dhcp_policy[] = "oneshot\n";
 static const char s_dhcp_caps[]   = "NET_ADMIN NET_SOCKET\n";
 
 /* Compile-time size constants for static string entries. */
