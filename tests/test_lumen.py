@@ -9,8 +9,11 @@ import subprocess, time, sys, os, select, fcntl, re, socket, tempfile
 
 QEMU = "qemu-system-x86_64"
 ISO = "build/aegis.iso"
+DISK = "build/disk.img"
 BOOT_TIMEOUT = int(os.environ.get("BOOT_TIMEOUT", "900"))
 CMD_TIMEOUT = 30
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def build_iso():
@@ -72,12 +75,26 @@ def send_keys(mon, text):
 def main():
     build_iso()
 
+    import shutil
+    iso_path = os.path.join(ROOT, ISO)
+    disk_path = os.path.join(ROOT, DISK)
+    if not os.path.exists(disk_path):
+        print(f"SKIP: {DISK} not found -- run 'make disk' first")
+        sys.exit(0)
+
     mon_path = tempfile.mktemp(suffix=".sock")
+    tmp_disk = tempfile.mktemp(suffix=".img")
+    shutil.copy2(disk_path, tmp_disk)
+
     qemu_cmd = [
         QEMU, "-machine", "q35", "-cpu", "Broadwell", "-m", "2G",
-        "-cdrom", ISO, "-boot", "order=d",
+        "-cdrom", iso_path, "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio", "-no-reboot",
+        "-drive", f"file={tmp_disk},if=none,id=nvme0,format=raw",
+        "-device", "nvme,drive=nvme0,serial=aegis0",
+        "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",
+        "-netdev", "user,id=n0",
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-mouse,bus=xhci.0",
         "-device", "usb-kbd,bus=xhci.0",
@@ -141,6 +158,10 @@ def main():
         proc.wait(timeout=5)
         try:
             os.unlink(mon_path)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_disk)
         except OSError:
             pass
 
