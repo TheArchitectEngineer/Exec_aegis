@@ -260,6 +260,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Framebuffer access | ✅ | sys_fb_map (513) maps FB into userspace; fb_test GUI mockup with Terminus 10x20; native resolution |
 | Password asterisks | ✅ | login echoes * for password input; raw termios mode |
 | DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
+| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol parser; xHCI device type detection; hotplug PSC; installer crypt(); **untested** (boot oracle hangs — see constraints) |
 
 ### Known deviations
 
@@ -331,7 +332,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 34 | **Writable root** — ext2-first VFS; embedded rootfs.img in ISO as multiboot2 module; RAM blkdev for live boot; Aegis GPT GUID family; NVMe-fail warning | ✅ Done |
 | 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install EFI GRUB | ✅ Done |
 | 35b | **Bare-metal polish** — UEFI EFI boot, ACPI power button, gfxmode=auto, GRUB background, password asterisks | ✅ Done |
-| 36 | **USB HID mouse** — boot protocol mouse via xHCI; cursor tracking; /dev/mouse or sys_mouse_read | Not started |
+| 36 | **USB HID mouse** — boot protocol mouse via xHCI; /dev/mouse VFS; installer crypt() | 🔶 Untested |
 | 37 | **Lumen** — display server/compositor; owns framebuffer, composites windows, dispatches input events | Not started |
 | 38 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
 | 39 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
@@ -489,6 +490,38 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
+## Phase 36 — Forward Constraints
+
+**Phase 36 status: 🔶 Code complete, untested. Boot oracle hangs on x86 box (VNET RX noise in serial output).**
+
+**What was implemented:**
+- USB HID mouse driver (`kernel/drivers/usb_mouse.c`): 128-entry ring buffer, 3-byte boot protocol parser, blocking read via sched_block/sched_wake
+- xHCI device type detection: GET_DESCRIPTOR(Configuration) during enumeration, bInterfaceProtocol check (1=kbd, 2=mouse), SET_PROTOCOL(Boot)
+- USB hotplug: Port Status Change TRB handler in xhci_poll(), per-slot port tracking, silent disconnect
+- `/dev/mouse` VFS device: registered in initrd.c, stat in vfs.c, reads mouse_event_t structs (7 bytes packed)
+- mouse_test binary + test_mouse.py: QEMU q35 with usb-mouse, monitor event injection
+- Installer password hashing: crypt() with SHA-512 ($6$), /dev/urandom salt, termios asterisk echo, -lcrypt
+- boot.txt cap count fixed: 10→9 (was stale since Phase 35b)
+
+**Known issues:**
+1. **Boot oracle hangs/fails.** `make test` on x86 box produces VNET RX noise (`[VNET] RX pkt`) in serial output that contaminates the diff. This is a pre-existing issue with virtio-net packets arriving during boot. The boot oracle uses `-machine pc` (no virtio-net) so this should not happen — investigate whether the Makefile test target changed.
+
+2. **No cursor rendering.** Kernel delivers raw deltas only. Cursor position tracking and rendering are Lumen's job (Phase 37).
+
+3. **Single mouse only.** First boot-protocol mouse found is used. Additional mice ignored.
+
+4. **No scroll wheel.** Boot protocol is 3 bytes (buttons + dx + dy). Extended HID reports with scroll require report descriptor parsing.
+
+5. **No PS/2 mouse.** Only USB HID via xHCI.
+
+6. **Hotplug has no debounce.** Rapid connect/disconnect could flood the event ring.
+
+7. **`crypt()` is slow.** SHA-512 ~50ms on real hardware. Fine for installer, not for high-frequency auth.
+
+8. **Control transfer helper reuses s_hid_buf.** The GET_DESCRIPTOR response goes into the same 4KB page later used for interrupt IN reports. Safe because detection happens before first interrupt IN is scheduled.
+
+---
+
 ## Phase 27 — Forward Constraints
 
 **Phase 27 status: 🔶 Partial. Infrastructure done; curl HTTPS end-to-end fails.**
@@ -506,7 +539,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 35b complete. Bare-metal working: UEFI EFI boot with custom GRUB background, ACPI power button shutdown, framebuffer GUI mockup (Terminus 10x20), password asterisks, DHCP oneshot. GUI architecture defined: Lumen (compositor) + Glyph (libglyph.so) + Citadel (desktop shell) + Bastion (display manager). Next: USB HID mouse → Lumen → Glyph → Citadel.*
+*Last updated: 2026-03-28 — Phase 36 code complete (untested). USB HID mouse driver, /dev/mouse VFS, xHCI device type detection + hotplug, installer crypt() password hashing. Boot oracle hanging on x86 box (VNET noise). Next: Phase 37 Lumen compositor.*
 
 ---
 
