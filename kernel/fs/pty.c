@@ -5,6 +5,7 @@
 #include "sched.h"
 #include "proc.h"
 #include "signal.h"
+#include "arch.h"
 #include "../core/spinlock.h"
 #include <stdint.h>
 
@@ -126,7 +127,7 @@ pty_slave_read_raw(tty_t *tty, char *out, int *interrupted)
 			return 0;
 		}
 		/* Block: enable interrupts, halt until next IRQ, then disable. */
-		__asm__ volatile("sti; hlt; cli" ::: "memory");
+		arch_wait_for_irq();
 	}
 }
 
@@ -184,7 +185,7 @@ master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
 		if (signal_check_pending())
 			return -4; /* EINTR */
 		/* Block until slave writes or closes */
-		__asm__ volatile("sti; hlt; cli" ::: "memory");
+		arch_wait_for_irq();
 	}
 
 	/* Copy out as much as requested or available */

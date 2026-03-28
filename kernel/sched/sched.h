@@ -52,9 +52,7 @@ void sched_exit(void);
 static inline aegis_task_t *
 sched_current(void)
 {
-    aegis_task_t *t;
-    __asm__ volatile("movq %%gs:16, %0" : "=r"(t));
-    return t;
+    return percpu_current();
 }
 
 /* sched_block — mark current task TASK_BLOCKED and yield.

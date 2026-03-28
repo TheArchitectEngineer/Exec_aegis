@@ -8,6 +8,7 @@
  */
 #include "usb_mouse.h"
 #include "../sched/sched.h"
+#include "arch.h"
 #include <stddef.h>
 
 #define MOUSE_BUF_SIZE 128
@@ -73,11 +74,11 @@ mouse_inject(uint8_t buttons, int16_t dx, int16_t dy)
 void
 mouse_read_blocking(mouse_event_t *out)
 {
-    __asm__ volatile("sti");
+    arch_enable_irq();
     while (!mouse_poll(out)) {
         s_waiter = sched_current();
         sched_block();
         /* Resumes here after sched_wake() from buf_push() */
     }
-    __asm__ volatile("cli");
+    arch_disable_irq();
 }
