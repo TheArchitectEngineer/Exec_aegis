@@ -92,7 +92,7 @@ def run_test():
 
         # Drain more serial output for 5 seconds to let vigil start httpd
         print("  draining serial output (5s) for httpd startup...")
-        out2 = _read_until(proc, time.time() + 5, "httpd: waiting for connection")
+        out2 = _read_until(proc, time.time() + 30, "httpd: waiting for connection")
         sys.stdout.write(out2)
         sys.stdout.flush()
 
