@@ -301,6 +301,30 @@ static inline void arch_wmb(void) { __asm__ volatile("sfence" ::: "memory"); }
 static inline void arch_enable_irq(void)  { __asm__ volatile("sti" ::: "memory"); }
 static inline void arch_disable_irq(void) { __asm__ volatile("cli" ::: "memory"); }
 
+/* Save interrupt flags and disable interrupts.
+ * Returns the previous RFLAGS value (for restoring later). */
+static inline unsigned long
+arch_irq_save(void)
+{
+    unsigned long flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");
+    return flags;
+}
+
+/* Restore interrupt flags to a previously saved state. */
+static inline void
+arch_irq_restore(unsigned long flags)
+{
+    __asm__ volatile("push %0; popfq" : : "r"(flags) : "memory");
+}
+
+/* Hint to the CPU that we are in a spin loop. */
+static inline void
+arch_pause(void)
+{
+    __asm__ volatile("pause");
+}
+
 /* arch_halt — halt CPU until next interrupt. Caller must ensure interrupts
  * are enabled (arch_enable_irq) before calling, or CPU will hang forever. */
 static inline void arch_halt(void) { __asm__ volatile("hlt" ::: "memory"); }
