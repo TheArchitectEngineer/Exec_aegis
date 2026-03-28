@@ -19,7 +19,7 @@ timeout 10s qemu-system-x86_64 \
     -nodefaults \
     -serial stdio \
     -no-reboot \
-    -m 2G \
+    -m 256M \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
     > "$RAW" 2>/dev/null || true
 
