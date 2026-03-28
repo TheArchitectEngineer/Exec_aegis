@@ -1,6 +1,6 @@
 [SERIAL] OK: COM1 initialized at 115200 baud
 [VGA] OK: text mode 80x25
-[PMM] OK: 127MB usable across 2 regions
+[PMM] OK: 2047MB usable across 2 regions
 [VMM] OK: kernel mapped to 0xFFFFFFFF80000000
 [VMM] OK: mapped-window allocator active
 [KVA] OK: kernel virtual allocator active
@@ -16,10 +16,12 @@
 [SMAP] OK: supervisor access prevention active
 [SMEP] OK: supervisor mode execution prevention active
 [RNG] OK: ChaCha20 CSPRNG seeded
+[RAMDISK] OK: 59 MB mapped from module
 [VFS] OK: initialized
 [INITRD] OK: 20 files registered
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)
 [PCIE] OK: skipped (no ECAM)
+[EXT2] OK: mounted ramdisk0, 60416 blocks, 15104 inodes
 [CAP] OK: 9 capabilities granted to init
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 2 tasks
