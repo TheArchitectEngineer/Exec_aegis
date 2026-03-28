@@ -113,7 +113,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */
-    smp_start_aps();        /* wake APs via INIT-SIPI-SIPI — [SMP] OK       */
+    /* smp_start_aps(); — disabled to isolate bare-metal init crash */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */
