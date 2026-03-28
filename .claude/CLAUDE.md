@@ -255,6 +255,11 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Dynamic linking (Phase 33) | ✅ | PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; musl libc.so; vigil+login static; test_dynlink.py PASS |
 | Writable root (Phase 34) | ✅ | ext2-first VFS; rootfs.img in ISO as multiboot2 module; RAM blkdev; Aegis GPT GUIDs; 0-1GB identity map; test_integrated 15/16 PASS |
 | Installer (Phase 35) | ✅ | Text-mode installer; GPT+GRUB+rootfs copy; sys_blkdev_io/list/gpt_rescan; CAP_KIND_DISK_ADMIN; test_installer PASS |
+| UEFI boot + EFI GRUB | ✅ | OVMF-compatible; EFI System Partition; BOOTX64.EFI via grub-mkimage x86_64-efi; custom background + unicode font |
+| ACPI power button | ✅ | FADT parsing; SCI interrupt handler; DSDT _S5_ bytecode scan; short-press → ext2_sync → S5 power off |
+| Framebuffer access | ✅ | sys_fb_map (513) maps FB into userspace; fb_test GUI mockup with Terminus 10x20; native resolution |
+| Password asterisks | ✅ | login echoes * for password input; raw termios mode |
+| DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
 
 ### Known deviations
 
@@ -324,14 +329,18 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 32 | **TTY/PTY layer** — proper termios; pseudo-terminals; job control (tcsetpgrp/SIGTSTP/SIGCONT); session leaders | ✅ Done |
 | 33 | **Dynamic linking** — ELF interpreter (musl ldso); PT_INTERP+ET_DYN; MAP_FIXED+file-backed mmap; most binaries dynamic | ✅ Done |
 | 34 | **Writable root** — ext2-first VFS; embedded rootfs.img in ISO as multiboot2 module; RAM blkdev for live boot; Aegis GPT GUID family; NVMe-fail warning | ✅ Done |
-| 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install GRUB | ✅ Done |
-| 36 | Framebuffer / VESA | Not started |
-| 37 | AMD Display Core | Not started |
-| 38 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
-| 39 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated | Not started |
-| 40 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
-| 41 | Release | Not started |
-| 42 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
+| 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install EFI GRUB | ✅ Done |
+| 35b | **Bare-metal polish** — UEFI EFI boot, ACPI power button, gfxmode=auto, GRUB background, password asterisks | ✅ Done |
+| 36 | **USB HID mouse** — boot protocol mouse via xHCI; cursor tracking; /dev/mouse or sys_mouse_read | Not started |
+| 37 | **Lumen** — display server/compositor; owns framebuffer, composites windows, dispatches input events | Not started |
+| 38 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
+| 39 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
+| 40 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
+| 41 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated | Not started |
+| 42 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
+| 43 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
+| 44 | Release | Not started |
+| 45 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 ---
 
@@ -387,6 +396,67 @@ Volume labels (`mke2fs -L aegis-root`) are mutable and checked after reading the
 
 ---
 
+## Aegis GUI Architecture — Lumen/Glyph/Citadel
+
+**This section is permanent project documentation. Do not condense, summarize, or remove during cleanup.**
+
+Aegis has its own native GUI stack — no X11, no Wayland, no bloat. The framebuffer is mapped directly into userspace via `sys_fb_map` (syscall 513). The GUI stack is built from scratch with clean, simple components.
+
+### Components
+
+| Codename | Role | Linux Equivalent | Description |
+|----------|------|-----------------|-------------|
+| **Lumen** | Display server + compositor | Wayland compositor | Owns the framebuffer. Composites client windows. Dispatches keyboard/mouse events to the focused window. Renders the cursor. Single process, no network transparency. |
+| **Glyph** | Widget toolkit library | GTK/Qt | `libglyph.so` — shared library that apps link against. Provides buttons, labels, text input, window chrome, layout. Apps `#include <glyph.h>`. Dynamically linked. |
+| **Citadel** | Desktop shell | GNOME Shell / KDE Plasma | Taskbar, application launcher, desktop icons, clock, system tray. First real Glyph application. |
+| **Bastion** | Display manager | GDM / SDDM | Graphical login screen. Replaces text-mode login. Future work. |
+
+### Architecture (v0.1)
+
+In v0.1, Lumen + Citadel run as a single process that owns the framebuffer. Glyph is a shared library. The window manager is built into Lumen (no separate WM process).
+
+```
+┌─────────────────────────────────────────────┐
+│                 Framebuffer                  │
+│            (mapped via sys_fb_map)           │
+├─────────────────────────────────────────────┤
+│              Lumen (compositor)              │
+│  - owns FB mapping                          │
+│  - keyboard/mouse event dispatch            │
+│  - window management (built-in v0.1)        │
+│  - cursor rendering                         │
+├──────────┬──────────┬───────────────────────┤
+│ Citadel  │ App 1    │ App 2    ...          │
+│ (shell)  │          │                       │
+├──────────┴──────────┴───────────────────────┤
+│           libglyph.so (widgets)             │
+│  buttons, labels, text, windows, layout     │
+└─────────────────────────────────────────────┘
+```
+
+### Font
+
+The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
+- Terminal + GUI: `ter-u20n` (10×20) — 96 columns × 54 rows at 1080p
+- Embedded as C array in userspace binaries via header file
+- Same font should be used for the kernel framebuffer terminal (replace VGA 8×16)
+
+### Input
+
+- **Keyboard:** USB HID boot protocol via xHCI (already working)
+- **Mouse:** USB HID boot protocol via xHCI (Phase 36 — 3-byte reports: buttons + X/Y deltas)
+- **PS/2:** Keyboard already working; PS/2 mouse support is future work
+
+### Design Principles
+
+1. **No protocol overhead.** Lumen is not a network-transparent display server. It's a local compositor that draws directly to the framebuffer.
+2. **One toolkit.** Glyph is THE widget library. No competing toolkits, no abstraction layers.
+3. **Dynamically linked.** `libglyph.so` is a shared library. Apps link against it at build time and load it at runtime via the dynamic linker.
+4. **Developer-friendly.** `#include <glyph.h>`, link with `-lglyph`, get windows and widgets. Simple C API.
+5. **Capability-gated.** Framebuffer access requires appropriate capabilities. Random processes cannot draw to the screen.
+
+---
+
 **RTL8125 testing note:** The machine has RTL8125B (ASUS, PCI 0a:00.0, IOMMU group 18) managed by host `r8169`. WiFi is MT7921K (0b:00.0). Do NOT test RTL8125 until WiFi is confirmed working — you will lose remote access.
 
 **Test hardware:**
@@ -394,6 +464,28 @@ Volume labels (`mke2fs -L aegis-root`) are mutable and checked after reading the
 - **Test machine A:** Ryzen 7 6800H machine (TBD), dual RTL8168 (10ec:8168, PCI 02:00.0 and 03:00.0), Intel AX200 Wi-Fi, Samsung NVMe (144d:a80c, PCI 01:00.0) — for RTL8168 driver testing
 - **Test machine B (ThinkPad X13 Gen 1):** Ryzen 7 Pro 4750U (Zen 2 / Renoir)
 - **Shared panic (both test machines A and B) — FIXED 2026-03-24:** `[PANIC] corrupt ring-3 iretq frame vec=32 ss=0x18 rsp=0x7ffffffe7d0` after `[SHELL] Aegis shell ready`. Root cause: AMD CPUs in 64-bit long mode strip RPL bits from SS (pushing 0x18 instead of 0x1B on interrupt entry) since SS is unused for addressing in 64-bit mode. Two-part fix: (1) relaxed panic check from `ss != 0x1B` to `(ss & ~3) != 0x18`; (2) added SS RPL normalization in `isr_dispatch` — `if (s->cs == 0x23) s->ss |= 3;` forces RPL=3 before iretq so AMD machines don't #GP. **AMD 64-bit behavior: SS RPL bits are not maintained; expect ss=0x18 on interrupt from ring-3 on AMD, ss=0x1B on Intel/QEMU.**
+
+---
+
+## Phase 35b — Forward Constraints
+
+**Phase 35b status: ✅ complete. Bare-metal working on ThinkPad X13.**
+
+1. **UEFI only for installed boot.** No BIOS/CSM boot from NVMe (SeaBIOS lacks NVMe INT 13h). Live ISO still boots via legacy BIOS (grub-mkrescue handles both).
+
+2. **ACPI power button has no `_PTS`/`_GTS` calls.** No AML interpreter — we skip firmware preparation methods before S5. Works on QEMU and ThinkPad. Some hardware may leave EC in a bad state.
+
+3. **`_S5_` SLP_TYPa found by DSDT bytecode scan.** Not a full AML parser — scans for the literal "_S5_" string. Works on all tested platforms. Exotic DSDT layouts could fail.
+
+4. **GRUB background only on installed system.** The live ISO uses grub-mkrescue's default theme. Installed ESP has custom bg.jpg + light-green font.
+
+5. **fb_test owns framebuffer exclusively during display.** Other processes' printk output can still overwrite it. A proper solution requires Lumen (compositor) to own the FB exclusively and suppress kernel FB writes.
+
+6. **sys_fb_map maps FB physical pages into user VA.** On process exit, pmm_free_page silently skips MMIO addresses. The mapping is not revoked — a second call to sys_fb_map creates a duplicate mapping.
+
+7. **DHCP is oneshot.** On systems WITH a NIC, DHCP acquires a lease and stays running for renewal. If the daemon crashes, vigil does NOT restart it. Manual restart: `dhcp &`.
+
+8. **AUTH capability in execve baseline.** Every exec'd binary can open /etc/shadow. Phase 40 security audit should restrict to login + installer only.
 
 ---
 
@@ -414,7 +506,7 @@ Volume labels (`mke2fs -L aegis-root`) are mutable and checked after reading the
 
 ---
 
-*Last updated: 2026-03-28 — Phase 35 complete. Installer: text-mode TUI, GPT creation with Aegis GUIDs, rootfs copy from ramdisk to NVMe, GRUB installation (BIOS+GPT), sys_blkdev_io/list/gpt_rescan syscalls, CAP_KIND_DISK_ADMIN. test_installer PASS (two-boot: install + verify NVMe ext2).*
+*Last updated: 2026-03-28 — Phase 35b complete. Bare-metal working: UEFI EFI boot with custom GRUB background, ACPI power button shutdown, framebuffer GUI mockup (Terminus 10x20), password asterisks, DHCP oneshot. GUI architecture defined: Lumen (compositor) + Glyph (libglyph.so) + Citadel (desktop shell) + Bastion (display manager). Next: USB HID mouse → Lumen → Glyph → Citadel.*
 
 ---
 
