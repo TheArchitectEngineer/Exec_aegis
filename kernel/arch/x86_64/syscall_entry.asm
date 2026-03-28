@@ -192,11 +192,10 @@ syscall_entry:
 proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — flushes TLB
-    ; Diagnostic: force stack read AFTER CR3 switch to test page walk.
-    ; If the kernel stack is not mapped in the user PML4, this faults
-    ; BEFORE iretq, giving a clearer #PF with CR2 = kernel stack VA.
-    mov  rbx, [rsp]   ; read RIP from iretq frame — triggers page walk
-    swapgs            ; switch to user GS.base before entering ring 3
+    ; SWAPGS removed — was causing iretq to read RIP=0 on AMD Zen 2.
+    ; The ISR entry path (isr_common_stub) handles SWAPGS on the return
+    ; from the first interrupt, and syscall_entry handles it on SYSCALL.
+    ; proc_enter_user only runs once per process (first ring-3 entry).
     iretq
 
 ; fork_child_return was removed in Phase 15 fix.
