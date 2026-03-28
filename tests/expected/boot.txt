@@ -17,6 +17,7 @@
 [SMEP] OK: supervisor mode execution prevention active
 [RNG] OK: ChaCha20 CSPRNG seeded
 [RAMDISK] OK: 59 MB mapped from module
+[RAMDISK] OK: 32 MB ESP mapped from module 2
 [VFS] OK: initialized
 [INITRD] OK: 20 files registered
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)
