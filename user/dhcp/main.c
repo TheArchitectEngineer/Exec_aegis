@@ -387,6 +387,14 @@ try_renew(int fd)
 int
 main(void)
 {
+    /* Probe for a network interface before doing anything else */
+    int probe = socket(AF_INET, SOCK_DGRAM, 0);
+    if (probe < 0) {
+        dprintf(1, "[DHCP] no network interface available, exiting\n");
+        return 0;
+    }
+    close(probe);
+
     /* Read MAC via sys_netcfg op=1 */
     netcfg_info_t info;
     memset(&info, 0, sizeof(info));
