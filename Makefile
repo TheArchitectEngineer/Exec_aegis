@@ -386,21 +386,27 @@ user/dynlink_test/dynlink_test.elf: user/dynlink_test/main.c build/musl-dynamic/
 user/installer/installer.elf: user/installer/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/installer
 
-# ── GRUB boot images for installer ─────────────────────────────────────────
-# boot.img: MBR bootstrap (440 bytes) — loads core.img from BIOS boot partition
-# core.img: main GRUB binary with ext2 + multiboot2 support
-GRUB_BOOT = $(BUILD)/grub-boot.img
-GRUB_CORE = $(BUILD)/grub-core.img
+# ── EFI GRUB + ESP image for installer ─────────────────────────────────────
+# BOOTX64.EFI: UEFI GRUB binary (x86_64-efi) with ext2 + multiboot2 support
+# esp.img: pre-built FAT16 EFI System Partition image with BOOTX64.EFI + grub.cfg
+GRUB_EFI = $(BUILD)/BOOTX64.EFI
+ESP_IMG  = $(BUILD)/esp.img
 
-$(GRUB_BOOT):
+$(GRUB_EFI):
 	@mkdir -p $(BUILD)
-	cp /usr/lib/grub/i386-pc/boot.img $(GRUB_BOOT)
+	grub-mkimage -O x86_64-efi -o $(GRUB_EFI) \
+	    -p /EFI/BOOT \
+	    part_gpt ext2 fat normal multiboot2 boot configfile
 
-$(GRUB_CORE):
+$(ESP_IMG): $(GRUB_EFI)
 	@mkdir -p $(BUILD)
-	grub-mkimage -O i386-pc -o $(GRUB_CORE) \
-	    -p '(hd0,gpt2)/boot/grub' \
-	    biosdisk part_gpt ext2 normal multiboot2 boot configfile
+	dd if=/dev/zero of=$(ESP_IMG) bs=512 count=65536 2>/dev/null
+	/sbin/mkfs.fat -F 16 $(ESP_IMG) >/dev/null 2>&1
+	mmd -i $(ESP_IMG) ::EFI
+	mmd -i $(ESP_IMG) ::EFI/BOOT
+	mcopy -i $(ESP_IMG) $(GRUB_EFI) ::EFI/BOOT/BOOTX64.EFI
+	@printf 'set timeout=3\nset default=0\ninsmod all_video\ninsmod gfxterm\nset gfxmode=1024x768x32,auto\nterminal_input console\nterminal_output gfxterm\n\nmenuentry "Aegis" {\n    set gfxpayload=keep\n    set root=(hd0,gpt2)\n    multiboot2 /boot/aegis.elf\n    boot\n}\n' > $(BUILD)/grub-installed.cfg
+	mcopy -i $(ESP_IMG) $(BUILD)/grub-installed.cfg ::EFI/BOOT/grub.cfg
 
 # ── Final link ────────────────────────────────────────────────────────────────
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
@@ -449,7 +455,7 @@ rootfs: $(ROOTFS)
 disk: $(DISK)
 
 # ── rootfs.img: standalone ext2 filesystem image (embedded in ISO as module) ──
-$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(GRUB_BOOT) $(GRUB_CORE)
+$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(ESP_IMG)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
 	/sbin/mke2fs -t ext2 -F -L aegis-root $(ROOTFS)
@@ -511,10 +517,10 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(GRUB_BOOT) $(GRUB_CORE)
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	# Kernel binary + GRUB boot images for installer
+	# Kernel binary + EFI ESP image for installer
 	printf 'mkdir /boot\nmkdir /boot/grub\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	printf 'write $(BUILD)/aegis.elf /boot/aegis.elf\nwrite $(GRUB_BOOT) /boot/grub/boot.img\nwrite $(GRUB_CORE) /boot/grub/core.img\n' \
+	printf 'write $(BUILD)/aegis.elf /boot/aegis.elf\nwrite $(ESP_IMG) /boot/esp.img\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	@rm -f /tmp/aegis-motd
 	@echo "Root filesystem image created: $(ROOTFS)"

@@ -1,7 +1,16 @@
 /* user/installer/main.c — Aegis text-mode installer
  *
- * Partitions NVMe, copies rootfs from ramdisk, installs GRUB.
- * Requires CAP_KIND_DISK_ADMIN (granted in execve baseline).
+ * Partitions NVMe with UEFI GPT, copies rootfs from ramdisk, installs
+ * EFI GRUB bootloader, sets up user account. Requires CAP_KIND_DISK_ADMIN.
+ *
+ * Partition layout:
+ *   1. EFI System Partition (32 MB, FAT — pre-built esp.img from rootfs)
+ *   2. Aegis Root (rest of disk, ext2 — copied from ramdisk)
+ *
+ * The ESP image (containing /EFI/BOOT/BOOTX64.EFI + grub.cfg) is pre-built
+ * at make time and embedded in rootfs.img at /boot/esp.img. The installer
+ * copies it block-for-block to partition 1. No FAT formatting needed at
+ * runtime.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -66,130 +75,191 @@ static unsigned int crc32(const void *data, unsigned int len)
 
 /* ── GPT structures ────────────────────────────────────────────────── */
 
-/* Protective MBR — one partition spanning the disk */
 static void write_protective_mbr(unsigned char *mbr, unsigned long long disk_sectors)
 {
     memset(mbr, 0, 512);
-    /* Partition entry 1 at offset 446 */
-    mbr[446] = 0x00;        /* status: not bootable */
-    mbr[447] = 0x00; mbr[448] = 0x02; mbr[449] = 0x00;  /* CHS start */
-    mbr[450] = 0xEE;        /* type: GPT protective */
-    mbr[451] = 0xFF; mbr[452] = 0xFF; mbr[453] = 0xFF;  /* CHS end */
-    /* LBA start = 1 */
+    mbr[446] = 0x00;
+    mbr[447] = 0x00; mbr[448] = 0x02; mbr[449] = 0x00;
+    mbr[450] = 0xEE;
+    mbr[451] = 0xFF; mbr[452] = 0xFF; mbr[453] = 0xFF;
     mbr[454] = 0x01; mbr[455] = 0; mbr[456] = 0; mbr[457] = 0;
-    /* LBA size — cap at 0xFFFFFFFF */
     unsigned int sz = (disk_sectors - 1 > 0xFFFFFFFFULL)
                       ? 0xFFFFFFFF : (unsigned int)(disk_sectors - 1);
     memcpy(&mbr[458], &sz, 4);
-    /* Boot signature */
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
 }
 
+/* GUID: C12A7328-F81F-11D2-BA4B-00A0C93EC93B (EFI System Partition) */
+static const unsigned char ESP_GUID[16] = {
+    0x28,0x73,0x2A,0xC1, 0x1F,0xF8, 0xD2,0x11,
+    0xBA,0x4B, 0x00,0xA0,0xC9,0x3E,0xC9,0x3B
+};
 /* GUID: A3618F24-0C76-4B3D-0001-000000000000 (Aegis root) */
 static const unsigned char AEGIS_ROOT_GUID[16] = {
     0x24,0x8F,0x61,0xA3, 0x76,0x0C, 0x3D,0x4B,
     0x00,0x01, 0x00,0x00,0x00,0x00,0x00,0x00
 };
-/* GUID: 21686148-6449-6E6F-744E-656564454649 (BIOS Boot) */
-static const unsigned char BIOS_BOOT_GUID[16] = {
-    0x48,0x61,0x68,0x21, 0x49,0x64, 0x6F,0x6E,
-    0x74,0x4E, 0x65,0x65,0x64,0x45,0x46,0x49
-};
 
-/* Write GPT to disk. Returns 0 on success. */
+/* ESP: 32 MB = 65536 sectors starting at LBA 2048 */
+#define ESP_START   2048ULL
+#define ESP_SECTORS 65536ULL
+#define ESP_END     (ESP_START + ESP_SECTORS - 1)
+/* Root: starts after ESP */
+#define ROOT_START  (ESP_END + 1)
+
 static int write_gpt(const char *devname, unsigned long long disk_blocks)
 {
     static unsigned char sector[512];
-    static unsigned char entries[128 * 128];  /* 128 entries × 128 bytes = 16KB */
+    static unsigned char entries[128 * 128];
     unsigned long long last_lba = disk_blocks - 1;
+    unsigned long long root_end = last_lba - 33;
 
-    /* Partition 1: BIOS Boot — LBA 34 to 2047 (1 MB) */
-    unsigned long long p1_start = 34;
-    unsigned long long p1_end   = 2047;
+    if (root_end <= ROOT_START) {
+        printf("ERROR: disk too small (need >%llu sectors)\n", ROOT_START + 34);
+        return -1;
+    }
 
-    /* Partition 2: Aegis Root — LBA 2048 to last_lba - 33 */
-    unsigned long long p2_start = 2048;
-    unsigned long long p2_end   = last_lba - 33;
-
-    /* ── Write protective MBR (LBA 0) ── */
     write_protective_mbr(sector, disk_blocks);
     if (blkdev_io(devname, 0, 1, sector, 1) < 0) return -1;
 
-    /* ── Build partition entries ── */
     memset(entries, 0, sizeof(entries));
 
-    /* Entry 0: BIOS Boot */
-    memcpy(&entries[0], BIOS_BOOT_GUID, 16);         /* type GUID */
-    /* Unique GUID: just use a fixed value for now */
+    /* Entry 0: EFI System Partition */
+    memcpy(&entries[0], ESP_GUID, 16);
     entries[16] = 0x01; entries[17] = 0x02; entries[18] = 0x03; entries[19] = 0x04;
-    memcpy(&entries[32], &p1_start, 8);               /* start LBA */
-    memcpy(&entries[40], &p1_end, 8);                 /* end LBA */
+    {
+        unsigned long long s = ESP_START, e = ESP_END;
+        memcpy(&entries[32], &s, 8);
+        memcpy(&entries[40], &e, 8);
+    }
 
     /* Entry 1: Aegis Root */
-    memcpy(&entries[128], AEGIS_ROOT_GUID, 16);       /* type GUID */
+    memcpy(&entries[128], AEGIS_ROOT_GUID, 16);
     entries[128+16] = 0x05; entries[128+17] = 0x06;
     entries[128+18] = 0x07; entries[128+19] = 0x08;
-    memcpy(&entries[128+32], &p2_start, 8);            /* start LBA */
-    memcpy(&entries[128+40], &p2_end, 8);              /* end LBA */
+    {
+        unsigned long long s = ROOT_START, e = root_end;
+        memcpy(&entries[128+32], &s, 8);
+        memcpy(&entries[128+40], &e, 8);
+    }
 
     unsigned int entry_crc = crc32(entries, 128 * 128);
 
-    /* ── Build primary GPT header (LBA 1) ── */
+    /* Primary GPT header (LBA 1) */
     memset(sector, 0, 512);
-    memcpy(sector, "EFI PART", 8);                    /* signature */
-    unsigned int rev = 0x00010000; memcpy(&sector[8], &rev, 4);  /* revision */
-    unsigned int hsz = 92; memcpy(&sector[12], &hsz, 4);         /* header size */
-    /* header CRC at offset 16 — fill later */
-    unsigned long long my_lba = 1; memcpy(&sector[24], &my_lba, 8);
-    unsigned long long alt_lba = last_lba; memcpy(&sector[32], &alt_lba, 8);
-    unsigned long long first_usable = 34; memcpy(&sector[40], &first_usable, 8);
-    unsigned long long last_usable = last_lba - 33; memcpy(&sector[48], &last_usable, 8);
-    /* disk GUID at offset 56 — 16 bytes, fixed */
+    memcpy(sector, "EFI PART", 8);
+    unsigned int rev = 0x00010000; memcpy(&sector[8], &rev, 4);
+    unsigned int hsz = 92; memcpy(&sector[12], &hsz, 4);
+    {
+        unsigned long long v;
+        v = 1; memcpy(&sector[24], &v, 8);           /* my_lba */
+        v = last_lba; memcpy(&sector[32], &v, 8);    /* alt_lba */
+        v = 34; memcpy(&sector[40], &v, 8);          /* first_usable */
+        v = last_lba - 33; memcpy(&sector[48], &v, 8); /* last_usable */
+    }
     sector[56] = 0xAE; sector[57] = 0x61; sector[58] = 0x15; sector[59] = 0x00;
-    unsigned long long entry_lba = 2; memcpy(&sector[72], &entry_lba, 8);
+    {
+        unsigned long long v = 2;
+        memcpy(&sector[72], &v, 8);                   /* partition_entry_lba */
+    }
     unsigned int nentries = 128; memcpy(&sector[80], &nentries, 4);
     unsigned int entry_sz = 128; memcpy(&sector[84], &entry_sz, 4);
-    memcpy(&sector[88], &entry_crc, 4);               /* partition array CRC */
-    /* Compute header CRC */
+    memcpy(&sector[88], &entry_crc, 4);
     unsigned int hcrc = crc32(sector, 92);
     memcpy(&sector[16], &hcrc, 4);
-
     if (blkdev_io(devname, 1, 1, sector, 1) < 0) return -1;
 
-    /* ── Write partition entries (LBAs 2-33) ── */
+    /* Write partition entries (LBAs 2-33) */
     unsigned long long lba;
-    for (lba = 0; lba < 32; lba++) {
-        if (blkdev_io(devname, 2 + lba, 1, entries + lba * 512, 1) < 0)
-            return -1;
-    }
+    for (lba = 0; lba < 32; lba++)
+        if (blkdev_io(devname, 2 + lba, 1, entries + lba * 512, 1) < 0) return -1;
 
-    /* ── Backup partition entries (last 32 LBAs before backup header) ── */
-    for (lba = 0; lba < 32; lba++) {
-        if (blkdev_io(devname, last_lba - 32 + lba, 1, entries + lba * 512, 1) < 0)
-            return -1;
-    }
+    /* Backup entries + header */
+    for (lba = 0; lba < 32; lba++)
+        if (blkdev_io(devname, last_lba - 32 + lba, 1, entries + lba * 512, 1) < 0) return -1;
 
-    /* ── Backup GPT header (last LBA) ── */
     memset(sector, 0, 512);
     memcpy(sector, "EFI PART", 8);
     memcpy(&sector[8], &rev, 4);
     memcpy(&sector[12], &hsz, 4);
-    my_lba = last_lba; memcpy(&sector[24], &my_lba, 8);
-    alt_lba = 1; memcpy(&sector[32], &alt_lba, 8);
-    memcpy(&sector[40], &first_usable, 8);
-    memcpy(&sector[48], &last_usable, 8);
+    {
+        unsigned long long v;
+        v = last_lba; memcpy(&sector[24], &v, 8);
+        v = 1; memcpy(&sector[32], &v, 8);
+        v = 34; memcpy(&sector[40], &v, 8);
+        v = last_lba - 33; memcpy(&sector[48], &v, 8);
+    }
     sector[56] = 0xAE; sector[57] = 0x61; sector[58] = 0x15; sector[59] = 0x00;
-    entry_lba = last_lba - 32; memcpy(&sector[72], &entry_lba, 8);
+    {
+        unsigned long long v = last_lba - 32;
+        memcpy(&sector[72], &v, 8);
+    }
     memcpy(&sector[80], &nentries, 4);
     memcpy(&sector[84], &entry_sz, 4);
     memcpy(&sector[88], &entry_crc, 4);
-    memset(&sector[16], 0, 4);  /* zero header CRC field before computing */
+    memset(&sector[16], 0, 4);
     hcrc = crc32(sector, 92);
     memcpy(&sector[16], &hcrc, 4);
-
     if (blkdev_io(devname, last_lba, 1, sector, 1) < 0) return -1;
 
+    return 0;
+}
+
+/* ── Block copy helper ─────────────────────────────────────────────── */
+
+static int copy_blocks(const char *src_dev, const char *dst_dev,
+                       unsigned long long count, const char *label)
+{
+    static unsigned char buf[4096];
+    unsigned long long lba;
+    unsigned long long last_pct = 0;
+    for (lba = 0; lba < count; lba += 8) {
+        unsigned long long chunk = count - lba;
+        if (chunk > 8) chunk = 8;
+        if (blkdev_io(src_dev, lba, chunk, buf, 0) < 0) return -1;
+        if (blkdev_io(dst_dev, lba, chunk, buf, 1) < 0) return -1;
+        unsigned long long pct = (lba + chunk) * 100 / count;
+        if (pct != last_pct && pct % 10 == 0) {
+            printf("  %s: %llu%%\n", label, pct);
+            last_pct = pct;
+        }
+    }
+    return 0;
+}
+
+/* ── ESP installation ──────────────────────────────────────────────── */
+
+static int install_esp(const char *devname)
+{
+    /* The pre-built ESP image is at /boot/esp.img in the live rootfs.
+     * It contains a FAT filesystem with /EFI/BOOT/BOOTX64.EFI and grub.cfg.
+     * We read it and write it block-for-block to the ESP partition.
+     *
+     * The ESP partition is NOT registered by gpt_scan (no Aegis GUID prefix),
+     * so we write directly to the parent device at the ESP's LBA offset. */
+    static unsigned char buf[4096];
+    int fd = open("/boot/esp.img", O_RDONLY);
+    if (fd < 0) {
+        printf("ERROR: cannot open /boot/esp.img\n");
+        return -1;
+    }
+
+    unsigned long long lba;
+    for (lba = 0; lba < ESP_SECTORS; lba += 8) {
+        unsigned long long chunk = ESP_SECTORS - lba;
+        if (chunk > 8) chunk = 8;
+        int n = (int)read(fd, buf, (size_t)(chunk * 512));
+        if (n <= 0) break;
+        /* Pad remaining with zeros if short read */
+        if ((unsigned long long)n < chunk * 512)
+            memset(buf + n, 0, (size_t)(chunk * 512 - (unsigned long long)n));
+        if (blkdev_io(devname, ESP_START + lba, chunk, buf, 1) < 0) {
+            close(fd);
+            return -1;
+        }
+    }
+    close(fd);
     return 0;
 }
 
@@ -197,7 +267,6 @@ static int write_gpt(const char *devname, unsigned long long disk_blocks)
 
 static int copy_rootfs(const char *dst_dev, unsigned long long dst_blocks)
 {
-    /* Find ramdisk0 size */
     blkdev_info_t devs[8];
     int n = (int)blkdev_list(devs, sizeof(devs));
     unsigned long long src_blocks = 0;
@@ -213,112 +282,19 @@ static int copy_rootfs(const char *dst_dev, unsigned long long dst_blocks)
         return -1;
     }
     if (src_blocks > dst_blocks) {
-        printf("ERROR: rootfs (%llu blocks) too large for partition (%llu blocks)\n",
+        printf("ERROR: rootfs (%llu blocks) > partition (%llu blocks)\n",
                src_blocks, dst_blocks);
         return -1;
     }
-
-    /* Copy 8 sectors at a time */
-    static unsigned char buf[4096];
-    unsigned long long lba;
-    unsigned long long total = src_blocks;
-    unsigned long long last_pct = 0;
-    for (lba = 0; lba < total; lba += 8) {
-        unsigned long long chunk = total - lba;
-        if (chunk > 8) chunk = 8;
-        if (blkdev_io("ramdisk0", lba, chunk, buf, 0) < 0) return -1;
-        if (blkdev_io(dst_dev, lba, chunk, buf, 1) < 0) return -1;
-        unsigned long long pct = (lba + chunk) * 100 / total;
-        if (pct != last_pct && pct % 10 == 0) {
-            printf("  %llu%%\n", pct);
-            last_pct = pct;
-        }
-    }
-    return 0;
-}
-
-/* ── GRUB installer ────────────────────────────────────────────────── */
-
-static int read_file(const char *path, unsigned char *buf, int maxlen)
-{
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    int total = 0;
-    while (total < maxlen) {
-        int n = (int)read(fd, buf + total, (size_t)(maxlen - total));
-        if (n <= 0) break;
-        total += n;
-    }
-    close(fd);
-    return total;
-}
-
-static int install_grub(const char *devname)
-{
-    static unsigned char boot_img[512];
-    static unsigned char core_buf[65536];  /* core.img, typically 30-60KB */
-
-    /* Read boot.img from live filesystem */
-    int boot_sz = read_file("/boot/grub/boot.img", boot_img, 512);
-    if (boot_sz < 440) {
-        printf("ERROR: cannot read /boot/grub/boot.img (%d bytes)\n", boot_sz);
-        return -1;
-    }
-
-    /* Read core.img */
-    int core_sz = read_file("/boot/grub/core.img", core_buf, (int)sizeof(core_buf));
-    if (core_sz <= 0) {
-        printf("ERROR: cannot read /boot/grub/core.img\n");
-        return -1;
-    }
-
-    /* Read current MBR (preserve GPT protective entry at offset 446) */
-    static unsigned char mbr[512];
-    if (blkdev_io(devname, 0, 1, mbr, 0) < 0) return -1;
-
-    /* Overwrite MBR bootstrap (bytes 0-439) with boot.img */
-    memcpy(mbr, boot_img, 440);
-
-    /* Write MBR back */
-    if (blkdev_io(devname, 0, 1, mbr, 1) < 0) return -1;
-
-    /* Write core.img to BIOS Boot Partition (LBAs 34-2047) */
-    unsigned long long core_sectors = ((unsigned long long)core_sz + 511) / 512;
-    unsigned long long lba;
-    for (lba = 0; lba < core_sectors; lba++) {
-        static unsigned char sector[512];
-        memset(sector, 0, 512);
-        unsigned long long off = lba * 512;
-        unsigned long long remain = (unsigned long long)core_sz - off;
-        if (remain > 512) remain = 512;
-        memcpy(sector, core_buf + off, (size_t)remain);
-        if (blkdev_io(devname, 34 + lba, 1, sector, 1) < 0) return -1;
-    }
-
-    return 0;
+    return copy_blocks("ramdisk0", dst_dev, src_blocks, "rootfs");
 }
 
 /* ── Write installed grub.cfg ──────────────────────────────────────── */
 
 static int write_grub_cfg(void)
 {
-    /* Write grub.cfg to the installed ext2 partition.
-     * After rootfs copy + gpt_rescan, the NVMe root is mounted as the active
-     * ext2. We can write to it via normal file I/O since ext2 is writable. */
     int fd = open("/boot/grub/grub.cfg", O_WRONLY | O_CREAT);
     if (fd < 0) {
-        /* The rootfs copy didn't include /boot/grub/grub.cfg with the installed
-         * config — we need to create it. But ext2 is currently the ramdisk.
-         * After the copy, the NVMe partition IS the same data as ramdisk.
-         * We need to remount... actually, ext2 is still mounted on ramdisk.
-         * Writing to /boot/grub/grub.cfg writes to the ramdisk ext2, not NVMe.
-         *
-         * The grub.cfg must be written to the NVMe partition directly via
-         * block I/O after the copy. We'll write it by modifying the ext2
-         * filesystem on the NVMe partition.
-         *
-         * Simplest approach: write the grub.cfg to the ramdisk BEFORE copying
-         * to NVMe. Then the copy includes it. */
         printf("ERROR: cannot create /boot/grub/grub.cfg\n");
         return -1;
     }
@@ -342,6 +318,100 @@ static int write_grub_cfg(void)
     return 0;
 }
 
+/* ── Strip test binaries from installed rootfs ─────────────────────── */
+
+static void strip_test_binaries(void)
+{
+    /* Remove test binaries that shouldn't be on an installed system */
+    unlink("/bin/thread_test");
+    unlink("/bin/mmap_test");
+    unlink("/bin/proc_test");
+    unlink("/bin/pty_test");
+    unlink("/bin/dynlink_test");
+}
+
+/* ── User account setup ────────────────────────────────────────────── */
+
+static int setup_user(void)
+{
+    char username[64] = "root";
+    char password[64] = "";
+    char confirm[64] = "";
+
+    printf("\n--- User Account Setup ---\n");
+    printf("Username [root]: ");
+    fflush(stdout);
+    if (fgets(username, sizeof(username), stdin) != NULL) {
+        /* Strip newline */
+        int len = (int)strlen(username);
+        if (len > 0 && username[len-1] == '\n') username[len-1] = '\0';
+        if (username[0] == '\0') strcpy(username, "root");
+    }
+
+    printf("Password: ");
+    fflush(stdout);
+    if (fgets(password, sizeof(password), stdin) == NULL || password[0] == '\n') {
+        printf("ERROR: password cannot be empty\n");
+        return -1;
+    }
+    {
+        int len = (int)strlen(password);
+        if (len > 0 && password[len-1] == '\n') password[len-1] = '\0';
+    }
+
+    printf("Confirm password: ");
+    fflush(stdout);
+    if (fgets(confirm, sizeof(confirm), stdin) == NULL) {
+        printf("ERROR: password confirmation failed\n");
+        return -1;
+    }
+    {
+        int len = (int)strlen(confirm);
+        if (len > 0 && confirm[len-1] == '\n') confirm[len-1] = '\0';
+    }
+
+    if (strcmp(password, confirm) != 0) {
+        printf("ERROR: passwords do not match\n");
+        return -1;
+    }
+
+    /* Write /etc/passwd — use the entered username, shell = /bin/oksh */
+    {
+        int fd = open("/etc/passwd", O_WRONLY | O_CREAT);
+        if (fd < 0) { printf("ERROR: cannot write /etc/passwd\n"); return -1; }
+        char line[256];
+        int n = snprintf(line, sizeof(line), "%s:x:0:0:%s:/root:/bin/oksh\n",
+                         username, username);
+        write(fd, line, (size_t)n);
+        close(fd);
+    }
+
+    /* Write /etc/shadow — store password in plaintext hash format.
+     * A real system would use SHA-512 crypt, but we don't have crypt() in
+     * musl-static. The login binary compares the shadow hash field against
+     * a SHA-512 hash. For now, write the pre-computed hash from the default
+     * rootfs (forevervigilant). A proper password hashing implementation
+     * is future work.
+     *
+     * TODO: implement SHA-512 crypt in the installer or login binary. */
+    {
+        int fd = open("/etc/shadow", O_WRONLY | O_CREAT);
+        if (fd < 0) { printf("ERROR: cannot write /etc/shadow\n"); return -1; }
+        char line[512];
+        int n = snprintf(line, sizeof(line),
+            "%s:$6$5a3b9c1d2e4f6789$fvwyIjdmyvB59hifGMRFrcwhBb4cH0.3nRy2j2LpCk."
+            "aNIFNyvYQJ36Bsl94miFbD/JHICz8O1dXoegZ0OmOg.:19000:0:99999:7:::\n",
+            username);
+        write(fd, line, (size_t)n);
+        close(fd);
+    }
+
+    printf("User '%s' configured.\n", username);
+    printf("NOTE: Custom password hashing not yet implemented.\n");
+    printf("      Default password 'forevervigilant' will be used.\n");
+    return 0;
+}
+
 /* ── Main ──────────────────────────────────────────────────────────── */
 
 int main(void)
@@ -350,7 +420,6 @@ int main(void)
     printf("This will install Aegis to your NVMe disk.\n");
     printf("WARNING: All data on the disk will be destroyed!\n\n");
 
-    /* Enumerate block devices */
     blkdev_info_t devs[8];
     int ndevs = (int)blkdev_list(devs, sizeof(devs));
     if (ndevs <= 0) {
@@ -358,12 +427,10 @@ int main(void)
         return 1;
     }
 
-    /* Find nvme0 (skip ramdisk, partitions) */
     int target = -1;
     printf("Available disks:\n");
     int i;
     for (i = 0; i < ndevs; i++) {
-        /* Skip ramdisk and partition devices (contain 'p' after a digit) */
         if (strncmp(devs[i].name, "ramdisk", 7) == 0) continue;
         if (strchr(devs[i].name, 'p') != NULL) continue;
         printf("  %s: %llu sectors (%llu MB)\n",
@@ -388,13 +455,22 @@ int main(void)
     const char *devname = devs[target].name;
     unsigned long long disk_blocks = devs[target].block_count;
 
-    /* 1. Write installed grub.cfg to ramdisk ext2 BEFORE copying */
+    /* 1. User account setup (writes to ramdisk ext2 before copy) */
+    if (setup_user() < 0) return 1;
+
+    /* 2. Write installed grub.cfg to ramdisk ext2 */
     printf("\nWriting grub.cfg... ");
     fflush(stdout);
     if (write_grub_cfg() < 0) return 1;
     printf("done\n");
 
-    /* 2. Create GPT */
+    /* 3. Strip test binaries from ramdisk ext2 */
+    printf("Stripping test binaries... ");
+    fflush(stdout);
+    strip_test_binaries();
+    printf("done\n");
+
+    /* 4. Create GPT */
     printf("Creating GPT partition table... ");
     fflush(stdout);
     if (write_gpt(devname, disk_blocks) < 0) {
@@ -402,8 +478,10 @@ int main(void)
         return 1;
     }
     printf("done\n");
+    printf("  Partition 1: EFI System (%llu MB)\n", ESP_SECTORS * 512 / (1024*1024));
+    printf("  Partition 2: Aegis Root\n");
 
-    /* 3. Rescan partitions */
+    /* 5. Rescan partitions */
     printf("Rescanning partitions... ");
     fflush(stdout);
     int nparts = (int)gpt_rescan(devname);
@@ -413,12 +491,11 @@ int main(void)
     }
     printf("done (%d partition(s))\n", nparts);
 
-    /* Find the Aegis root partition name */
+    /* Find the Aegis root partition */
     ndevs = (int)blkdev_list(devs, sizeof(devs));
     char root_part[16] = "";
     unsigned long long root_blocks = 0;
     for (i = 0; i < ndevs; i++) {
-        /* Look for devname + "p" + digit */
         if (strncmp(devs[i].name, devname, strlen(devname)) == 0 &&
             devs[i].name[strlen(devname)] == 'p') {
             strcpy(root_part, devs[i].name);
@@ -433,7 +510,7 @@ int main(void)
     printf("  Root partition: %s (%llu MB)\n",
            root_part, root_blocks * 512 / (1024*1024));
 
-    /* 4. Copy rootfs */
+    /* 6. Copy rootfs to Aegis root partition */
     printf("Copying root filesystem...\n");
     if (copy_rootfs(root_part, root_blocks) < 0) {
         printf("FAILED\n");
@@ -441,16 +518,16 @@ int main(void)
     }
     printf("  done\n");
 
-    /* 5. Install GRUB */
-    printf("Installing GRUB bootloader... ");
+    /* 7. Install EFI bootloader to ESP */
+    printf("Installing EFI bootloader... ");
     fflush(stdout);
-    if (install_grub(devname) < 0) {
+    if (install_esp(devname) < 0) {
         printf("FAILED\n");
         return 1;
     }
     printf("done\n");
 
-    /* 6. Sync */
+    /* 8. Sync */
     printf("Syncing disk... ");
     fflush(stdout);
     sync();
