@@ -246,6 +246,10 @@ sys_kill(uint64_t arg1, uint64_t arg2)
 uint64_t
 sys_setfg(uint64_t arg1)
 {
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_PROC_READ, CAP_RIGHTS_WRITE) < 0)
+        return (uint64_t)-1; /* EPERM */
     kbd_set_tty_pgrp((uint32_t)arg1);
     return 0;
 }
