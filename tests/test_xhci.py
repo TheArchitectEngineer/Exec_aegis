@@ -81,7 +81,7 @@ def run_xhci_boot():
         "-cdrom", ISO, "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
-        "-no-reboot", "-m", "128M",
+        "-no-reboot", "-m", "2G",
         "-device", "qemu-xhci",
         "-device", "usb-kbd",
         "-monitor", "unix:%s,server,nowait" % mon_path,

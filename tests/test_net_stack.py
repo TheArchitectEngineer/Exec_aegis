@@ -48,7 +48,7 @@ def main():
     cmd = [
         QEMU,
         "-machine", "q35",
-        "-m", "256M",
+        "-m", "2G",
         "-cdrom", iso_path,
         "-drive", f"file={disk_path},if=none,id=nvme0,format=raw",
         "-device", "nvme,drive=nvme0,serial=aegis0",

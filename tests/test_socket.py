@@ -68,7 +68,7 @@ def run_test():
          "-machine", "q35", "-cpu", "Broadwell",
          "-cdrom", ISO, "-boot", "order=d",
          "-display", "none", "-vga", "std", "-nodefaults",
-         "-serial", "stdio", "-no-reboot", "-m", "128M",
+         "-serial", "stdio", "-no-reboot", "-m", "2G",
          "-drive", f"file={DISK},if=none,id=nvme0",
          "-device", "nvme,drive=nvme0,serial=aegis0",
          "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",

@@ -68,7 +68,7 @@ def boot_qemu_virtio_net():
         "-cdrom", os.path.join(ROOT, ISO), "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
-        "-no-reboot", "-m", "128M",
+        "-no-reboot", "-m", "2G",
         "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",
         "-netdev", "user,id=n0",
         "-monitor", "unix:%s,server,nowait" % mon_path,

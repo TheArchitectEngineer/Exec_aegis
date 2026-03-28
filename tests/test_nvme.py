@@ -40,7 +40,7 @@ def main():
             '-device', 'nvme,drive=nvme0,serial=aegis0',
             '-display', 'none', '-vga', 'std',
             '-nodefaults', '-serial', 'stdio',
-            '-no-reboot', '-m', '128M',
+            '-no-reboot', '-m', '2G',
             '-device', 'isa-debug-exit,iobase=0xf4,iosize=0x04',
         ]
 

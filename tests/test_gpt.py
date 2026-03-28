@@ -108,7 +108,7 @@ def run_session(commands):
         "-device", "nvme,drive=nvme0,serial=aegis00",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
-        "-no-reboot", "-m", "128M",
+        "-no-reboot", "-m", "2G",
         "-monitor", "unix:%s,server,nowait" % mon_path,
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
     ]

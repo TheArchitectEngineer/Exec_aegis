@@ -151,7 +151,7 @@ def run_shell_session(commands):
         "-cdrom", ISO, "-boot", "order=d",
         "-display", "none", "-vga", "std",
         "-nodefaults", "-serial", "stdio",
-        "-no-reboot", "-m", "256M",
+        "-no-reboot", "-m", "2G",
         "-drive", "file=%s,if=none,id=nvme0,format=raw" % disk_path,
         "-device", "nvme,drive=nvme0,serial=aegis0",
         "-device", "virtio-net-pci,netdev=n0,disable-legacy=on",

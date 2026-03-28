@@ -33,7 +33,7 @@ def run_test():
          "-cdrom", ISO, "-boot", "order=d",
          "-display", "none", "-vga", "std",
          "-nodefaults", "-serial", "stdio",
-         "-no-reboot", "-m", "128M",
+         "-no-reboot", "-m", "2G",
          "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
