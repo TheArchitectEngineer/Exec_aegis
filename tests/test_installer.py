@@ -141,6 +141,11 @@ def run_test():
             print("FAIL: installation did not complete")
             print("  tail:", buf[-500:].decode("utf-8", errors="replace"))
             sys.exit(1)
+        # Show installer output for debugging
+        install_out = buf.decode("utf-8", errors="replace")
+        for line in install_out.split('\n'):
+            if 'esp' in line.lower() or 'ESP' in line or 'read' in line.lower():
+                print(f"  [install] {line.strip()}")
         print("  Installation complete in boot 1")
 
         # Shutdown
