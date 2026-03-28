@@ -5,7 +5,7 @@ CFLAGS = -O2 -fno-pie -no-pie -Wl,--build-id=none
 all: fb_test.elf
 
 fb_test.elf: main.c
-	$(CC) $(CFLAGS) -o $@ $< -lm
+	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
 	rm -f *.elf
