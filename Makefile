@@ -527,7 +527,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(ESP_IMG)
 	@# unallocated blocks, but the FAT16 directory structure is non-contiguous
 	@# and the installer's sequential read misses file data sectors.
 	sudo mount -o loop $(ROOTFS) /mnt && \
-	    cp $(ESP_IMG) /mnt/boot/esp.img && \
+	    sudo cp $(ESP_IMG) /mnt/boot/esp.img && \
 	    sudo umount /mnt
 	@rm -f /tmp/aegis-motd
 	@echo "Root filesystem image created: $(ROOTFS)"
