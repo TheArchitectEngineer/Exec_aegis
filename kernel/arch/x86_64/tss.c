@@ -5,16 +5,17 @@
 /* Verify the TSS is exactly 104 bytes as per x86-64 spec. */
 _Static_assert(sizeof(aegis_tss_t) == 104, "TSS must be 104 bytes");
 
-/* Static TSS — zeroed by GRUB ELF loader (BSS). */
-static aegis_tss_t s_tss;
+/* Per-CPU TSS — each CPU needs its own because RSP0 differs per-CPU
+ * and ltr sets the Busy bit in the TSS descriptor. */
+static aegis_tss_t s_tss[MAX_CPUS];
 
-/* 4KB stack for the double-fault (#DF) IST handler.
+/* Per-CPU 4KB double-fault (#DF) IST stack.
  * Must be 16-byte aligned. CPU switches to this stack when #DF fires
  * regardless of the current RSP value, preventing triple fault on stack
- * overflow or RSP corruption.  IST1 in TSS (s_tss.ist[0], 0-indexed C
- * array) corresponds to IST field value 1 in the IDT gate descriptor
+ * overflow or RSP corruption.  IST1 in TSS (s_tss[cpu].ist[0], 0-indexed
+ * C array) corresponds to IST field value 1 in the IDT gate descriptor
  * (Intel spec uses 1-based numbering). */
-static uint8_t s_df_stack[4096] __attribute__((aligned(16)));
+static uint8_t s_df_stack[MAX_CPUS][4096] __attribute__((aligned(16)));
 
 /*
  * g_master_pml4 — physical address of the master (kernel) PML4.
@@ -29,26 +30,41 @@ uint64_t g_master_pml4 = 0;
 aegis_tss_t *
 arch_tss_get(void)
 {
-	return &s_tss;
+	return &s_tss[0];
+}
+
+uint64_t
+arch_tss_get_base_ap(uint8_t cpu_id)
+{
+	return (uint64_t)(uintptr_t)&s_tss[cpu_id];
 }
 
 void
 arch_tss_init(void)
 {
-	s_tss.iomap_base = 104;   /* offset past end of TSS → I/O bitmap disabled */
-	/* IST1 (s_tss.ist[0] in 0-indexed C array) — used by the #DF gate.
+	s_tss[0].iomap_base = 104;   /* offset past end of TSS → I/O bitmap disabled */
+	/* IST1 (s_tss[0].ist[0] in 0-indexed C array) — used by the #DF gate.
 	 * Store the TOP of the stack (stack grows downward). */
-	s_tss.ist[0] = (uint64_t)&s_df_stack[sizeof(s_df_stack)];
+	s_tss[0].ist[0] = (uint64_t)&s_df_stack[0][sizeof(s_df_stack[0])];
 	printk("[TSS] OK: RSP0 initialized\n");
+}
+
+void
+arch_tss_init_ap(uint8_t cpu_id)
+{
+	s_tss[cpu_id].iomap_base = 104;
+	s_tss[cpu_id].ist[0] = (uint64_t)&s_df_stack[cpu_id][sizeof(s_df_stack[cpu_id])];
 }
 
 void
 arch_set_kernel_stack(uint64_t rsp0)
 {
-	s_tss.rsp0 = rsp0;
+	/* Write to current CPU's TSS RSP0 */
+	percpu_t *p = percpu_self();
+	s_tss[p->cpu_id].rsp0 = rsp0;
 	/* syscall_entry.asm reads gs:24 (percpu.kernel_stack) for the SYSCALL
 	 * stack switch.  Keep it in sync with TSS.RSP0. */
-	percpu_self()->kernel_stack = rsp0;
+	p->kernel_stack = rsp0;
 }
 
 void

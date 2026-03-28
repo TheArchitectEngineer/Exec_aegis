@@ -40,8 +40,11 @@ typedef struct percpu {
 
 extern percpu_t g_percpu[MAX_CPUS];
 extern uint32_t g_cpu_count;
+extern volatile uint8_t g_ap_online[MAX_CPUS];
 
 void smp_percpu_init_bsp(void);
+void smp_start_aps(void);
+void ap_entry(void);
 
 /* Return pointer to the current CPU's percpu_t via gs:0 (self pointer). */
 static inline percpu_t *

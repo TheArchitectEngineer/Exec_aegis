@@ -1,6 +1,8 @@
 #ifndef ARCH_GDT_H
 #define ARCH_GDT_H
 
+#include <stdint.h>
+
 /*
  * GDT segment selectors.
  *
@@ -27,5 +29,9 @@
 
 /* Build runtime GDT, lgdt, reload segments, ltr.  Prints [GDT] OK. */
 void arch_gdt_init(void);
+
+/* Initialize per-CPU GDT for an AP: copies BSP segments, installs
+ * this CPU's TSS descriptor at tss_base, lgdt, ltr. */
+void arch_gdt_init_ap(uint8_t cpu_id, uint64_t tss_base);
 
 #endif /* ARCH_GDT_H */

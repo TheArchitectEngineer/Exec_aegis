@@ -15,6 +15,9 @@ static aegis_idt_gate_t s_idt[256];
 /* Prototypes for the 48 ISR stubs defined in isr.asm */
 extern void *isr_stubs[48];
 
+/* LAPIC timer vector stub (vector 0x30) defined in isr.asm */
+extern void *isr_stub_lapic_timer;
+
 /* LAPIC spurious vector stub (vector 0xFF) defined in isr.asm */
 extern void *isr_stub_spurious;
 
@@ -45,6 +48,9 @@ idt_init(void)
     for (int i = 0; i < 48; i++)
         idt_gate_set((uint8_t)i, isr_stubs[i]);
 
+    /* Vector 0x30 — LAPIC timer interrupt (periodic, ~100Hz). */
+    idt_gate_set(0x30, isr_stub_lapic_timer);
+
     /* Vector 0xFF — LAPIC spurious interrupt.  Per Intel spec, no EOI must
      * be sent for spurious interrupts; isr_dispatch returns immediately. */
     idt_gate_set(0xFF, isr_stub_spurious);
@@ -57,6 +63,19 @@ idt_init(void)
 
     __asm__ volatile ("lidt %0" : : "m"(idtr));
     printk("[IDT] OK: 256 vectors installed\n");
+}
+
+void
+arch_load_idt(void)
+{
+    struct {
+        uint16_t limit;
+        uint64_t base;
+    } __attribute__((packed)) idtr = {
+        .limit = sizeof(s_idt) - 1,
+        .base  = (uint64_t)s_idt
+    };
+    __asm__ volatile("lidt %0" : : "m"(idtr));
 }
 
 /* Walk the RBP frame-pointer chain and print return addresses.
@@ -118,7 +137,13 @@ isr_dispatch(cpu_state_t *s)
     } else if (s->vector == 0xFF) {
         /* LAPIC spurious interrupt — per Intel spec, do NOT send EOI. */
         return;
-    } else if (s->vector < 0x30) {
+    } else if (s->vector == 0x30) {
+        /* LAPIC timer interrupt — send EOI before handler because
+         * sched_tick may ctx_switch away, leaving the EOI unsent.
+         * Edge-triggered periodic LAPIC timer: EOI-first is safe. */
+        lapic_eoi();
+        lapic_timer_handler();
+    } else if (s->vector >= 0x20 && s->vector < 0x30) {
         /* Hardware IRQ: send EOI BEFORE the handler.
          * pit_handler calls sched_tick which calls ctx_switch — if we
          * switch away before EOI, the outgoing task carries the EOI
@@ -146,22 +171,23 @@ isr_dispatch(cpu_state_t *s)
         else if (s->vector == 0x21) { kbd_handler(); }
         else if (s->vector == 0x2C) { ps2_mouse_handler(); }
         else if (irq == acpi_get_sci_irq() && irq != 0) { acpi_sci_handler(); }
-
-        /* Sanity-check the iretq frame for ring-3 interrupts.
-         * For a ring-3 interrupt (cs=0x23), cpu_state_t.rsp=user_rsp and
-         * cpu_state_t.ss must point to the user data descriptor (GDT index 3).
-         *
-         * AMD CPUs in 64-bit mode may strip SS RPL bits after loading, pushing
-         * 0x18 (RPL=0) instead of 0x1B (RPL=3) on interrupt entry — both are
-         * valid since SS is unused for addressing in 64-bit long mode.
-         * Accept any RPL variant of the user data selector: (ss & ~3) == 0x18.
-         * Reject kernel selectors (0x08, 0x10) or user code (0x20). */
-        if (s->cs == 0x23 && (s->ss & ~(uint64_t)3) != 0x18) {
-            printk("[PANIC] corrupt ring-3 iretq frame vec=%lu rip=0x%lx rsp=0x%lx ss=0x%lx\n",
-                   s->vector, s->rip, s->rsp, s->ss);
-            for (;;) {}
-        }
     }
+
+    /* Sanity-check the iretq frame for ring-3 interrupts.
+     * For a ring-3 interrupt (cs=0x23), cpu_state_t.rsp=user_rsp and
+     * cpu_state_t.ss must point to the user data descriptor (GDT index 3).
+     *
+     * AMD CPUs in 64-bit mode may strip SS RPL bits after loading, pushing
+     * 0x18 (RPL=0) instead of 0x1B (RPL=3) on interrupt entry — both are
+     * valid since SS is unused for addressing in 64-bit long mode.
+     * Accept any RPL variant of the user data selector: (ss & ~3) == 0x18.
+     * Reject kernel selectors (0x08, 0x10) or user code (0x20). */
+    if (s->cs == 0x23 && (s->ss & ~(uint64_t)3) != 0x18) {
+        printk("[PANIC] corrupt ring-3 iretq frame vec=%lu rip=0x%lx rsp=0x%lx ss=0x%lx\n",
+               s->vector, s->rip, s->rsp, s->ss);
+        for (;;) {}
+    }
+
     /* Normalize SS RPL=3 for iretq back to ring-3.
      * AMD CPUs in 64-bit mode strip SS RPL bits on ring-3 interrupt entry,
      * pushing SS=0x18 (RPL=0) instead of SS=0x1B (RPL=3).  iretq to ring-3
@@ -170,5 +196,4 @@ isr_dispatch(cpu_state_t *s)
      * path — harmless on Intel (which already pushes RPL=3), required on AMD. */
     if (s->cs == 0x23)
         s->ss |= 3;
-    /* vectors >= 0x30: not installed, ignored */
 }

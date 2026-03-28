@@ -25,6 +25,10 @@
 #define LAPIC_SVR           0x0F0
 #define LAPIC_ICR_LOW       0x300
 #define LAPIC_ICR_HIGH      0x310
+#define LAPIC_TIMER_LVT     0x320
+#define LAPIC_TIMER_ICR     0x380
+#define LAPIC_TIMER_CCR     0x390
+#define LAPIC_TIMER_DCR     0x3E0
 
 /* SVR bits */
 #define SVR_ENABLE          (1u << 8)
@@ -168,6 +172,37 @@ lapic_send_ipi(uint8_t dest_apic_id, uint8_t vector)
 }
 
 /*
+ * lapic_send_init — send an INIT IPI to the specified APIC ID.
+ *
+ * Used by smp_start_aps() to reset APs before SIPI. ICR_LOW = 0x4500:
+ * delivery mode = INIT (101b in bits 10:8), level = assert, trigger = edge.
+ */
+void
+lapic_send_init(uint8_t dest_apic_id)
+{
+    while (lapic_read(LAPIC_ICR_LOW) & ICR_DELIVERY_STATUS)
+        arch_pause();
+    lapic_write(LAPIC_ICR_HIGH, (uint32_t)dest_apic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, 0x00004500);
+}
+
+/*
+ * lapic_send_sipi — send a Startup IPI (SIPI) to the specified APIC ID.
+ *
+ * vector is the page number of the real-mode entry point (e.g. 0x08 for
+ * physical address 0x8000). ICR_LOW = 0x4600 | vector: delivery mode = SIPI
+ * (110b in bits 10:8), level = assert, trigger = edge.
+ */
+void
+lapic_send_sipi(uint8_t dest_apic_id, uint8_t vector)
+{
+    while (lapic_read(LAPIC_ICR_LOW) & ICR_DELIVERY_STATUS)
+        arch_pause();
+    lapic_write(LAPIC_ICR_HIGH, (uint32_t)dest_apic_id << 24);
+    lapic_write(LAPIC_ICR_LOW, 0x00004600 | vector);
+}
+
+/*
  * lapic_send_ipi_all_excl_self — broadcast IPI to all CPUs except this one.
  *
  * Uses shorthand 11b (all-excluding-self) in ICR_LOW bits [19:18].
@@ -190,4 +225,76 @@ int
 lapic_active(void)
 {
     return s_active;
+}
+
+/* --------------------------------------------------------------------------
+ * LAPIC Timer — calibrated via PIT channel 2, configured for periodic mode.
+ *
+ * Vector 0x30 (avoids conflict with PIT on 0x20).
+ * Calibration: start a PIT channel 2 one-shot for ~10ms, count down the
+ * LAPIC timer from 0xFFFFFFFF, then compute ticks-per-10ms. Configure
+ * periodic mode at that rate (~100Hz).
+ *
+ * Must be called on EACH CPU (BSP and every AP) after lapic_init/lapic_init_ap.
+ * -------------------------------------------------------------------------- */
+
+/* Forward declaration — avoid circular header include */
+extern void sched_tick(void);
+
+/*
+ * lapic_timer_init — calibrate and start the LAPIC timer in periodic mode.
+ */
+void
+lapic_timer_init(void)
+{
+    if (!s_active)
+        return;
+
+    /* Divide configuration: divide by 16 (DCR value 0x03) */
+    lapic_write(LAPIC_TIMER_DCR, 0x03);
+
+    /* Mask timer during calibration: masked (bit 16), vector 0x30 */
+    lapic_write(LAPIC_TIMER_LVT, 0x00010030);
+
+    /* PIT channel 2 one-shot for ~10ms (11932 ticks at 1.193182 MHz).
+     * Port 0x61 bit 0 = gate, bit 1 = speaker (keep off).
+     * Port 0x43 = 0xB0: channel 2, lo/hi, mode 0 (one-shot), binary.
+     * Port 0x61 bit 5 = output of channel 2 (goes high when count expires). */
+    outb(0x61, (inb(0x61) & 0xFD) | 0x01);   /* gate on, speaker off */
+    outb(0x43, 0xB0);                          /* ch2 mode 0 */
+    outb(0x42, 0x9C);                          /* 11932 low byte */
+    outb(0x42, 0x2E);                          /* 11932 high byte */
+
+    /* Start LAPIC countdown from max */
+    lapic_write(LAPIC_TIMER_ICR, 0xFFFFFFFF);
+
+    /* Spin until PIT channel 2 output goes high (bit 5 of port 0x61) */
+    while (!(inb(0x61) & 0x20))
+        arch_pause();
+
+    /* Read how many LAPIC ticks elapsed in ~10ms */
+    uint32_t elapsed = 0xFFFFFFFF - lapic_read(LAPIC_TIMER_CCR);
+
+    /* Mask the timer while we reconfigure */
+    lapic_write(LAPIC_TIMER_LVT, 0x00010030);
+
+    /* Configure periodic mode (bit 17), vector 0x30, unmasked */
+    lapic_write(LAPIC_TIMER_LVT, (1u << 17) | 0x30);
+    lapic_write(LAPIC_TIMER_ICR, elapsed);
+
+    printk("[LAPIC] timer: %u ticks/10ms, periodic at ~100Hz\n",
+           (unsigned)elapsed);
+}
+
+/*
+ * lapic_timer_handler — called from isr_dispatch on vector 0x30.
+ *
+ * Drives the scheduler tick. EOI is sent by the generic IRQ path in
+ * isr_dispatch (EOI-before-handler pattern, safe for edge-triggered LAPIC
+ * timer in periodic mode).
+ */
+void
+lapic_timer_handler(void)
+{
+    sched_tick();
 }

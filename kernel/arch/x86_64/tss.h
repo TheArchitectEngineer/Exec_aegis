@@ -20,13 +20,19 @@ typedef struct {
 	uint16_t iomap_base;   /* +102 — 104 = disable I/O bitmap */
 } __attribute__((packed)) aegis_tss_t;
 
-/* Returns pointer to the static TSS (used by gdt.c to install TSS descriptor). */
+/* Returns pointer to BSP's TSS (used by gdt.c to install TSS descriptor). */
 aegis_tss_t *arch_tss_get(void);
 
-/* Initialize TSS fields; set iomap_base = 104. Prints [TSS] OK. */
+/* Returns the base address of the specified CPU's TSS. */
+uint64_t arch_tss_get_base_ap(uint8_t cpu_id);
+
+/* Initialize BSP's TSS fields; set iomap_base = 104. Prints [TSS] OK. */
 void arch_tss_init(void);
 
-/* Update TSS.RSP0 and percpu.kernel_stack to rsp0.
+/* Initialize AP's TSS: iomap_base and IST1 (#DF stack). */
+void arch_tss_init_ap(uint8_t cpu_id);
+
+/* Update current CPU's TSS.RSP0 and percpu.kernel_stack to rsp0.
  * Called by scheduler before every ctx_switch so the CPU uses the
  * correct kernel stack top when the next ring-3 interrupt fires. */
 void arch_set_kernel_stack(uint64_t rsp0);

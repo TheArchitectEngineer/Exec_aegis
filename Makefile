@@ -111,7 +111,8 @@ CAP_LIB  = kernel/cap/target/x86_64-unknown-none/release/libcap.a
 ARCH_ASMS = \
     kernel/arch/x86_64/isr.asm \
     kernel/arch/x86_64/ctx_switch.asm \
-    kernel/arch/x86_64/syscall_entry.asm
+    kernel/arch/x86_64/syscall_entry.asm \
+    kernel/arch/x86_64/ap_trampoline.asm
 
 SCHED_SRCS = kernel/sched/sched.c
 

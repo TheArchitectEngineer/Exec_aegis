@@ -28,6 +28,10 @@ typedef struct cpu_state {
  * Must be called before enabling any interrupts. */
 void idt_init(void);
 
+/* Reload the IDT on the current CPU without reinitializing gate entries.
+ * Used by AP startup — the BSP's s_idt[] is shared across all cores. */
+void arch_load_idt(void);
+
 /* C-level interrupt dispatcher — called by isr_common_stub in isr.asm.
  * Marked with __attribute__((used)) to prevent dead-code elimination. */
 void isr_dispatch(cpu_state_t *s);

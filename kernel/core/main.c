@@ -106,12 +106,14 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */
+    smp_start_aps();        /* wake APs via INIT-SIPI-SIPI — [SMP] OK       */
     sched_init();           /* init run queue (no tasks yet)                 */
     sched_spawn(task_idle);
     proc_spawn_init();      /* spawn init user process in ring 3             */
     /* All TCBs and stacks are in kva range at this point —
      * safe to remove the identity map. */
     vmm_teardown_identity(); /* pml4[0] = 0, CR3 reload — [VMM] OK          */
+    lapic_timer_init();     /* calibrate + start LAPIC timer on BSP (~100Hz) */
     sched_start();          /* prints [SCHED] OK, switches into first task   */
     /* UNREACHABLE — sched_start() never returns */
     __builtin_unreachable();
