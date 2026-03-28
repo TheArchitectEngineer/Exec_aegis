@@ -364,7 +364,9 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 ## Phase 33 — Forward Constraints
 
-**Phase 33 status: ✅ complete. `make test` passes. `test_dynlink.py` PASS.**
+**Phase 33 status: 🔶 Kernel infrastructure done + verified. Test suite needs fixes.**
+
+Boot oracle PASS. Dynamic linking verified (interpreter loads, echo/cat/ls/pipes work via ext2). Full test suite not yet green — see test debt below.
 
 1. **No ASLR.** Interpreter loads at fixed INTERP_BASE (0x40000000). PIE binaries load at fixed base. ASLR is future work. Debug builds must disable ASLR to keep `make sym` working.
 
@@ -376,11 +378,19 @@ A subsystem is ✅ only when `make test` passes with it included.
 
 5. **File-backed mmap is read-once.** No page cache, no demand paging. Each mmap reads fresh from disk.
 
-6. **Initrd contains only vigil + login + init.** All other binaries on ext2. If ext2 fails to mount, only vigil + login are available.
+6. **Initrd contains vigil + login + shell + config (17 files).** All other binaries on ext2. Shell kept static for `INIT=shell` tests.
 
 7. **No MAP_SHARED.** MAP_PRIVATE file-backed mappings only.
 
-8. **Initrd file count changed from 38 to 16.** `tests/expected/boot.txt` updated accordingly.
+8. **`make test` does not auto-build disk.** Tests that need `build/disk.img` skip if absent. Must run `make disk` first, then `make test`. Fix: add `disk` as prerequisite to the test targets that need it, or add `make disk` to `run_tests.sh`.
+
+9. **test_ext2 broken — `echo` not in initrd.** `test_ext2.py` boots `INIT=shell` with a fresh temp disk (no ext2 /bin). It runs `echo "test" > /tmp/test.txt` — but our shell's `echo` is an external binary, not a builtin. Fix: either add `echo` as a shell builtin, or make test_ext2 boot with `INIT=vigil` + full disk. Blocks: Phase 34 (writable root) if it needs ext2 persistence tests.
+
+10. **test_pipe/signal/stat need disk.img.** These were converted from `-machine pc` to q35+NVMe in Phase 33. They skip if no disk. Must run `make disk` before `make test` for full coverage. Blocks: any phase that changes pipe/signal/stat behavior.
+
+11. **VFS `/bin` directory listing comes from ext2, not initrd.** Removed `/bin` from initrd synthetic directories so `ls /bin` shows ext2 entries (all dynamic binaries). On `-machine pc` (no ext2), `ls /bin` returns empty. Only affects tests that `ls /bin` without a disk — currently none after the test updates.
+
+12. **Test suite is too slow.** ~15 separate QEMU boots, each 10-20s. Total 10-15 min. Should consolidate tests that share the same boot config (q35+NVMe+vigil) into a single QEMU session. Blocks: developer productivity on every future phase.
 
 ---
 
