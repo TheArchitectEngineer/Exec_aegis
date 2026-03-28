@@ -15,4 +15,8 @@
  * Returns the number of partitions registered (0 on failure). */
 int gpt_scan(const char *devname);
 
+/* gpt_rescan — unregister old partitions on devname, then scan again.
+ * Returns number of new partitions found, or 0 on failure. */
+int gpt_rescan(const char *devname);
+
 #endif /* GPT_H */

@@ -173,6 +173,9 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 500: return sys_netcfg(arg1, arg2, arg3, arg4);
     case 318: return sys_getrandom(arg1, arg2, arg3);
     case 202: return sys_futex(arg1, arg2, arg3, arg4, arg5, arg6);
+    case 510: return sys_blkdev_list(arg1, arg2);
+    case 511: return sys_blkdev_io(arg1, arg2, arg3, arg4, arg5);
+    case 512: return sys_gpt_rescan(arg1);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

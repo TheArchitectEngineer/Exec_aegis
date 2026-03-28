@@ -27,4 +27,14 @@ int       blkdev_register(blkdev_t *dev);
 /* Look up a block device by name. Returns NULL if not found. */
 blkdev_t *blkdev_get(const char *name);
 
+/* Return the number of registered block devices. */
+int blkdev_count(void);
+
+/* Return the i-th registered block device (0-based), or NULL if out of range. */
+blkdev_t *blkdev_get_index(int i);
+
+/* Unregister all child devices whose name starts with parent_prefix + "p".
+ * Used by gpt_rescan to remove old partition blkdevs before re-scanning. */
+void blkdev_unregister_children(const char *parent_prefix);
+
 #endif /* BLKDEV_H */

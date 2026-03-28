@@ -269,3 +269,9 @@ int gpt_scan(const char *devname)
     printk("[GPT] OK: %u partition(s) found on %s\n", (unsigned)count, devname);
     return count;
 }
+
+int gpt_rescan(const char *devname)
+{
+    blkdev_unregister_children(devname);
+    return gpt_scan(devname);
+}
