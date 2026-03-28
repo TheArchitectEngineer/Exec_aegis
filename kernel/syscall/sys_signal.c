@@ -211,10 +211,15 @@ sys_kill(uint64_t arg1, uint64_t arg2)
     int      sig = (int)arg2;
     if (sig <= 0 || sig >= 64) return (uint64_t)-(int64_t)22; /* EINVAL */
 
+    /* Capability gate: sending signals is a process management operation. */
+    aegis_process_t *cur = (aegis_process_t *)sched_current();
+    if (cap_check(cur->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_PROC_READ, CAP_RIGHTS_WRITE) < 0)
+        return (uint64_t)-(int64_t)1;  /* EPERM */
+
     /* S14: Prevent unprivileged processes from killing init (PID 1).
      * Only vigil (PID 1 itself) can signal PID 1. */
     if (pid == 1) {
-        aegis_process_t *cur = (aegis_process_t *)sched_current();
         if (cur->pid != 1)
             return (uint64_t)-(int64_t)1;  /* EPERM */
     }
@@ -226,8 +231,7 @@ sys_kill(uint64_t arg1, uint64_t arg2)
     }
     if (pid == 0) {
         /* kill(0, sig): deliver to own process group */
-        aegis_process_t *proc = (aegis_process_t *)sched_current();
-        signal_send_pgrp(proc->pgid, sig);
+        signal_send_pgrp(cur->pgid, sig);
         return 0;
     }
     signal_send_pid((uint32_t)pid, sig);

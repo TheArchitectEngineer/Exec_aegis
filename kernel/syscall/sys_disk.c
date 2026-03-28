@@ -6,6 +6,7 @@
 #include "gpt.h"
 #include "fb.h"
 #include "vmm.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 /* ── blkdev_info_t — sent to userspace by sys_blkdev_list ───────────── */
@@ -101,7 +102,10 @@ sys_blkdev_io(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     /* Transfer in 8-sector (4KB) chunks using a kernel bounce buffer.
      * NVMe driver limits each transfer to count*512 <= 4096. */
     static uint8_t s_bounce[4096];
+    static spinlock_t blkdev_io_lock = SPINLOCK_INIT;
+    irqflags_t io_fl = spin_lock_irqsave(&blkdev_io_lock);
     uint64_t done = 0;
+    uint64_t rc = 0;
     while (done < count) {
         uint32_t chunk = (uint32_t)(count - done);
         if (chunk > 8) chunk = 8;
@@ -110,24 +114,25 @@ sys_blkdev_io(uint64_t arg1, uint64_t arg2, uint64_t arg3,
         if (arg5 == 0) {
             /* Read: dev → bounce → user */
             if (dev->read(dev, lba + done, chunk, s_bounce) < 0)
-                return (uint64_t)-5;  /* EIO */
+                { rc = (uint64_t)-5; break; }  /* EIO */
             if (!user_ptr_valid(arg4 + user_off, (uint64_t)chunk * 512))
-                return (uint64_t)-14;
+                { rc = (uint64_t)-14; break; }
             copy_to_user((void *)(uintptr_t)(arg4 + user_off),
                          s_bounce, (uint64_t)chunk * 512);
         } else {
             /* Write: user → bounce → dev */
             if (!user_ptr_valid(arg4 + user_off, (uint64_t)chunk * 512))
-                return (uint64_t)-14;
+                { rc = (uint64_t)-14; break; }
             copy_from_user(s_bounce,
                            (const void *)(uintptr_t)(arg4 + user_off),
                            (uint64_t)chunk * 512);
             if (dev->write(dev, lba + done, chunk, s_bounce) < 0)
-                return (uint64_t)-5;  /* EIO */
+                { rc = (uint64_t)-5; break; }  /* EIO */
         }
         done += chunk;
     }
-    return 0;
+    spin_unlock_irqrestore(&blkdev_io_lock, io_fl);
+    return rc;
 }
 
 /*

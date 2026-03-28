@@ -6,7 +6,10 @@
 #include "proc.h"
 #include "sched.h"
 #include "syscall_util.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
+
+static spinlock_t tty_global_lock = SPINLOCK_INIT;
 
 /* ── Console tty singleton (set by console driver) ───────────────── */
 
@@ -89,6 +92,7 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
     uint32_t copied = 0;
     char ch;
     int interrupted;
+    irqflags_t fl;
 
     if (len == 0)
         return 0;
@@ -103,20 +107,32 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
         return -4; /* EINTR */
     }
 
+    /* Snapshot termios flags under lock */
+    fl = spin_lock_irqsave(&tty_global_lock);
+    uint32_t lflag = tty->termios.c_lflag;
+    uint32_t iflag = tty->termios.c_iflag;
+    char cc_vintr  = (char)tty->termios.c_cc[K_VINTR];
+    char cc_vsusp  = (char)tty->termios.c_cc[K_VSUSP];
+    char cc_vquit  = (char)tty->termios.c_cc[K_VQUIT];
+    char cc_veof   = (char)tty->termios.c_cc[K_VEOF];
+    char cc_verase = (char)tty->termios.c_cc[K_VERASE];
+    spin_unlock_irqrestore(&tty_global_lock, fl);
+
     /* RAW mode: return one byte at a time */
-    if (!(tty->termios.c_lflag & K_ICANON)) {
+    if (!(lflag & K_ICANON)) {
         interrupted = 0;
         int rc = tty->read_raw(tty, &ch, &interrupted);
         if (rc <= 0)
             return interrupted ? -4 : rc;
         /* CR→NL if ICRNL */
-        if ((tty->termios.c_iflag & K_ICRNL) && ch == '\r')
+        if ((iflag & K_ICRNL) && ch == '\r')
             ch = '\n';
         buf[0] = ch;
         return 1;
     }
 
     /* COOKED mode: return from line buffer if data available */
+    fl = spin_lock_irqsave(&tty_global_lock);
     if (tty->line_pos < tty->line_len) {
         while (copied < len && tty->line_pos < tty->line_len) {
             buf[copied++] = tty->linebuf[tty->line_pos++];
@@ -127,6 +143,7 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
             tty->line_pos = 0;
             tty->line_ready = 0;
         }
+        spin_unlock_irqrestore(&tty_global_lock, fl);
         return (int)copied;
     }
 
@@ -134,9 +151,16 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
     tty->line_len = 0;
     tty->line_pos = 0;
     tty->line_ready = 0;
+    spin_unlock_irqrestore(&tty_global_lock, fl);
 
-    while (!tty->line_ready) {
+    while (1) {
+        fl = spin_lock_irqsave(&tty_global_lock);
+        int ready = tty->line_ready;
+        spin_unlock_irqrestore(&tty_global_lock, fl);
+        if (ready) break;
+
         interrupted = 0;
+        /* read_raw may block (sched_block) — lock is NOT held */
         int rc = tty->read_raw(tty, &ch, &interrupted);
         if (rc <= 0) {
             if (interrupted)
@@ -145,33 +169,41 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
         }
 
         /* CR→NL translation */
-        if ((tty->termios.c_iflag & K_ICRNL) && ch == '\r')
+        if ((iflag & K_ICRNL) && ch == '\r')
             ch = '\n';
 
+        fl = spin_lock_irqsave(&tty_global_lock);
+
         /* Signal generation (ISIG) */
-        if (tty->termios.c_lflag & K_ISIG) {
-            if (ch == (char)tty->termios.c_cc[K_VINTR]) {
+        if (lflag & K_ISIG) {
+            if (ch == cc_vintr) {
                 tty_echo(tty, "^C", 2);
                 tty->write_out(tty, "\n", 1);
                 tty->line_len = 0;
-                if (tty->fg_pgrp)
-                    signal_send_pgrp(tty->fg_pgrp, SIGINT);
+                uint32_t fg = tty->fg_pgrp;
+                spin_unlock_irqrestore(&tty_global_lock, fl);
+                if (fg)
+                    signal_send_pgrp(fg, SIGINT);
                 return -4;
             }
-            if (ch == (char)tty->termios.c_cc[K_VSUSP]) {
+            if (ch == cc_vsusp) {
                 tty_echo(tty, "^Z", 2);
                 tty->write_out(tty, "\n", 1);
                 tty->line_len = 0;
-                if (tty->fg_pgrp)
-                    signal_send_pgrp(tty->fg_pgrp, SIGTSTP);
+                uint32_t fg = tty->fg_pgrp;
+                spin_unlock_irqrestore(&tty_global_lock, fl);
+                if (fg)
+                    signal_send_pgrp(fg, SIGTSTP);
                 return -4;
             }
-            if (ch == (char)tty->termios.c_cc[K_VQUIT]) {
+            if (ch == cc_vquit) {
                 tty_echo(tty, "^\\", 2);
                 tty->write_out(tty, "\n", 1);
                 tty->line_len = 0;
-                if (tty->fg_pgrp)
-                    signal_send_pgrp(tty->fg_pgrp, SIGQUIT);
+                uint32_t fg = tty->fg_pgrp;
+                spin_unlock_irqrestore(&tty_global_lock, fl);
+                if (fg)
+                    signal_send_pgrp(fg, SIGQUIT);
                 return -4;
             }
         }
@@ -182,24 +214,29 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
                 tty->linebuf[tty->line_len++] = '\n';
             tty_echo(tty, "\n", 1);
             tty->line_ready = 1;
+            spin_unlock_irqrestore(&tty_global_lock, fl);
             break;
         }
 
         /* EOF (Ctrl-D) */
-        if (ch == (char)tty->termios.c_cc[K_VEOF]) {
-            if (tty->line_len == 0)
+        if (ch == cc_veof) {
+            if (tty->line_len == 0) {
+                spin_unlock_irqrestore(&tty_global_lock, fl);
                 return 0; /* EOF: no data */
+            }
             /* Flush what we have without adding EOF char */
             tty->line_ready = 1;
+            spin_unlock_irqrestore(&tty_global_lock, fl);
             break;
         }
 
         /* Erase (backspace / DEL) */
-        if (ch == (char)tty->termios.c_cc[K_VERASE] || ch == '\b') {
+        if (ch == cc_verase || ch == '\b') {
             if (tty->line_len > 0) {
                 tty->line_len--;
                 tty_echo(tty, "\b \b", 3);
             }
+            spin_unlock_irqrestore(&tty_global_lock, fl);
             continue;
         }
 
@@ -210,9 +247,11 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
                 tty_echo(tty, &ch, 1);
             }
         }
+        spin_unlock_irqrestore(&tty_global_lock, fl);
     }
 
     /* Copy from line buffer to user */
+    fl = spin_lock_irqsave(&tty_global_lock);
     tty->line_pos = 0;
     while (copied < len && tty->line_pos < tty->line_len) {
         buf[copied++] = tty->linebuf[tty->line_pos++];
@@ -222,6 +261,7 @@ int tty_read(tty_t *tty, char *buf, uint32_t len)
         tty->line_pos = 0;
         tty->line_ready = 0;
     }
+    spin_unlock_irqrestore(&tty_global_lock, fl);
     return (int)copied;
 }
 
@@ -232,7 +272,12 @@ int tty_write(tty_t *tty, const char *buf, uint32_t len)
     uint32_t i;
 
     /* SIGTTOU: background process writing with TOSTOP set */
-    if ((tty->termios.c_lflag & K_TOSTOP) && !tty_is_fg(tty)) {
+    irqflags_t fl = spin_lock_irqsave(&tty_global_lock);
+    int tostop = (tty->termios.c_lflag & K_TOSTOP) && !tty_is_fg(tty);
+    uint32_t oflag = tty->termios.c_oflag;
+    spin_unlock_irqrestore(&tty_global_lock, fl);
+
+    if (tostop) {
         aegis_task_t *t = sched_current();
         if (t && t->is_user) {
             aegis_process_t *proc = (aegis_process_t *)t;
@@ -242,8 +287,7 @@ int tty_write(tty_t *tty, const char *buf, uint32_t len)
     }
 
     /* Output processing: OPOST + ONLCR maps \n → \r\n */
-    if ((tty->termios.c_oflag & K_OPOST) &&
-        (tty->termios.c_oflag & K_ONLCR)) {
+    if ((oflag & K_OPOST) && (oflag & K_ONLCR)) {
         uint32_t start = 0;
         for (i = 0; i < len; i++) {
             if (buf[i] == '\n') {
@@ -265,63 +309,69 @@ int tty_write(tty_t *tty, const char *buf, uint32_t len)
 
 int tty_ioctl(tty_t *tty, uint32_t cmd, uint64_t arg)
 {
+    irqflags_t fl = spin_lock_irqsave(&tty_global_lock);
+    int rc;
     switch (cmd) {
     case TCGETS:
         if (!user_ptr_valid(arg, sizeof(k_termios_t)))
-            return -14; /* EFAULT */
+            { rc = -14; break; }
         copy_to_user((void *)arg, &tty->termios, sizeof(k_termios_t));
-        return 0;
+        rc = 0; break;
 
     case TCSETS:
     case TCSETSW:
     case TCSETSF:
         if (!user_ptr_valid(arg, sizeof(k_termios_t)))
-            return -14; /* EFAULT */
+            { rc = -14; break; }
         copy_from_user(&tty->termios, (const void *)arg, sizeof(k_termios_t));
-        return 0;
+        rc = 0; break;
 
     case TIOCGPGRP: {
         uint32_t val = tty->fg_pgrp;
         if (!user_ptr_valid(arg, sizeof(uint32_t)))
-            return -14;
+            { rc = -14; break; }
         copy_to_user((void *)arg, &val, sizeof(uint32_t));
-        return 0;
+        rc = 0; break;
     }
 
     case TIOCSPGRP: {
         uint32_t val;
         if (!user_ptr_valid(arg, sizeof(uint32_t)))
-            return -14;
+            { rc = -14; break; }
         copy_from_user(&val, (const void *)arg, sizeof(uint32_t));
         tty->fg_pgrp = val;
-        return 0;
+        rc = 0; break;
     }
 
     case TIOCGWINSZ: {
         uint16_t ws[4];
         if (!user_ptr_valid(arg, sizeof(ws)))
-            return -14;
+            { rc = -14; break; }
         ws[0] = tty->rows;
         ws[1] = tty->cols;
         ws[2] = 0; /* xpixel */
         ws[3] = 0; /* ypixel */
         copy_to_user((void *)arg, ws, sizeof(ws));
-        return 0;
+        rc = 0; break;
     }
 
     case TIOCSWINSZ: {
         uint16_t ws[4];
         if (!user_ptr_valid(arg, sizeof(ws)))
-            return -14;
+            { rc = -14; break; }
         copy_from_user(ws, (const void *)arg, sizeof(ws));
         tty->rows = ws[0];
         tty->cols = ws[1];
+        /* Release lock before signal delivery to avoid lock-ordering issues */
+        spin_unlock_irqrestore(&tty_global_lock, fl);
         if (tty->fg_pgrp)
             signal_send_pgrp(tty->fg_pgrp, SIGWINCH);
         return 0;
     }
 
     default:
-        return -25; /* ENOTTY */
+        rc = -25; break; /* ENOTTY */
     }
+    spin_unlock_irqrestore(&tty_global_lock, fl);
+    return rc;
 }

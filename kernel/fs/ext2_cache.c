@@ -100,8 +100,15 @@ void ext2_sync(void)
 {
     int i;
     int flushed = 0;
-    if (!s_mounted || !s_dev)
+
+    /* Lock ordering: sched_lock > ext2_lock.  ext2_sync may be called
+     * from sched_exit (which holds sched_lock), so acquiring ext2_lock
+     * here is safe — it is the inner lock. */
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
+    if (!s_mounted || !s_dev) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return;
+    }
     for (i = 0; i < CACHE_SLOTS; i++) {
         if (s_cache[i].dirty && s_cache[i].block_num != 0) {
             uint64_t lba = (uint64_t)s_cache[i].block_num *
@@ -112,5 +119,6 @@ void ext2_sync(void)
             flushed++;
         }
     }
+    spin_unlock_irqrestore(&ext2_lock, fl);
     printk("[EXT2] sync: flushed %u dirty blocks\n", (uint32_t)flushed);
 }

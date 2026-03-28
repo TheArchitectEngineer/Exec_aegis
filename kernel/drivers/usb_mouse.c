@@ -8,6 +8,7 @@
  */
 #include "usb_mouse.h"
 #include "../sched/sched.h"
+#include "../core/spinlock.h"
 #include "arch.h"
 #include <stddef.h>
 
@@ -17,6 +18,8 @@ static mouse_event_t s_buf[MOUSE_BUF_SIZE];
 static volatile uint32_t s_head = 0;
 static volatile uint32_t s_tail = 0;
 
+static spinlock_t mouse_lock = SPINLOCK_INIT;
+
 /* s_waiter — task blocked in mouse_read_blocking(), or NULL.
  * Set before sched_block(); cleared on wake. */
 static aegis_task_t *s_waiter = NULL;
@@ -24,6 +27,7 @@ static aegis_task_t *s_waiter = NULL;
 static void
 buf_push(const mouse_event_t *evt)
 {
+    irqflags_t fl = spin_lock_irqsave(&mouse_lock);
     uint32_t next = (s_head + 1) % MOUSE_BUF_SIZE;
     if (next != s_tail) {
         s_buf[s_head] = *evt;
@@ -34,6 +38,7 @@ buf_push(const mouse_event_t *evt)
         sched_wake(s_waiter);
         s_waiter = NULL;
     }
+    spin_unlock_irqrestore(&mouse_lock, fl);
 }
 
 void
@@ -53,10 +58,14 @@ usb_mouse_process_report(const uint8_t *data, uint32_t len)
 int
 mouse_poll(mouse_event_t *out)
 {
-    if (s_head == s_tail)
+    irqflags_t fl = spin_lock_irqsave(&mouse_lock);
+    if (s_head == s_tail) {
+        spin_unlock_irqrestore(&mouse_lock, fl);
         return 0;
+    }
     *out = s_buf[s_tail];
     s_tail = (s_tail + 1) % MOUSE_BUF_SIZE;
+    spin_unlock_irqrestore(&mouse_lock, fl);
     return 1;
 }
 

@@ -18,10 +18,11 @@
 typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 
 /* Cap kind constants — must match kernel/cap/cap.h */
-#define SVC_CAP_AUTH       4u
-#define SVC_CAP_NET_SOCKET 7u
-#define SVC_CAP_RIGHTS_READ 1u
-#define SVC_CAP_NET_ADMIN    8u
+#define SVC_CAP_AUTH        4u
+#define SVC_CAP_NET_SOCKET  7u
+#define SVC_CAP_NET_ADMIN   8u
+#define SVC_CAP_DISK_ADMIN 11u
+#define SVC_CAP_RIGHTS_READ  1u
 #define SVC_CAP_RIGHTS_WRITE 2u
 
 typedef struct {
@@ -35,6 +36,7 @@ typedef struct {
     int      needs_auth;       /* 1 if caps file listed AUTH */
     int      needs_net_socket; /* 1 if caps file listed NET_SOCKET */
     int      needs_net_admin;  /* 1 if caps file listed NET_ADMIN */
+    int      needs_disk_admin; /* 1 if caps file listed DISK_ADMIN */
 } service_t;
 
 static service_t s_svcs[VIGIL_MAX_SERVICES];
@@ -106,6 +108,7 @@ load_service(const char *name)
     s->needs_auth       = (strstr(caps_buf, "AUTH")       != NULL);
     s->needs_net_socket = (strstr(caps_buf, "NET_SOCKET") != NULL);
     s->needs_net_admin  = (strstr(caps_buf, "NET_ADMIN")  != NULL);
+    s->needs_disk_admin = (strstr(caps_buf, "DISK_ADMIN") != NULL);
 
     s->pid      = -1;
     s->restarts = 0;
@@ -130,6 +133,9 @@ start_service(service_t *s)
             syscall(361, (long)SVC_CAP_NET_SOCKET, (long)SVC_CAP_RIGHTS_READ);
         if (s->needs_net_admin)
             syscall(361, (long)SVC_CAP_NET_ADMIN, (long)SVC_CAP_RIGHTS_WRITE);
+        if (s->needs_disk_admin)
+            syscall(361, (long)SVC_CAP_DISK_ADMIN,
+                    (long)(SVC_CAP_RIGHTS_READ | SVC_CAP_RIGHTS_WRITE));
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed

@@ -5,6 +5,7 @@
 #include "ext2.h"
 #include "blkdev.h"
 #include "../core/printk.h"
+#include "../core/spinlock.h"
 
 /* Errno codes used within the ext2 subsystem.
  * The kernel does not include <errno.h>; define what we need here. */
@@ -22,6 +23,7 @@ extern uint32_t s_block_size;
 extern uint32_t s_num_groups;
 extern ext2_bgd_t s_bgd[32];
 extern int s_mounted;
+extern spinlock_t ext2_lock;
 
 /* ── Block cache — defined in ext2_cache.c ─────────────────────────────── */
 #define CACHE_SLOTS 16

@@ -5,6 +5,7 @@
 #include "random.h"
 #include "signal.h"
 #include "tty.h"
+#include "spinlock.h"
 
 #define KBD_DATA 0x60
 
@@ -13,6 +14,8 @@
 static volatile char    s_buf[KBD_BUF_SIZE];
 static volatile uint32_t s_head = 0;  /* next write position */
 static volatile uint32_t s_tail = 0;  /* next read position  */
+
+static spinlock_t kbd_lock = SPINLOCK_INIT;
 
 /* Shift state */
 static volatile int s_shift = 0;
@@ -49,11 +52,13 @@ static const char s_sc_upper[] = {
 static void
 buf_push(char c)
 {
+    irqflags_t fl = spin_lock_irqsave(&kbd_lock);
     uint32_t next = (s_head + 1) & (KBD_BUF_SIZE - 1);
     if (next != s_tail) {   /* drop if full */
         s_buf[s_head] = c;
         s_head = next;
     }
+    spin_unlock_irqrestore(&kbd_lock, fl);
 }
 
 void
@@ -154,10 +159,14 @@ kbd_read(void)
 int
 kbd_poll(char *out)
 {
-    if (s_head == s_tail)
+    irqflags_t fl = spin_lock_irqsave(&kbd_lock);
+    if (s_head == s_tail) {
+        spin_unlock_irqrestore(&kbd_lock, fl);
         return 0;
+    }
     *out = s_buf[s_tail];
     s_tail = (s_tail + 1) & (KBD_BUF_SIZE - 1);
+    spin_unlock_irqrestore(&kbd_lock, fl);
     return 1;
 }
 
