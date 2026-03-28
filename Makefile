@@ -300,6 +300,9 @@ user/httpd/httpd.elf: $(MUSL_BUILT)
 user/dhcp/dhcp: user/dhcp/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/dhcp
 
+user/chronos/chronos: user/chronos/main.c $(MUSL_BUILT)
+	$(MAKE) -C user/chronos
+
 user/thread_test/thread_test.elf: user/thread_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/thread_test
 
