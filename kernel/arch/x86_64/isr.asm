@@ -132,6 +132,14 @@ ISR_NOERR 0x2F ; IRQ15 — secondary ATA / spurious slave
 ; Calling convention: SystemV AMD64 ABI — rdi = first argument (cpu_state_t *).
 ; The cpu_state_t pointer is rsp+8 after the saved-CR3 slot is pushed.
 isr_common_stub:
+    ; SWAPGS if interrupt came from ring 3 (user mode).
+    ; At this point: [RSP+0]=vector, [RSP+8]=error_code, [RSP+16]=RIP, [RSP+24]=CS.
+    ; CS == 0x23 means user code segment (RPL=3).  Must swap GS.base before
+    ; touching any per-CPU data so kernel GS.base points to percpu_t.
+    cmp  qword [rsp + 24], 0x23
+    jne  .no_swapgs_entry
+    swapgs
+.no_swapgs_entry:
     ; Save all GPRs (push order: rax first → r15 last at lowest address).
     ; cpu_state_t field order (low→high): r15,r14,...,rax,vector,error,rip,cs,rf,rsp,ss.
     push rax
@@ -216,6 +224,12 @@ isr_post_dispatch:
     pop rbx
     pop rax
 
+    ; SWAPGS if returning to ring 3 (user mode).
+    ; After GPR restores: [RSP+0]=vector, [RSP+8]=error_code, [RSP+16]=RIP, [RSP+24]=CS.
+    cmp  qword [rsp + 24], 0x23
+    jne  .no_swapgs_exit
+    swapgs
+.no_swapgs_exit:
     add rsp, 16     ; discard vector + error_code
     iretq
 
