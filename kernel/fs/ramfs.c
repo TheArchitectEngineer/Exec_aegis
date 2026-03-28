@@ -4,6 +4,7 @@
 #include "printk.h"
 #include "uaccess.h"
 #include "syscall_util.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 /* RAMFS_MAX_FILES, RAMFS_MAX_NAMELEN, RAMFS_MAX_SIZE defined in ramfs.h */
@@ -170,16 +171,25 @@ ramfs_init(ramfs_t *inst)
         inst->files[i].size    = 0;
         inst->files[i].in_use  = 0;
     }
+    spinlock_t init = SPINLOCK_INIT;
+    inst->lock = init;
 }
 
 int
 ramfs_open(ramfs_t *inst, const char *name, int flags, vfs_file_t *out)
 {
+    irqflags_t fl = spin_lock_irqsave(&inst->lock);
     ramfs_file_t *f = rfs_find(inst, name);
     if (!f) {
-        if (!(flags & (int)VFS_O_CREAT)) return -2;
+        if (!(flags & (int)VFS_O_CREAT)) {
+            spin_unlock_irqrestore(&inst->lock, fl);
+            return -2;
+        }
         f = rfs_alloc(inst, name);
-        if (!f) return -12;
+        if (!f) {
+            spin_unlock_irqrestore(&inst->lock, fl);
+            return -12;
+        }
     }
     out->ops    = &s_ramfs_ops;
     out->priv   = (void *)f;
@@ -187,6 +197,7 @@ ramfs_open(ramfs_t *inst, const char *name, int flags, vfs_file_t *out)
     out->size   = (uint64_t)f->size;
     out->flags  = 0;
     out->_pad   = 0;
+    spin_unlock_irqrestore(&inst->lock, fl);
     return 0;
 }
 
@@ -220,18 +231,30 @@ int
 ramfs_populate(ramfs_t *inst, const char *name,
                const uint8_t *kbuf, uint32_t len)
 {
+    irqflags_t fl = spin_lock_irqsave(&inst->lock);
     ramfs_file_t *f = rfs_find(inst, name);
     if (!f) {
         f = rfs_alloc(inst, name);
-        if (!f) return -12;
+        if (!f) {
+            spin_unlock_irqrestore(&inst->lock, fl);
+            return -12;
+        }
     }
-    if (len == 0) { f->size = 0; return 0; }
+    if (len == 0) {
+        f->size = 0;
+        spin_unlock_irqrestore(&inst->lock, fl);
+        return 0;
+    }
     if (!f->data) {
         f->data = (uint8_t *)kva_alloc_pages(1);
-        if (!f->data) return -12;
+        if (!f->data) {
+            spin_unlock_irqrestore(&inst->lock, fl);
+            return -12;
+        }
     }
     if (len > RAMFS_MAX_SIZE) len = RAMFS_MAX_SIZE;
     __builtin_memcpy(f->data, kbuf, len);
     f->size = len;
+    spin_unlock_irqrestore(&inst->lock, fl);
     return 0;
 }

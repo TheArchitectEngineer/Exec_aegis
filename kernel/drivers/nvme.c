@@ -21,6 +21,7 @@
 #include "../mm/pmm.h"
 #include "../fs/blkdev.h"
 #include "../core/printk.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -56,6 +57,7 @@ static uint8_t               s_iocq_phase = 1;
  * Phase 20: synchronous only — no concurrent I/O. */
 static void    *s_iobuf     = NULL;
 static uint64_t s_iobuf_phys = 0;
+static spinlock_t nvme_lock = SPINLOCK_INIT;
 
 /* -------------------------------------------------------------------------
  * Helpers
@@ -412,6 +414,8 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
     if (bytes > 4096u)
         return -1;   /* multi-page transfers not supported in Phase 20 */
 
+    irqflags_t fl = spin_lock_irqsave(&nvme_lock);
+
     /* Bounce buffer: shared single page allocated in nvme_init() */
     tmp = s_iobuf;
     uint64_t buf_phys = s_iobuf_phys;
@@ -442,6 +446,7 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
     }
     if (rc == 0)
         __builtin_memcpy(buf, tmp, bytes);
+    spin_unlock_irqrestore(&nvme_lock, fl);
     return rc;
 }
 
@@ -459,6 +464,8 @@ nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
     (void)dev;
     if (bytes > 4096u)
         return -1;
+
+    irqflags_t fl = spin_lock_irqsave(&nvme_lock);
 
     /* Bounce buffer: shared single page allocated in nvme_init() */
     tmp = s_iobuf;
@@ -485,8 +492,10 @@ nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
     arch_wmb();
     *doorbell(1u, 0) = s_iosq_tail;
 
-    return poll_cqe(s_iocq, NVME_IO_QUEUE_DEPTH,
+    int rc = poll_cqe(s_iocq, NVME_IO_QUEUE_DEPTH,
                     &s_iocq_head, &s_iocq_phase,
                     doorbell(1u, 1), 1u, cid);
+    spin_unlock_irqrestore(&nvme_lock, fl);
+    return rc;
     }
 }

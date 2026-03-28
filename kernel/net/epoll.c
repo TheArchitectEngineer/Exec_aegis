@@ -3,9 +3,11 @@
 #include "proc.h"
 #include "uaccess.h"
 #include "arch.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 static epoll_fd_t s_epoll[EPOLL_MAX_INSTANCES];
+static spinlock_t epoll_lock = SPINLOCK_INIT;
 
 /* ── epoll VFS ops ───────────────────────────────────────────────────────── */
 
@@ -27,28 +29,45 @@ static const vfs_ops_t s_epoll_ops = {
 
 int epoll_alloc(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&epoll_lock);
     uint32_t i;
     for (i = 0; i < EPOLL_MAX_INSTANCES; i++) {
         if (!s_epoll[i].in_use) {
             __builtin_memset(&s_epoll[i], 0, sizeof(s_epoll[i]));
             s_epoll[i].in_use = 1;
+            spin_unlock_irqrestore(&epoll_lock, fl);
             return (int)i;
         }
     }
+    spin_unlock_irqrestore(&epoll_lock, fl);
     return -1;
 }
 
 epoll_fd_t *epoll_get(uint32_t epoll_id)
 {
-    if (epoll_id >= EPOLL_MAX_INSTANCES) return (epoll_fd_t *)0;
-    if (!s_epoll[epoll_id].in_use) return (epoll_fd_t *)0;
-    return &s_epoll[epoll_id];
+    irqflags_t fl = spin_lock_irqsave(&epoll_lock);
+    if (epoll_id >= EPOLL_MAX_INSTANCES) {
+        spin_unlock_irqrestore(&epoll_lock, fl);
+        return (epoll_fd_t *)0;
+    }
+    if (!s_epoll[epoll_id].in_use) {
+        spin_unlock_irqrestore(&epoll_lock, fl);
+        return (epoll_fd_t *)0;
+    }
+    epoll_fd_t *ep = &s_epoll[epoll_id];
+    spin_unlock_irqrestore(&epoll_lock, fl);
+    return ep;
 }
 
 void epoll_free(uint32_t epoll_id)
 {
-    if (epoll_id >= EPOLL_MAX_INSTANCES) return;
+    irqflags_t fl = spin_lock_irqsave(&epoll_lock);
+    if (epoll_id >= EPOLL_MAX_INSTANCES) {
+        spin_unlock_irqrestore(&epoll_lock, fl);
+        return;
+    }
     s_epoll[epoll_id].in_use = 0;
+    spin_unlock_irqrestore(&epoll_lock, fl);
 }
 
 int epoll_ctl_impl(uint32_t epoll_id, int op, int fd, k_epoll_event_t *ev)
@@ -98,6 +117,7 @@ int epoll_ctl_impl(uint32_t epoll_id, int op, int fd, k_epoll_event_t *ev)
 
 void epoll_notify(uint32_t sock_id_as_fd, uint32_t events)
 {
+    irqflags_t fl = spin_lock_irqsave(&epoll_lock);
     uint32_t e;
     for (e = 0; e < EPOLL_MAX_INSTANCES; e++) {
         epoll_fd_t *ep = &s_epoll[e];
@@ -124,6 +144,7 @@ void epoll_notify(uint32_t sock_id_as_fd, uint32_t events)
             }
         }
     }
+    spin_unlock_irqrestore(&epoll_lock, fl);
 }
 
 int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,

@@ -56,50 +56,55 @@ pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
     pipe_t *p = (pipe_t *)priv;
     (void)off;
 
-    /*
-     * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
-     * Reset to 0 rather than panic — index corruption is a kernel bug, not
-     * user-visible input, and a silent reset is safer than an undiagnosable
-     * halt. The ring invariant (read_pos < PIPE_BUF_SIZE) is restored before
-     * any arithmetic that could wrap or overflow.
-     */
-    if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
-    if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
-
     for (;;) {
-        if (p->count == 0 && p->write_refs == 0)
+        irqflags_t fl = spin_lock_irqsave(&p->lock);
+
+        /*
+         * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
+         * Reset to 0 rather than panic — index corruption is a kernel bug, not
+         * user-visible input, and a silent reset is safer than an undiagnosable
+         * halt. The ring invariant (read_pos < PIPE_BUF_SIZE) is restored before
+         * any arithmetic that could wrap or overflow.
+         */
+        if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
+        if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
+
+        if (p->count == 0 && p->write_refs == 0) {
+            spin_unlock_irqrestore(&p->lock, fl);
             return 0;   /* EOF: all writers gone */
+        }
         if (p->count == 0) {
             /* Block until a writer deposits data or closes the write end. */
             p->reader_waiting = sched_current();
+            spin_unlock_irqrestore(&p->lock, fl);
             sched_block();
-            /* Resumes here after sched_wake(); re-check conditions. */
+            /* Resumes here after sched_wake(); re-acquire and re-check. */
             continue;
         }
-        break;
+
+        /* Data is available. Copy min(len, count) bytes out of the ring. */
+        uint32_t n = (uint32_t)len;
+        if (n > p->count) n = p->count;
+
+        /* Ring buffer read with wrap-around */
+        uint32_t first = PIPE_BUF_SIZE - p->read_pos;
+        if (first > n) first = n;
+        __builtin_memcpy(buf, &p->buf[p->read_pos], first);
+        if (first < n)
+            __builtin_memcpy((char *)buf + first, p->buf, n - first);
+
+        p->read_pos = (p->read_pos + n) % PIPE_BUF_SIZE;
+        p->count   -= n;
+
+        /* Wake a blocked writer now that there's space. */
+        if (p->writer_waiting) {
+            sched_wake(p->writer_waiting);
+            p->writer_waiting = NULL;
+        }
+
+        spin_unlock_irqrestore(&p->lock, fl);
+        return (int)n;
     }
-
-    /* Data is available. Copy min(len, count) bytes out of the ring. */
-    uint32_t n = (uint32_t)len;
-    if (n > p->count) n = p->count;
-
-    /* Ring buffer read with wrap-around */
-    uint32_t first = PIPE_BUF_SIZE - p->read_pos;
-    if (first > n) first = n;
-    __builtin_memcpy(buf, &p->buf[p->read_pos], first);
-    if (first < n)
-        __builtin_memcpy((char *)buf + first, p->buf, n - first);
-
-    p->read_pos = (p->read_pos + n) % PIPE_BUF_SIZE;
-    p->count   -= n;
-
-    /* Wake a blocked writer now that there's space. */
-    if (p->writer_waiting) {
-        sched_wake(p->writer_waiting);
-        p->writer_waiting = NULL;
-    }
-
-    return (int)n;
 }
 
 /*
@@ -121,16 +126,19 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
     pipe_t *p = (pipe_t *)priv;
     char staging[PIPE_BUF_SIZE];
 
-    /*
-     * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
-     * Same rationale as pipe_read_fn: silent reset preferred over panic for
-     * kernel-internal corruption. Restores invariant before any wrap arithmetic.
-     */
-    if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
-    if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
-
     for (;;) {
+        irqflags_t fl = spin_lock_irqsave(&p->lock);
+
+        /*
+         * Defensive: ring buffer indices must stay within [0, PIPE_BUF_SIZE).
+         * Same rationale as pipe_read_fn: silent reset preferred over panic for
+         * kernel-internal corruption. Restores invariant before any wrap arithmetic.
+         */
+        if (p->read_pos  >= PIPE_BUF_SIZE) p->read_pos  = 0;
+        if (p->write_pos >= PIPE_BUF_SIZE) p->write_pos = 0;
+
         if (p->read_refs == 0) {
+            spin_unlock_irqrestore(&p->lock, fl);
             /* Deliver SIGPIPE to the writer before returning -EPIPE.
              * If the process has SIGPIPE masked or SIG_IGN, it handles
              * -EPIPE via errno. SIGPIPE = 13 per POSIX.
@@ -146,37 +154,39 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
         if (p->count == PIPE_BUF_SIZE) {
             /* Block until a reader drains some data. */
             p->writer_waiting = sched_current();
+            spin_unlock_irqrestore(&p->lock, fl);
             sched_block();
+            /* Re-acquire and re-check. */
             continue;
         }
-        break;
+
+        /* Compute how many bytes we can accept this call. */
+        uint32_t avail = PIPE_BUF_SIZE - p->count;
+        uint32_t n = (uint32_t)len;
+        if (n > avail) n = avail;
+
+        /* Copy n bytes from user space via staging buffer (SMAP guard). */
+        copy_from_user(staging, buf, n);
+
+        /* Ring buffer write with wrap-around */
+        uint32_t first = PIPE_BUF_SIZE - p->write_pos;
+        if (first > n) first = n;
+        __builtin_memcpy(&p->buf[p->write_pos], staging, first);
+        if (first < n)
+            __builtin_memcpy(p->buf, staging + first, n - first);
+
+        p->write_pos = (p->write_pos + n) % PIPE_BUF_SIZE;
+        p->count    += n;
+
+        /* Wake a blocked reader now that there's data. */
+        if (p->reader_waiting) {
+            sched_wake(p->reader_waiting);
+            p->reader_waiting = NULL;
+        }
+
+        spin_unlock_irqrestore(&p->lock, fl);
+        return (int)n;   /* partial write; caller must loop if n < len */
     }
-
-    /* Compute how many bytes we can accept this call. */
-    uint32_t avail = PIPE_BUF_SIZE - p->count;
-    uint32_t n = (uint32_t)len;
-    if (n > avail) n = avail;
-
-    /* Copy n bytes from user space via staging buffer (SMAP guard). */
-    copy_from_user(staging, buf, n);
-
-    /* Ring buffer write with wrap-around */
-    uint32_t first = PIPE_BUF_SIZE - p->write_pos;
-    if (first > n) first = n;
-    __builtin_memcpy(&p->buf[p->write_pos], staging, first);
-    if (first < n)
-        __builtin_memcpy(p->buf, staging + first, n - first);
-
-    p->write_pos = (p->write_pos + n) % PIPE_BUF_SIZE;
-    p->count    += n;
-
-    /* Wake a blocked reader now that there's data. */
-    if (p->reader_waiting) {
-        sched_wake(p->reader_waiting);
-        p->reader_waiting = NULL;
-    }
-
-    return (int)n;   /* partial write; caller must loop if n < len */
 }
 
 /*
@@ -188,12 +198,15 @@ static void
 pipe_read_close_fn(void *priv)
 {
     pipe_t *p = (pipe_t *)priv;
+    irqflags_t fl = spin_lock_irqsave(&p->lock);
     p->read_refs--;
     if (p->writer_waiting) {
         sched_wake(p->writer_waiting);
         p->writer_waiting = NULL;
     }
-    if (p->read_refs == 0 && p->write_refs == 0)
+    int do_free = (p->read_refs == 0 && p->write_refs == 0);
+    spin_unlock_irqrestore(&p->lock, fl);
+    if (do_free)
         kva_free_pages(p, 1);
 }
 
@@ -206,12 +219,15 @@ static void
 pipe_write_close_fn(void *priv)
 {
     pipe_t *p = (pipe_t *)priv;
+    irqflags_t fl = spin_lock_irqsave(&p->lock);
     p->write_refs--;
     if (p->reader_waiting) {
         sched_wake(p->reader_waiting);
         p->reader_waiting = NULL;
     }
-    if (p->read_refs == 0 && p->write_refs == 0)
+    int do_free = (p->read_refs == 0 && p->write_refs == 0);
+    spin_unlock_irqrestore(&p->lock, fl);
+    if (do_free)
         kva_free_pages(p, 1);
 }
 
@@ -220,13 +236,19 @@ pipe_write_close_fn(void *priv)
 static void
 pipe_dup_read_fn(void *priv)
 {
-    ((pipe_t *)priv)->read_refs++;
+    pipe_t *p = (pipe_t *)priv;
+    irqflags_t fl = spin_lock_irqsave(&p->lock);
+    p->read_refs++;
+    spin_unlock_irqrestore(&p->lock, fl);
 }
 
 static void
 pipe_dup_write_fn(void *priv)
 {
-    ((pipe_t *)priv)->write_refs++;
+    pipe_t *p = (pipe_t *)priv;
+    irqflags_t fl = spin_lock_irqsave(&p->lock);
+    p->write_refs++;
+    spin_unlock_irqrestore(&p->lock, fl);
 }
 
 static int

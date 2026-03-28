@@ -3,6 +3,7 @@
 
 #include "vfs.h"
 #include "sched.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 /*
@@ -12,13 +13,14 @@
  *   buf[PIPE_BUF_SIZE]          = PIPE_BUF_SIZE bytes
  *   read_pos/write_pos/count    = 3 * 4 = 12 bytes
  *   read_refs/write_refs        = 2 * 4 =  8 bytes   (total uint32 = 20 bytes)
+ *   lock (spinlock_t)           = 4 bytes             (fills alignment gap)
  *   reader_waiting (pointer)    = 8 bytes
  *   writer_waiting (pointer)    = 8 bytes             (total ptrs = 16 bytes)
  *
- * 4060 + 20 + 16 = 4096 = one kva page.
+ * 4056 + 20 + 4 + 16 = 4096 = one kva page.
  * Verified by _Static_assert in pipe.c.
  */
-#define PIPE_BUF_SIZE 4060
+#define PIPE_BUF_SIZE 4056
 
 typedef struct {
     uint8_t          buf[PIPE_BUF_SIZE];
@@ -27,6 +29,7 @@ typedef struct {
     uint32_t         count;           /* bytes currently buffered */
     uint32_t         read_refs;       /* number of open read-end fds */
     uint32_t         write_refs;      /* number of open write-end fds */
+    spinlock_t       lock;            /* per-pipe lock for SMP safety */
     aegis_task_t    *reader_waiting;  /* task blocked on empty pipe */
     aegis_task_t    *writer_waiting;  /* task blocked on full pipe */
 } pipe_t;

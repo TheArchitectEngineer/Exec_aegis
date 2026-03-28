@@ -5,6 +5,7 @@
 #include "epoll.h"
 #include "arch.h"   /* arch_get_ticks() */
 #include "../core/printk.h"
+#include "../core/spinlock.h"
 #include <stddef.h>                 /* NULL */
 
 /* S2: RFC 793 serial number arithmetic for TCP sequence numbers.
@@ -61,6 +62,7 @@ static uint8_t s_tcp_buf[1480];
 /* RST template — used by tcp_rx to send RST|ACK for unknown ports.
  * File-static to avoid placing a 16KB tcp_conn_t on the ISR stack. */
 static tcp_conn_t s_rst_conn;
+static spinlock_t tcp_lock = SPINLOCK_INIT;
 
 void tcp_init(void)
 {
@@ -152,6 +154,7 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             const void *tcp_data, uint16_t len)
 {
     if (len < (uint16_t)sizeof(tcp_hdr_t)) return;
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     const tcp_hdr_t *seg = (const tcp_hdr_t *)tcp_data;
 
     tcp_pseudo_hdr_t ph;
@@ -163,12 +166,12 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     uint32_t sum = 0;
     sum += net_checksum(&ph, sizeof(ph));
     sum += net_checksum(tcp_data, len);
-    if (net_checksum_finish(sum) != 0) return;
+    if (net_checksum_finish(sum) != 0) goto out;
 
     uint16_t remote_port = ntohs(seg->src_port);
     uint16_t local_port  = ntohs(seg->dst_port);
     uint8_t  hdr_bytes   = (uint8_t)((seg->data_off >> 4) * 4);
-    if (hdr_bytes < sizeof(tcp_hdr_t) || hdr_bytes > len) return;
+    if (hdr_bytes < sizeof(tcp_hdr_t) || hdr_bytes > len) goto out;
     uint16_t payload_len = (uint16_t)(len - hdr_bytes);
     const uint8_t *payload = (const uint8_t *)tcp_data + hdr_bytes;
     uint32_t seq = ntohl(seg->seq);
@@ -189,10 +192,10 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
                 s_rst_conn.snd_nxt     = 0;
                 s_rst_conn.rcv_nxt     = seq + 1;
                 tcp_send_segment(dev, &s_rst_conn, TCP_RST | TCP_ACK, NULL, 0);
-                return;
+                goto out;
             }
             conn = tcp_alloc();
-            if (!conn) return;
+            if (!conn) goto out;
             conn->state       = TCP_SYN_RCVD;
             conn->dev         = dev;
             conn->local_ip    = dst_ip;
@@ -209,7 +212,7 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             conn->retransmit_at    = (uint32_t)arch_get_ticks() + TCP_RTO_INITIAL;
             conn->retransmit_count = 0;
         }
-        return;
+        goto out;
     }
 
     conn->snd_wnd = ntohs(seg->window);
@@ -347,10 +350,13 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     default:
         break;
     }
+out:
+    spin_unlock_irqrestore(&tcp_lock, fl);
 }
 
 void tcp_tick(void)
 {
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     uint32_t now = (uint32_t)arch_get_ticks();
     int i;
     for (i = 0; i < TCP_MAX_CONNS; i++) {
@@ -383,6 +389,7 @@ void tcp_tick(void)
         else if (c->state == TCP_SYN_SENT)
             tcp_send_segment(c->dev, c, TCP_SYN, NULL, 0);
     }
+    spin_unlock_irqrestore(&tcp_lock, fl);
 }
 
 /* ── Socket-layer helpers (Phase 26) ─────────────────────────────────────── */
@@ -391,6 +398,7 @@ void tcp_tick(void)
 int
 tcp_listen(uint16_t port, uint32_t sock_id)
 {
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     uint32_t i;
     for (i = 0; i < TCP_MAX_CONNS; i++) {
         if (s_tcp[i].state == TCP_CLOSED) {
@@ -398,9 +406,11 @@ tcp_listen(uint16_t port, uint32_t sock_id)
             s_tcp[i].state      = TCP_LISTEN;
             s_tcp[i].local_port = port;
             s_tcp[i].sock_id    = sock_id;
+            spin_unlock_irqrestore(&tcp_lock, fl);
             return 0;
         }
     }
+    spin_unlock_irqrestore(&tcp_lock, fl);
     return -1;
 }
 
@@ -410,6 +420,7 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
             uint32_t *conn_id_out)
 {
     extern netdev_t *netdev_get(const char *name);
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     uint32_t i;
     for (i = 0; i < TCP_MAX_CONNS; i++) {
         if (s_tcp[i].state == TCP_CLOSED) {
@@ -428,9 +439,11 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
             tcp_send_segment(dev, &s_tcp[i], TCP_SYN, (void *)0, 0);
             s_tcp[i].snd_nxt++;
             s_tcp[i].retransmit_at = (uint32_t)arch_get_ticks() + TCP_RTO_INITIAL;
+            spin_unlock_irqrestore(&tcp_lock, fl);
             return 0;
         }
     }
+    spin_unlock_irqrestore(&tcp_lock, fl);
     return -1;
 }
 
@@ -438,16 +451,27 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
 int
 tcp_conn_recv(uint32_t conn_id, void *dst, uint16_t max_len)
 {
-    if (conn_id >= TCP_MAX_CONNS) return -1;
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
+    if (conn_id >= TCP_MAX_CONNS) {
+        spin_unlock_irqrestore(&tcp_lock, fl);
+        return -1;
+    }
     tcp_conn_t *c = &s_tcp[conn_id];
     uint32_t avail = (c->rbuf_tail - c->rbuf_head + TCP_RBUF_SIZE) % TCP_RBUF_SIZE;
     if (avail == 0) {
+        int ret;
         if (c->state == TCP_CLOSE_WAIT || c->state == TCP_CLOSED
             || c->state == TCP_TIME_WAIT)
-            return 0;  /* EOF — FIN received, no more data */
-        return -11;  /* EAGAIN — buffer empty, connection alive */
+            ret = 0;  /* EOF — FIN received, no more data */
+        else
+            ret = -11;  /* EAGAIN — buffer empty, connection alive */
+        spin_unlock_irqrestore(&tcp_lock, fl);
+        return ret;
     }
-    if (max_len == 0) return (int)avail;  /* peek: report available bytes */
+    if (max_len == 0) {
+        spin_unlock_irqrestore(&tcp_lock, fl);
+        return (int)avail;  /* peek: report available bytes */
+    }
     uint32_t n = avail < max_len ? avail : max_len;
     uint8_t *d = (uint8_t *)dst;
     uint32_t j;
@@ -455,6 +479,7 @@ tcp_conn_recv(uint32_t conn_id, void *dst, uint16_t max_len)
         d[j] = c->rbuf[c->rbuf_head];
         c->rbuf_head = (c->rbuf_head + 1) % TCP_RBUF_SIZE;
     }
+    spin_unlock_irqrestore(&tcp_lock, fl);
     return (int)n;
 }
 
@@ -462,14 +487,23 @@ tcp_conn_recv(uint32_t conn_id, void *dst, uint16_t max_len)
 int
 tcp_conn_send(uint32_t conn_id, const void *data, uint16_t len)
 {
-    if (conn_id >= TCP_MAX_CONNS) return -1;
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
+    if (conn_id >= TCP_MAX_CONNS) {
+        spin_unlock_irqrestore(&tcp_lock, fl);
+        return -1;
+    }
     tcp_conn_t *c = &s_tcp[conn_id];
-    if (c->state != TCP_ESTABLISHED) return -32;  /* EPIPE */
+    if (c->state != TCP_ESTABLISHED) {
+        spin_unlock_irqrestore(&tcp_lock, fl);
+        return -32;  /* EPIPE */
+    }
     int r = tcp_send_segment(c->dev, c, TCP_PSH | TCP_ACK, data, len);
     if (r == 0) {
         c->snd_nxt += len;
+        spin_unlock_irqrestore(&tcp_lock, fl);
         return (int)len;
     }
+    spin_unlock_irqrestore(&tcp_lock, fl);
     return -1;
 }
 
@@ -477,13 +511,18 @@ tcp_conn_send(uint32_t conn_id, const void *data, uint16_t len)
 int
 tcp_conn_close(uint32_t conn_id)
 {
-    if (conn_id >= TCP_MAX_CONNS) return -1;
+    irqflags_t fl = spin_lock_irqsave(&tcp_lock);
+    if (conn_id >= TCP_MAX_CONNS) {
+        spin_unlock_irqrestore(&tcp_lock, fl);
+        return -1;
+    }
     tcp_conn_t *c = &s_tcp[conn_id];
     if (c->state == TCP_ESTABLISHED) {
         tcp_send_segment(c->dev, c, TCP_FIN | TCP_ACK, (void *)0, 0);
         c->state = TCP_FIN_WAIT_1;
         c->snd_nxt++;
     }
+    spin_unlock_irqrestore(&tcp_lock, fl);
     return 0;
 }
 

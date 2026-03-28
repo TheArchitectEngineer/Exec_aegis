@@ -3,6 +3,7 @@
 #include "ip.h"     /* ip_rx(), net_get_config() */
 #include "arch.h"   /* arch_get_ticks() */
 #include "../core/printk.h"
+#include "../core/spinlock.h"
 #include <stddef.h>
 
 /* Local memory helpers — kernel does not link against libc. */
@@ -37,6 +38,7 @@ static arp_entry_t s_arp_table[ARP_TABLE_SIZE];
 
 /* Shared static TX buffer — callers are sequential (no concurrent sends). */
 static uint8_t s_tx_buf[1514];
+static spinlock_t arp_lock = SPINLOCK_INIT;
 
 void eth_init(void)
 {
@@ -171,6 +173,7 @@ int eth_send(netdev_t *dev, const mac_addr_t *dst_mac,
 
     if (!dev || len > 1500) return -1;
 
+    irqflags_t fl = spin_lock_irqsave(&arp_lock);
     hdr = (eth_hdr_t *)s_tx_buf;
     hdr->dst = *dst_mac;
     /* dev->mac is uint8_t[6]; copy into mac_addr_t src field. */
@@ -181,6 +184,7 @@ int eth_send(netdev_t *dev, const mac_addr_t *dst_mac,
 
     total = (uint16_t)(sizeof(eth_hdr_t) + len);
     dev->send(dev, s_tx_buf, total);
+    spin_unlock_irqrestore(&arp_lock, fl);
     return 0;
 }
 

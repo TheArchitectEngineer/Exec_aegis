@@ -6,9 +6,11 @@
 #include "tcp.h"
 #include "sched.h"
 #include "../mm/uaccess.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 static sock_t s_socks[SOCK_TABLE_SIZE];  /* zero-initialized by C runtime */
+static spinlock_t sock_lock = SPINLOCK_INIT;
 
 /* ── Socket VFS ops ─────────────────────────────────────────────────────── */
 
@@ -113,6 +115,7 @@ static int sock_vfs_stat(void *priv, k_stat_t *st)
 
 int sock_alloc(uint8_t type)
 {
+    irqflags_t fl = spin_lock_irqsave(&sock_lock);
     uint32_t i;
     for (i = 0; i < SOCK_TABLE_SIZE; i++) {
         if (s_socks[i].state == SOCK_FREE) {
@@ -121,24 +124,40 @@ int sock_alloc(uint8_t type)
             s_socks[i].type        = type;
             s_socks[i].tcp_conn_id = SOCK_NONE;
             s_socks[i].epoll_id    = SOCK_NONE;
+            spin_unlock_irqrestore(&sock_lock, fl);
             return (int)i;
         }
     }
+    spin_unlock_irqrestore(&sock_lock, fl);
     return -1;
 }
 
 sock_t *sock_get(uint32_t sock_id)
 {
-    if (sock_id >= SOCK_TABLE_SIZE) return (sock_t *)0;
-    if (s_socks[sock_id].state == SOCK_FREE) return (sock_t *)0;
-    return &s_socks[sock_id];
+    irqflags_t fl = spin_lock_irqsave(&sock_lock);
+    if (sock_id >= SOCK_TABLE_SIZE) {
+        spin_unlock_irqrestore(&sock_lock, fl);
+        return (sock_t *)0;
+    }
+    if (s_socks[sock_id].state == SOCK_FREE) {
+        spin_unlock_irqrestore(&sock_lock, fl);
+        return (sock_t *)0;
+    }
+    sock_t *s = &s_socks[sock_id];
+    spin_unlock_irqrestore(&sock_lock, fl);
+    return s;
 }
 
 void sock_free(uint32_t sock_id)
 {
-    if (sock_id >= SOCK_TABLE_SIZE) return;
+    irqflags_t fl = spin_lock_irqsave(&sock_lock);
+    if (sock_id >= SOCK_TABLE_SIZE) {
+        spin_unlock_irqrestore(&sock_lock, fl);
+        return;
+    }
     s_socks[sock_id].state = SOCK_FREE;
     s_socks[sock_id].waiter_task = (aegis_task_t *)0;
+    spin_unlock_irqrestore(&sock_lock, fl);
 }
 
 void sock_wake(uint32_t sock_id)

@@ -4,6 +4,7 @@
 #include "udp.h"
 #include "tcp.h"
 #include "../core/printk.h"
+#include "../core/spinlock.h"
 #include "arch.h"   /* arch_get_ticks() */
 
 /* Local memory helpers (kernel has no libc). */
@@ -47,9 +48,11 @@ uint16_t net_checksum_finish(uint32_t sum)
 static ip4_addr_t s_my_ip;
 static ip4_addr_t s_netmask;
 static ip4_addr_t s_gateway;
+static spinlock_t ip_lock = SPINLOCK_INIT;
 
 void net_set_config(ip4_addr_t ip, ip4_addr_t mask, ip4_addr_t gw)
 {
+    irqflags_t fl = spin_lock_irqsave(&ip_lock);
     s_my_ip   = ip;
     s_netmask = mask;
     s_gateway = gw;
@@ -64,13 +67,16 @@ void net_set_config(ip4_addr_t ip, ip4_addr_t mask, ip4_addr_t gw)
     printk("[NET] configured: %u.%u.%u.%u/%u gw %u.%u.%u.%u\n",
            (a>>24)&0xff, (a>>16)&0xff, (a>>8)&0xff, a&0xff, pl,
            (g>>24)&0xff, (g>>16)&0xff, (g>>8)&0xff, g&0xff);
+    spin_unlock_irqrestore(&ip_lock, fl);
 }
 
 void net_get_config(ip4_addr_t *ip, ip4_addr_t *mask, ip4_addr_t *gw)
 {
+    irqflags_t fl = spin_lock_irqsave(&ip_lock);
     if (ip)   *ip   = s_my_ip;
     if (mask) *mask = s_netmask;
     if (gw)   *gw   = s_gateway;
+    spin_unlock_irqrestore(&ip_lock, fl);
 }
 
 /* ---- IP send ----------------------------------------------------------- */
@@ -106,13 +112,16 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
 {
     if (!dev)        return -1;
     if (len > 1480)  return -1; /* EMSGSIZE — no fragmentation in v1 */
+    irqflags_t ip_fl = spin_lock_irqsave(&ip_lock);
 
     /* Loopback: if destination is ourselves or 127.0.0.0/8, queue the
      * packet for deferred delivery instead of sending it to the NIC. */
     if ((s_my_ip != 0 && dst_ip == s_my_ip) ||
         (ntohl(dst_ip) >> 24) == 127) {
-        if (s_lo_head - s_lo_tail >= LO_RING_SIZE)
+        if (s_lo_head - s_lo_tail >= LO_RING_SIZE) {
+            spin_unlock_irqrestore(&ip_lock, ip_fl);
             return -1;  /* loopback queue full — drop */
+        }
         uint32_t idx = s_lo_head & (LO_RING_SIZE - 1);
         uint16_t total = (uint16_t)(sizeof(ip_hdr_t) + len);
         ip_hdr_t *hdr  = (ip_hdr_t *)s_lo_ring[idx];
@@ -131,6 +140,7 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
         s_lo_len[idx] = total;
         s_lo_dev = dev;
         s_lo_head++;
+        spin_unlock_irqrestore(&ip_lock, ip_fl);
         return 0;
     }
 
@@ -148,8 +158,10 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
         else
             via = s_gateway;
 
-        if (arp_resolve(dev, via, &next_hop_mac) != 0)
+        if (arp_resolve(dev, via, &next_hop_mac) != 0) {
+            spin_unlock_irqrestore(&ip_lock, ip_fl);
             return -1; /* ARP timeout */
+        }
     }
 
     /* Build 20-byte IPv4 header. */
@@ -170,7 +182,9 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
 
     _ip_memcpy(s_ip_buf + sizeof(ip_hdr_t), payload, len);
 
-    return eth_send(dev, &next_hop_mac, ETHERTYPE_IP, s_ip_buf, total);
+    int ret = eth_send(dev, &next_hop_mac, ETHERTYPE_IP, s_ip_buf, total);
+    spin_unlock_irqrestore(&ip_lock, ip_fl);
+    return ret;
 }
 
 /* ---- ICMP -------------------------------------------------------------- */

@@ -5,11 +5,13 @@
 #include "sched.h"
 #include "proc.h"
 #include "signal.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 /* ── Static pool ──────────────────────────────────────────────────── */
 
 static pty_pair_t s_pty_pool[PTY_MAX_PAIRS];
+static spinlock_t pty_pool_lock = SPINLOCK_INIT;
 
 /* ── Ring buffer helpers ──────────────────────────────────────────── */
 
@@ -236,21 +238,26 @@ static void
 master_dup_fn(void *priv)
 {
 	pty_pair_t *pair = (pty_pair_t *)priv;
+	irqflags_t fl = spin_lock_irqsave(&pair->lock);
 	pair->master_refs++;
+	spin_unlock_irqrestore(&pair->lock, fl);
 }
 
 static void
 master_close_fn(void *priv)
 {
 	pty_pair_t *pair = (pty_pair_t *)priv;
+	irqflags_t fl = spin_lock_irqsave(&pair->lock);
 	if (pair->master_refs > 1) {
 		pair->master_refs--;
+		spin_unlock_irqrestore(&pair->lock, fl);
 		return;
 	}
 	pair->master_open = 0;
 	pair->master_refs = 0;
 	if (!pair->slave_open)
 		pair->in_use = 0;
+	spin_unlock_irqrestore(&pair->lock, fl);
 }
 
 static int
@@ -313,15 +320,19 @@ static void
 slave_dup_fn(void *priv)
 {
 	pty_pair_t *pair = (pty_pair_t *)priv;
+	irqflags_t fl = spin_lock_irqsave(&pair->lock);
 	pair->slave_refs++;
+	spin_unlock_irqrestore(&pair->lock, fl);
 }
 
 static void
 slave_close_fn(void *priv)
 {
 	pty_pair_t *pair = (pty_pair_t *)priv;
+	irqflags_t fl = spin_lock_irqsave(&pair->lock);
 	if (pair->slave_refs > 1) {
 		pair->slave_refs--;
+		spin_unlock_irqrestore(&pair->lock, fl);
 		return;
 	}
 	pair->slave_open = 0;
@@ -329,6 +340,7 @@ slave_close_fn(void *priv)
 	if (!pair->master_open) {
 		pair->in_use = 0;
 	}
+	spin_unlock_irqrestore(&pair->lock, fl);
 }
 
 static int
@@ -352,20 +364,27 @@ ptmx_open(int flags, vfs_file_t *out)
 	uint32_t i;
 	(void)flags;
 
+	irqflags_t fl = spin_lock_irqsave(&pty_pool_lock);
 	for (i = 0; i < PTY_MAX_PAIRS; i++) {
 		if (!s_pty_pool[i].in_use)
 			break;
 	}
-	if (i == PTY_MAX_PAIRS)
+	if (i == PTY_MAX_PAIRS) {
+		spin_unlock_irqrestore(&pty_pool_lock, fl);
 		return -12; /* ENOMEM */
+	}
 
 	pty_pair_t *pair = &s_pty_pool[i];
 	__builtin_memset(pair, 0, sizeof(*pair));
 	pair->index = (uint8_t)i;
 	pair->in_use = 1;
 	pair->master_open = 1;
-		pair->master_refs = 1;
+	pair->master_refs = 1;
 	pair->locked = 1; /* cleared by unlockpt (grantpt/unlockpt ioctl) */
+	{
+		spinlock_t init = SPINLOCK_INIT;
+		pair->lock = init;
+	}
 
 	tty_init_defaults(&pair->tty);
 	pair->tty.write_out = pty_slave_write_out;
@@ -373,6 +392,7 @@ ptmx_open(int flags, vfs_file_t *out)
 	pair->tty.ctx       = pair;
 
 	try_acquire_ctty(pair);
+	spin_unlock_irqrestore(&pty_pool_lock, fl);
 
 	out->ops    = &s_master_ops;
 	out->priv   = pair;
@@ -391,15 +411,21 @@ pts_open(uint32_t index, int flags, vfs_file_t *out)
 	if (index >= PTY_MAX_PAIRS)
 		return -2; /* ENOENT */
 
+	irqflags_t fl = spin_lock_irqsave(&pty_pool_lock);
 	pty_pair_t *pair = &s_pty_pool[index];
-	if (!pair->in_use || !pair->master_open)
+	if (!pair->in_use || !pair->master_open) {
+		spin_unlock_irqrestore(&pty_pool_lock, fl);
 		return -2; /* ENOENT */
-	if (pair->locked)
+	}
+	if (pair->locked) {
+		spin_unlock_irqrestore(&pty_pool_lock, fl);
 		return -13; /* EACCES */
+	}
 
 	pair->slave_open = 1;
-		pair->slave_refs = 1;
+	pair->slave_refs = 1;
 	try_acquire_ctty(pair);
+	spin_unlock_irqrestore(&pty_pool_lock, fl);
 
 	out->ops    = &s_slave_ops;
 	out->priv   = pair;
@@ -413,12 +439,17 @@ pts_open(uint32_t index, int flags, vfs_file_t *out)
 tty_t *
 pty_find_by_session(uint32_t session_id)
 {
+	irqflags_t fl = spin_lock_irqsave(&pty_pool_lock);
 	uint32_t i;
 	for (i = 0; i < PTY_MAX_PAIRS; i++) {
 		if (s_pty_pool[i].in_use &&
-		    s_pty_pool[i].tty.session_id == session_id)
-			return &s_pty_pool[i].tty;
+		    s_pty_pool[i].tty.session_id == session_id) {
+			tty_t *t = &s_pty_pool[i].tty;
+			spin_unlock_irqrestore(&pty_pool_lock, fl);
+			return t;
+		}
 	}
+	spin_unlock_irqrestore(&pty_pool_lock, fl);
 	return (tty_t *)0;
 }
 

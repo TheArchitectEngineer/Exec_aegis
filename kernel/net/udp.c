@@ -3,6 +3,7 @@
 #include "ip.h"
 #include "socket.h"
 #include "epoll.h"
+#include "../core/spinlock.h"
 
 /* Local memory helpers. */
 static void _udp_memset(void *dst, int val, uint32_t n)
@@ -26,6 +27,7 @@ typedef struct {
 } udp_binding_t;
 
 static udp_binding_t s_udp[UDP_BINDINGS_MAX];
+static spinlock_t udp_lock = SPINLOCK_INIT;
 
 void udp_init(void)
 {
@@ -85,19 +87,21 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
 {
     (void)dev;
     if (len < (uint16_t)sizeof(udp_hdr_t)) return;
+    irqflags_t fl = spin_lock_irqsave(&udp_lock);
 
     const udp_hdr_t *hdr      = (const udp_hdr_t *)udp_data;
     uint16_t udp_claimed = ntohs(hdr->length);
-    if (udp_claimed < (uint16_t)sizeof(udp_hdr_t)) return;  /* malformed */
-    if (udp_claimed > len) return;                           /* truncated */
+    if (udp_claimed < (uint16_t)sizeof(udp_hdr_t)) goto udp_out;  /* malformed */
+    if (udp_claimed > len) goto udp_out;                           /* truncated */
 
     /* S4: Validate UDP checksum (skip if checksum field is 0 per RFC 768). */
     if (hdr->checksum != 0) {
         if (udp_checksum_verify(src_ip, dst_ip,
                                 (const uint8_t *)hdr, udp_claimed) != 0)
-            return;  /* drop corrupted packet */
+            goto udp_out;  /* drop corrupted packet */
     }
 
+    {
     uint16_t dst_port  = ntohs(hdr->dst_port);
     uint16_t src_port  = ntohs(hdr->src_port);
     uint16_t payload_len = (uint16_t)(udp_claimed - (uint16_t)sizeof(udp_hdr_t));
@@ -107,12 +111,12 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     for (i = 0; i < UDP_BINDINGS_MAX; i++) {
         if (s_udp[i].port == dst_port && s_udp[i].port != 0) {
             uint32_t sid = s_udp[i].sock_id;
-            if (sid == SOCK_NONE) return;
+            if (sid == SOCK_NONE) goto udp_out;
             sock_t *s = sock_get(sid);
-            if (!s) return;
+            if (!s) goto udp_out;
             /* Find a free UDP RX slot */
             uint8_t next = (uint8_t)((s->udp_rx_tail + 1) & (UDP_RX_SLOTS - 1));
-            if (next == s->udp_rx_head) return;  /* ring full, drop */
+            if (next == s->udp_rx_head) goto udp_out;  /* ring full, drop */
             udp_rx_slot_t *slot = &s->udp_rx[s->udp_rx_tail];
             if (payload_len > UDP_RX_MAXBUF) payload_len = UDP_RX_MAXBUF;
             uint32_t j;
@@ -125,26 +129,35 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             s->udp_rx_tail = next;
             sock_wake(sid);
             epoll_notify(sid, EPOLLIN);
-            return;
+            goto udp_out;
         }
     }
+    }
     /* No binding: drop silently. */
+udp_out:
+    spin_unlock_irqrestore(&udp_lock, fl);
 }
 
 /* udp_bind: register a sock_id for the given port. Returns 0 or -1. */
 int
 udp_bind(uint16_t port, uint32_t sock_id)
 {
+    irqflags_t fl = spin_lock_irqsave(&udp_lock);
     uint32_t i;
     for (i = 0; i < UDP_BINDINGS_MAX; i++) {
-        if (s_udp[i].port == port && s_udp[i].port != 0) return -1; /* EADDRINUSE */
+        if (s_udp[i].port == port && s_udp[i].port != 0) {
+            spin_unlock_irqrestore(&udp_lock, fl);
+            return -1; /* EADDRINUSE */
+        }
     }
     for (i = 0; i < UDP_BINDINGS_MAX; i++) {
         if (s_udp[i].port == 0) {
             s_udp[i].port    = port;
             s_udp[i].sock_id = sock_id;
+            spin_unlock_irqrestore(&udp_lock, fl);
             return 0;
         }
     }
+    spin_unlock_irqrestore(&udp_lock, fl);
     return -1;
 }

@@ -3,6 +3,7 @@
 #define AEGIS_RAMFS_H
 
 #include "vfs.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 #define RAMFS_MAX_FILES   32
@@ -18,6 +19,7 @@ typedef struct {
 
 typedef struct {
     ramfs_file_t files[RAMFS_MAX_FILES];
+    spinlock_t   lock;
 } ramfs_t;
 
 /* ramfs_init — zero the file table. Call from vfs_init() before any open. */

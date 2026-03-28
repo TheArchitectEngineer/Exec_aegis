@@ -8,6 +8,9 @@
  */
 
 #include "ext2_internal.h"
+#include "../core/spinlock.h"
+
+spinlock_t ext2_lock = SPINLOCK_INIT;
 
 /* ------------------------------------------------------------------ */
 /* Shared globals — accessed by ext2_cache.c and ext2_dir.c via extern */
@@ -26,6 +29,7 @@ int s_mounted = 0;
 
 int ext2_mount(const char *devname)
 {
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
     uint32_t i;
 
     /* Initialise cache slots to age 0 (unused) */
@@ -35,15 +39,17 @@ int ext2_mount(const char *devname)
         s_cache[i].age = 0;
     }
 
+    int ret = -1;
+
     s_dev = blkdev_get(devname);
     if (!s_dev)
-        return -1;  /* silent — no NVMe on -machine pc */
+        goto mount_out;  /* silent — no NVMe on -machine pc */
 
     /* Superblock is at byte offset 1024 from partition start.
      * blkdev uses 512-byte sectors: LBA 2 = byte 1024. */
     uint8_t sb_buf[1024];
     if (s_dev->read(s_dev, 2, 2, sb_buf) < 0)
-        return -1;
+        goto mount_out;
 
     /* Copy superblock from start of buffer */
     uint8_t *src = sb_buf;
@@ -52,16 +58,16 @@ int ext2_mount(const char *devname)
         dst[i] = src[i];
 
     if (s_sb.s_magic != EXT2_MAGIC)
-        return -1;
+        goto mount_out;
 
     if (s_sb.s_log_block_size > 6) {   /* ext2 max block size is 64KB (2^6 * 1024) */
         printk("[EXT2] FAIL: invalid log_block_size %u\n",
                (unsigned)s_sb.s_log_block_size);
-        return -1;
+        goto mount_out;
     }
     s_block_size = 1024u << s_sb.s_log_block_size;
     if (s_sb.s_rev_level >= 1 && (s_sb.s_inode_size < 128 || s_sb.s_inode_size > 4096)) {
-        return -1;
+        goto mount_out;
     }
     s_num_groups = (s_sb.s_blocks_count + s_sb.s_blocks_per_group - 1)
                    / s_sb.s_blocks_per_group;
@@ -75,7 +81,7 @@ int ext2_mount(const char *devname)
 
     uint8_t *bgd_buf = cache_get_slot(bgd_block);
     if (!bgd_buf)
-        return -1;
+        goto mount_out;
 
     uint32_t bgd_bytes = s_num_groups * sizeof(ext2_bgd_t);
     src = bgd_buf;
@@ -86,7 +92,10 @@ int ext2_mount(const char *devname)
     s_mounted = 1;
     printk("[EXT2] OK: mounted %s, %u blocks, %u inodes\n",
            devname, s_sb.s_blocks_count, s_sb.s_inodes_count);
-    return 0;
+    ret = 0;
+mount_out:
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return ret;
 }
 
 /* ------------------------------------------------------------------ */
@@ -331,17 +340,24 @@ int ext2_read(uint32_t inode_num, void *buf, uint32_t offset, uint32_t len)
 {
     if (!s_mounted)
         return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
 
     ext2_inode_t inode;
-    if (ext2_read_inode(inode_num, &inode) < 0)
+    if (ext2_read_inode(inode_num, &inode) < 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     /* S9: Reject unreasonably large inodes from malicious ext2 images. */
-    if (inode.i_size > (256U * 1024U * 1024U))  /* 256 MB cap */
+    if (inode.i_size > (256U * 1024U * 1024U)) {  /* 256 MB cap */
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -5;  /* -EIO */
+    }
 
-    if (offset >= inode.i_size)
+    if (offset >= inode.i_size) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return 0;
+    }
 
     if (offset + len > inode.i_size)
         len = inode.i_size - offset;
@@ -365,8 +381,10 @@ int ext2_read(uint32_t inode_num, void *buf, uint32_t offset, uint32_t len)
                 out[bytes_read + i] = 0;
         } else {
             uint8_t *data = cache_get_slot(blk);
-            if (!data)
+            if (!data) {
+                spin_unlock_irqrestore(&ext2_lock, fl);
                 return (int)bytes_read;
+            }
             uint32_t i;
             for (i = 0; i < can_copy; i++)
                 out[bytes_read + i] = data[in_block + i];
@@ -374,6 +392,7 @@ int ext2_read(uint32_t inode_num, void *buf, uint32_t offset, uint32_t len)
         bytes_read += can_copy;
     }
 
+    spin_unlock_irqrestore(&ext2_lock, fl);
     return (int)bytes_read;
 }
 
@@ -401,9 +420,16 @@ int ext2_readdir(uint32_t dir_inode, uint64_t index,
                  char *name_out, uint8_t *type_out)
 {
     if (!s_mounted) return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
     ext2_inode_t inode;
-    if (ext2_read_inode(dir_inode, &inode) < 0) return -1;
-    if ((inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR) return -1;
+    if (ext2_read_inode(dir_inode, &inode) < 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
+    if ((inode.i_mode & EXT2_S_IFMT) != EXT2_S_IFDIR) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
+        return -1;
+    }
 
     uint64_t count = 0;
     uint32_t file_block_idx = 0;
@@ -417,7 +443,10 @@ int ext2_readdir(uint32_t dir_inode, uint64_t index,
             continue;
         }
         uint8_t *data = cache_get_slot(blk);
-        if (!data) return -1;
+        if (!data) {
+            spin_unlock_irqrestore(&ext2_lock, fl);
+            return -1;
+        }
         uint32_t block_pos = 0;
         while (block_pos + 8 <= s_block_size) {
             ext2_dirent_t *de = (ext2_dirent_t *)(data + block_pos);
@@ -430,6 +459,7 @@ int ext2_readdir(uint32_t dir_inode, uint64_t index,
                     for (k = 0; k < nlen; k++) name_out[k] = de->name[k];
                     name_out[nlen] = '\0';
                     *type_out = (de->file_type == EXT2_FT_DIR) ? 4u : 8u;
+                    spin_unlock_irqrestore(&ext2_lock, fl);
                     return 0;
                 }
                 count++;
@@ -439,6 +469,7 @@ int ext2_readdir(uint32_t dir_inode, uint64_t index,
         bytes_walked += s_block_size;
         file_block_idx++;
     }
+    spin_unlock_irqrestore(&ext2_lock, fl);
     return -1;
 }
 
@@ -522,10 +553,13 @@ int ext2_write(uint32_t inode_num, const void *buf,
 {
     if (!s_mounted || len == 0)
         return 0;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
 
     ext2_inode_t inode;
-    if (ext2_read_inode(inode_num, &inode) != 0)
+    if (ext2_read_inode(inode_num, &inode) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     const uint8_t *src = (const uint8_t *)buf;
     uint32_t bytes_written = 0;
@@ -550,6 +584,7 @@ int ext2_write(uint32_t inode_num, const void *buf,
                     inode.i_size = (actual_end > orig_size) ? actual_end : orig_size;
                     inode.i_blocks = (inode.i_size + 511u) / 512u;
                     ext2_write_inode(inode_num, &inode);
+                    spin_unlock_irqrestore(&ext2_lock, fl);
                     return (bytes_written > 0) ? (int)bytes_written : -EIO;
                 }
                 inode.i_block[file_block] = blk;
@@ -583,6 +618,7 @@ int ext2_write(uint32_t inode_num, const void *buf,
         inode.i_blocks = (inode.i_size + 511u) / 512u;
     }
     ext2_write_inode(inode_num, &inode);
+    spin_unlock_irqrestore(&ext2_lock, fl);
     return (int)bytes_written;
 }
 
@@ -590,17 +626,20 @@ int ext2_create(const char *path, uint16_t mode)
 {
     if (!s_mounted)
         return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
 
     uint32_t parent_ino;
     const char *basename;
     if (ext2_lookup_parent(path, &parent_ino, &basename) != 0) {
         printk("[EXT2] creat: lookup_parent failed for %s\n", path);
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
     }
 
     uint32_t new_ino = ext2_alloc_inode(0);
     if (new_ino == 0) {
         printk("[EXT2] creat: alloc_inode failed\n");
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
     }
 
@@ -615,6 +654,7 @@ int ext2_create(const char *path, uint16_t mode)
     if (r != 0)
         printk("[EXT2] creat: dir_add_entry failed parent=%u ino=%u\n",
                parent_ino, new_ino);
+    spin_unlock_irqrestore(&ext2_lock, fl);
     return r;
 }
 
@@ -622,19 +662,26 @@ int ext2_unlink(const char *path)
 {
     if (!s_mounted)
         return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
 
     uint32_t parent_ino;
     const char *basename;
-    if (ext2_lookup_parent(path, &parent_ino, &basename) != 0)
+    if (ext2_lookup_parent(path, &parent_ino, &basename) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     uint32_t ino;
-    if (ext2_open(path, &ino) != 0)
+    if (ext2_open(path, &ino) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     ext2_inode_t inode;
-    if (ext2_read_inode(ino, &inode) != 0)
+    if (ext2_read_inode(ino, &inode) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     if (inode.i_links_count > 0)
         inode.i_links_count--;
@@ -679,26 +726,35 @@ int ext2_unlink(const char *path)
         inode.i_dtime = 1; /* mark deleted */
     }
     ext2_write_inode(ino, &inode);
-    return ext2_dir_remove_entry(parent_ino, basename);
+    int r = ext2_dir_remove_entry(parent_ino, basename);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return r;
 }
 
 int ext2_mkdir(const char *path, uint16_t mode)
 {
     if (!s_mounted)
         return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
 
     uint32_t parent_ino;
     const char *basename;
-    if (ext2_lookup_parent(path, &parent_ino, &basename) != 0)
+    if (ext2_lookup_parent(path, &parent_ino, &basename) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     uint32_t new_ino = ext2_alloc_inode(0);
-    if (new_ino == 0)
+    if (new_ino == 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     uint32_t blk = ext2_alloc_block(0);
-    if (blk == 0)
+    if (blk == 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     ext2_inode_t inode;
     uint32_t ci;
@@ -713,8 +769,10 @@ int ext2_mkdir(const char *path, uint16_t mode)
 
     /* initialise "." and ".." entries in the new block */
     uint8_t *data = cache_get_slot(blk);
-    if (!data)
+    if (!data) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
     uint32_t zi;
     for (zi = 0; zi < s_block_size; zi++)
         data[zi] = 0;
@@ -749,35 +807,50 @@ int ext2_mkdir(const char *path, uint16_t mode)
     if (grp < s_num_groups)
         s_bgd[grp].bg_used_dirs_count++;
 
-    return ext2_dir_add_entry(parent_ino, new_ino, basename, EXT2_FT_DIR);
+    int r = ext2_dir_add_entry(parent_ino, new_ino, basename, EXT2_FT_DIR);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return r;
 }
 
 int ext2_rename(const char *old_path, const char *new_path)
 {
     if (!s_mounted)
         return -1;
+    irqflags_t fl = spin_lock_irqsave(&ext2_lock);
 
     uint32_t ino;
-    if (ext2_open(old_path, &ino) != 0)
+    if (ext2_open(old_path, &ino) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     uint32_t old_parent_ino;
     const char *old_basename;
-    if (ext2_lookup_parent(old_path, &old_parent_ino, &old_basename) != 0)
+    if (ext2_lookup_parent(old_path, &old_parent_ino, &old_basename) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     uint32_t new_parent_ino;
     const char *new_basename;
-    if (ext2_lookup_parent(new_path, &new_parent_ino, &new_basename) != 0)
+    if (ext2_lookup_parent(new_path, &new_parent_ino, &new_basename) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
 
     ext2_inode_t inode;
-    if (ext2_read_inode(ino, &inode) != 0)
+    if (ext2_read_inode(ino, &inode) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
+    }
     uint8_t ftype = ((inode.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR)
                     ? EXT2_FT_DIR : EXT2_FT_REG_FILE;
 
-    if (ext2_dir_remove_entry(old_parent_ino, old_basename) != 0)
+    if (ext2_dir_remove_entry(old_parent_ino, old_basename) != 0) {
+        spin_unlock_irqrestore(&ext2_lock, fl);
         return -1;
-    return ext2_dir_add_entry(new_parent_ino, ino, new_basename, ftype);
+    }
+    int r = ext2_dir_add_entry(new_parent_ino, ino, new_basename, ftype);
+    spin_unlock_irqrestore(&ext2_lock, fl);
+    return r;
 }

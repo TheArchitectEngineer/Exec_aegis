@@ -4,6 +4,7 @@
 
 #include "vfs.h"
 #include "tty.h"
+#include "../core/spinlock.h"
 #include <stdint.h>
 
 #define PTY_MAX_PAIRS  16
@@ -22,6 +23,7 @@ typedef struct {
     uint8_t  locked;                      /* cleared by unlockpt */
     uint8_t  in_use;
     uint8_t  index;                       /* 0-15 */
+    spinlock_t lock;                      /* per-pair lock for SMP safety */
 } pty_pair_t;
 
 /* ptmx_open -- allocate a PTY pair and return the master fd.
