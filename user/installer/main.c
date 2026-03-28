@@ -246,11 +246,14 @@ static int install_esp(const char *devname)
     }
 
     unsigned long long lba;
+    unsigned long long total_read = 0;
     for (lba = 0; lba < ESP_SECTORS; lba += 8) {
         unsigned long long chunk = ESP_SECTORS - lba;
         if (chunk > 8) chunk = 8;
+        memset(buf, 0, 4096);  /* clear buffer before short reads */
         int n = (int)read(fd, buf, (size_t)(chunk * 512));
         if (n <= 0) break;
+        total_read += (unsigned long long)n;
         /* Pad remaining with zeros if short read */
         if ((unsigned long long)n < chunk * 512)
             memset(buf + n, 0, (size_t)(chunk * 512 - (unsigned long long)n));
@@ -260,6 +263,8 @@ static int install_esp(const char *devname)
         }
     }
     close(fd);
+    printf("  (read %llu bytes from esp.img, wrote %llu sectors)\n",
+           total_read, lba);
     return 0;
 }
 
