@@ -22,6 +22,6 @@
 [ACPI] OK: MADT parsed, no MCFG (legacy machine)
 [PCIE] OK: skipped (no ECAM)
 [EXT2] OK: mounted ramdisk0, 60416 blocks, 15104 inodes
-[CAP] OK: 9 capabilities granted to init
+[CAP] OK: 10 capabilities granted to init
 [VMM] OK: identity map removed
 [SCHED] OK: scheduler started, 2 tasks

@@ -901,6 +901,7 @@ sys_execve(syscall_frame_t *frame,
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ, CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_DISK_ADMIN, CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_AUTH, CAP_RIGHTS_READ);
 
         /* Apply pre-registered exec caps, then zero them (consumed on exec). */
         {

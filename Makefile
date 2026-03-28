@@ -399,7 +399,8 @@ $(GRUB_EFI):
 	@mkdir -p $(BUILD)
 	grub-mkimage -O x86_64-efi -o $(GRUB_EFI) \
 	    -p /EFI/BOOT \
-	    part_gpt ext2 fat normal multiboot2 boot configfile
+	    part_gpt ext2 fat normal multiboot2 boot configfile \
+	    all_video efi_gop efi_uga video video_bochs video_cirrus gfxterm
 
 $(ESP_IMG): $(GRUB_EFI)
 	@mkdir -p $(BUILD)
