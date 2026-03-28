@@ -68,3 +68,6 @@ python3 tests/test_socket.py
 
 echo "--- test_curl ---"
 python3 tests/test_curl.py
+
+echo "--- test_installer ---"
+python3 tests/test_installer.py
