@@ -400,7 +400,8 @@ $(GRUB_EFI):
 	grub-mkimage -O x86_64-efi -o $(GRUB_EFI) \
 	    -p /EFI/BOOT \
 	    part_gpt ext2 fat normal multiboot2 boot configfile \
-	    all_video efi_gop efi_uga video video_bochs video_cirrus gfxterm
+	    all_video efi_gop efi_uga video video_bochs video_cirrus gfxterm \
+	    font gfxmenu
 
 $(ESP_IMG): $(GRUB_EFI)
 	@mkdir -p $(BUILD)
@@ -409,7 +410,8 @@ $(ESP_IMG): $(GRUB_EFI)
 	mmd -i $(ESP_IMG) ::EFI
 	mmd -i $(ESP_IMG) ::EFI/BOOT
 	mcopy -i $(ESP_IMG) $(GRUB_EFI) ::EFI/BOOT/BOOTX64.EFI
-	@printf 'set timeout=3\nset default=0\ninsmod all_video\ninsmod gfxterm\nset gfxmode=auto\nterminal_input console\nterminal_output gfxterm\n\nmenuentry "Aegis" {\n    set gfxpayload=keep\n    set root=(hd0,gpt2)\n    multiboot2 /boot/aegis.elf\n    boot\n}\n' > $(BUILD)/grub-installed.cfg
+	mcopy -i $(ESP_IMG) /usr/share/grub/unicode.pf2 ::EFI/BOOT/unicode.pf2
+	@printf 'loadfont /EFI/BOOT/unicode.pf2\nset timeout=3\nset default=0\ninsmod all_video\ninsmod gfxterm\nset gfxmode=auto\nterminal_input console\nterminal_output gfxterm\n\nmenuentry "Aegis" {\n    set gfxpayload=keep\n    set root=(hd0,gpt2)\n    multiboot2 /boot/aegis.elf\n    boot\n}\n' > $(BUILD)/grub-installed.cfg
 	mcopy -i $(ESP_IMG) $(BUILD)/grub-installed.cfg ::EFI/BOOT/grub.cfg
 
 # ── Final link ────────────────────────────────────────────────────────────────
