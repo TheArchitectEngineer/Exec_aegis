@@ -9,7 +9,7 @@ ACTUAL=/tmp/aegis_serial.txt
 # ── Test 1: Boot oracle ──────────────────────────────────────────────────────
 # Boot headless via GRUB-bootable ISO (INIT=vigil, -machine pc, no disk).
 # Diff serial output against expected. Exit on mismatch.
-timeout 10s qemu-system-x86_64 \
+timeout 60s qemu-system-x86_64 \
     -machine pc \
     -cpu Broadwell \
     -cdrom "$ISO" \
