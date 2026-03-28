@@ -213,7 +213,7 @@ static const dir_entry_t s_root_dir_entries[] = {
     { (const char *)0, 0 }   /* /root is empty */
 };
 static const dir_entry_t s_root_entries[] = {
-    { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { "root", 4 },
+    { "etc", 4 }, { "bin", 4 }, { "dev", 4 }, { "lib", 4 }, { "root", 4 },
     { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
@@ -235,10 +235,10 @@ static const dir_entry_t s_vigil_httpd_entries[] = {
 static const dir_entry_t s_vigil_dhcp_entries[] = {
     { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
 };
-static const dir_entry_t s_bin_entries[] = {
-    { "login",  8 }, { "vigil",  8 },
-    { (const char *)0, 0 }
-};
+/* s_bin_entries removed — /bin directory listing now handled by ext2.
+ * Individual files (/bin/login, /bin/vigil) are still found via initrd_open
+ * by name, but `ls /bin` falls through to ext2_readdir which shows all
+ * binaries on disk. */
 
 static int
 dir_readdir_fn(void *priv, uint64_t index, char *name_out, uint8_t *type_out)
@@ -375,16 +375,16 @@ initrd_open(const char *path, vfs_file_t *out)
 
     /* Check for directory paths first */
     {
-        const char *dirs[11] = {
-            "/", "/etc", "/bin", "/dev",
+        const char *dirs[10] = {
+            "/", "/etc", "/dev",
             "/etc/vigil", "/etc/vigil/services", "/etc/vigil/services/getty",
             "/etc/vigil/services/httpd",
             "/etc/vigil/services/dhcp",
             "/root",
             (const char *)0
         };
-        const dir_entry_t *dir_tables[11] = {
-            s_root_entries, s_etc_entries, s_bin_entries, s_dev_entries,
+        const dir_entry_t *dir_tables[10] = {
+            s_root_entries, s_etc_entries, s_dev_entries,
             s_vigil_entries, s_vigil_services_entries, s_vigil_getty_entries,
             s_vigil_httpd_entries,
             s_vigil_dhcp_entries,
@@ -392,7 +392,7 @@ initrd_open(const char *path, vfs_file_t *out)
             (const dir_entry_t *)0
         };
         uint32_t d;
-        for (d = 0; d < 10; d++) {
+        for (d = 0; d < 9; d++) {
             const char *a = path, *b = dirs[d];
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a == *b) {
