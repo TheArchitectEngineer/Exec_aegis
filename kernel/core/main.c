@@ -43,6 +43,10 @@
 static void
 task_idle(void)
 {
+    /* Start the LAPIC timer now that the scheduler is running.
+     * Cannot start earlier — the timer fires vector 0x30 which calls
+     * sched_tick, and sched_tick must not run before ctx_switch. */
+    lapic_timer_init();
     arch_enable_irq();
     for (;;)
         arch_halt();
@@ -113,7 +117,8 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     /* All TCBs and stacks are in kva range at this point —
      * safe to remove the identity map. */
     vmm_teardown_identity(); /* pml4[0] = 0, CR3 reload — [VMM] OK          */
-    lapic_timer_init();     /* calibrate + start LAPIC timer on BSP (~100Hz) */
+    /* LAPIC timer starts from task_idle (after sched_start ctx_switches).
+     * Starting it here would fire vector 0x30 before the scheduler is ready. */
     sched_start();          /* prints [SCHED] OK, switches into first task   */
     /* UNREACHABLE — sched_start() never returns */
     __builtin_unreachable();
