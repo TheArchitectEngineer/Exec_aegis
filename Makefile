@@ -458,7 +458,7 @@ $(ROOTFS): $(DISK_USER_BINS)
 	# Vigil init directories and service declarations
 	printf 'mkdir /var\nmkdir /run\nmkdir /etc/vigil\nmkdir /etc/vigil/services\nmkdir /etc/vigil/services/getty\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	printf 'exec /bin/login\n' > /tmp/aegis-vigil-run
+	printf '/bin/login\n' > /tmp/aegis-vigil-run
 	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-vigil-policy
 	printf 'VFS_OPEN VFS_READ VFS_WRITE AUTH\n' > /tmp/aegis-vigil-caps
 	printf 'root\n' > /tmp/aegis-vigil-user
@@ -468,7 +468,7 @@ $(ROOTFS): $(DISK_USER_BINS)
 	# httpd vigil service — binds :80, serves HTTP
 	printf 'mkdir /etc/vigil/services/httpd\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	printf 'exec /bin/httpd\n' > /tmp/aegis-httpd-run
+	printf '/bin/httpd\n' > /tmp/aegis-httpd-run
 	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-httpd-policy
 	printf 'NET_SOCKET VFS_OPEN VFS_READ\n' > /tmp/aegis-httpd-caps
 	printf 'root\n' > /tmp/aegis-httpd-user
@@ -478,7 +478,7 @@ $(ROOTFS): $(DISK_USER_BINS)
 	# dhcp vigil service — DHCP client with NET_ADMIN cap
 	printf 'mkdir /etc/vigil/services/dhcp\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	printf 'exec /bin/dhcp\n' > /tmp/aegis-dhcp-run
+	printf '/bin/dhcp\n' > /tmp/aegis-dhcp-run
 	printf 'respawn\nmax_restarts=10\n' > /tmp/aegis-dhcp-policy
 	printf 'NET_ADMIN NET_SOCKET\n' > /tmp/aegis-dhcp-caps
 	printf 'root\n' > /tmp/aegis-dhcp-user
