@@ -296,6 +296,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Glyph + Lumen optimization (Phase 39) | ✅ | libglyph.a widget toolkit; dirty-rect compositor; scheduler busy-wait fixes; MMIO skip in fork; batch yield; **make test 25/25 PASS** |
 | Citadel + sys_spawn (Phase 40) | ✅ | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **ThinkPad Zen 2 bare-metal PASS** (gradual lag + freeze after ~60s — optimization needed) |
 | Bug fixes (Phase 40b) | ✅ | ARP deadlock from ISR (test_socket root cause since Phase 26); proc_spawn PT_INTERP (q35 RIP=0x0); socket lost-wakeup race; test_socket DHCP wait; **make test + test_socket PASS** |
+| Symlinks + chmod/chown (Phase 41) | 🔶 | ext2 symlinks (fast+slow); ext2_open_ex path walk; chmod/chown/lchown; DAC enforcement; ln/chmod/chown/readlink tools; **awaiting test** |
 
 ### Known deviations
 
@@ -372,7 +373,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 38 | **SMP** — LAPIC+IOAPIC, ~30 spinlocks, SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown | ✅ Done |
 | 39 | **Glyph** — widget toolkit (libglyph.a); dirty-rect compositor; PTY terminal fix | 🔶 PTY hang |
 | 40 | **Citadel** — sys_spawn syscall; lumen terminal via spawn (no fork); desktop icons; /bin/sh shell | ✅ Done |
-| 41 | **Symlinks + chmod/chown** — VFS symlink resolution; file permission enforcement at VFS layer | Not started |
+| 41 | **Symlinks + chmod/chown** — ext2 symlinks; POSIX DAC permission enforcement; chmod/chown/lchown syscalls | 🔶 Awaiting test |
 | 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated. **Required for Glyph external apps**: MAP_SHARED pixel buffers, command pipe/socket for window create/destroy, fd passing for shared memory. Until Phase 42, all GUI apps are compiled into Lumen. | Not started |
 | 43 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 44 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
@@ -713,7 +714,29 @@ Phase 39 delivered Glyph widget toolkit, dirty-rect compositor, scheduler busy-w
 
 ---
 
-*Last updated: 2026-03-29 — Phase 40 bare-metal PASS. test_socket PASS. test_curl outbound TCP still broken (see notes above).*
+*Last updated: 2026-03-29 — Phase 41 implementation complete, awaiting bare-metal test.*
+
+---
+
+## Phase 41 — Forward Constraints
+
+**Phase 41 status: 🔶 Implementation complete. Awaiting bare-metal test.**
+
+1. **No symlinks on ramfs/initrd.** Only ext2 supports symlinks. `/tmp`, `/run`, `/dev`, and initrd files cannot be symlink targets or sources within their own namespace.
+
+2. **No hard links.** `link()` / `linkat()` not implemented. Only symlinks.
+
+3. **Symlink depth limit is 8.** Returns `-ELOOP` beyond 8 levels. Sufficient for Aegis.
+
+4. **Permission enforcement only on ext2.** ramfs, initrd, procfs, and device files are not permission-checked. They are kernel-internal resources gated by capabilities.
+
+5. **No uid=0 bypass.** Root (uid=0) is subject to the same DAC checks as any other user. This is by design — Aegis has no ambient authority.
+
+6. **`ext2_open_ex` uses 512-byte `resolved` buffer.** Paths longer than 511 bytes after symlink expansion are truncated.
+
+7. **umask not applied to ext2_create.** `ext2_create` is called with hardcoded 0644. The process umask should be consulted.
+
+8. **Boot-time file opens bypass DAC.** `vfs_open` checks `sched_current()->is_user` — kernel-context opens (during init, before user tasks run) skip permission checks. This is correct: kernel opens during boot are trusted.
 
 ---
 
