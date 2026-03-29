@@ -1,6 +1,6 @@
-/* draw.h — Framebuffer drawing primitives for Lumen compositor */
-#ifndef LUMEN_DRAW_H
-#define LUMEN_DRAW_H
+/* draw.h — Framebuffer drawing primitives for Glyph widget toolkit */
+#ifndef GLYPH_DRAW_H
+#define GLYPH_DRAW_H
 
 #include <stdint.h>
 

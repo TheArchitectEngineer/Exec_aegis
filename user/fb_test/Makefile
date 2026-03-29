@@ -1,6 +1,6 @@
 MUSL_DIR = ../../build/musl-dynamic
 CC = $(MUSL_DIR)/usr/bin/musl-gcc
-CFLAGS = -O2 -fno-pie -no-pie -Wl,--build-id=none
+CFLAGS = -O2 -fno-pie -no-pie -Wl,--build-id=none -I../glyph
 
 all: fb_test.elf
 

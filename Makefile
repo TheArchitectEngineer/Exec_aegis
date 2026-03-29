@@ -402,7 +402,10 @@ user/fb_test/fb_test.elf: user/fb_test/main.c $(MUSL_BUILT)
 user/mouse_test/mouse_test.elf: user/mouse_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/mouse_test
 
-user/lumen/lumen.elf: $(wildcard user/lumen/*.c user/lumen/*.h) $(MUSL_BUILT)
+user/glyph/libglyph.a: $(wildcard user/glyph/*.c user/glyph/*.h) $(MUSL_BUILT)
+	$(MAKE) -C user/glyph
+
+user/lumen/lumen.elf: $(wildcard user/lumen/*.c user/lumen/*.h) user/glyph/libglyph.a $(MUSL_BUILT)
 	$(MAKE) -C user/lumen
 
 # ── EFI GRUB + ESP image for installer ─────────────────────────────────────
