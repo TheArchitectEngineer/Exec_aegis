@@ -178,9 +178,13 @@ main(void)
     mouse_event_t mev;
     char pty_buf[512];
 
+    int pty_ever_read = 0;
+    int loop_count = 0;
+
     for (;;) {
         int activity = 0;
         ssize_t n;
+        loop_count++;
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
@@ -216,11 +220,18 @@ main(void)
                 n = read(master_fd, pty_buf, sizeof(pty_buf));
                 if (n <= 0)
                     break;
+                if (!pty_ever_read) {
+                    fprintf(stderr, "[LUMEN] PTY first data: %d bytes\n", (int)n);
+                    pty_ever_read = 1;
+                }
                 terminal_write(term_win, pty_buf, (int)n);
                 pty_activity = 1;
             }
             if (pty_activity)
                 activity = 1;
+            /* One-shot warning after ~3 seconds (180 loops at 16ms) */
+            if (!pty_ever_read && loop_count == 180)
+                fprintf(stderr, "[LUMEN] WARN: no PTY data after 3s — shell may have failed\n");
         }
 
         /* Composite and cursor update. Only hide/show cursor when there's
