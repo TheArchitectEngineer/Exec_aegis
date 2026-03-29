@@ -102,10 +102,8 @@ main(void)
 
     /* Map framebuffer via sys_fb_map (513) */
     long ret = syscall(513, &fb_info);
-    if (ret < 0) {
-        fprintf(stderr, "[LUMEN] FAIL: sys_fb_map returned %ld\n", ret);
+    if (ret < 0)
         return 1;
-    }
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
@@ -114,10 +112,8 @@ main(void)
 
     /* Allocate backbuffer */
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
-    if (!backbuf) {
-        fprintf(stderr, "[LUMEN] FAIL: backbuffer alloc failed\n");
+    if (!backbuf)
         return 1;
-    }
 
     /* Set stdin to raw mode: no echo, no canonical, no signals */
     tcgetattr(0, &s_orig_termios);
@@ -130,8 +126,6 @@ main(void)
 
     /* Open mouse device */
     int mouse_fd = open("/dev/mouse", O_RDONLY);
-    if (mouse_fd < 0)
-        fprintf(stderr, "[LUMEN] WARN: cannot open /dev/mouse\n");
 
     /* Set mouse fd to non-blocking */
     if (mouse_fd >= 0)
@@ -142,7 +136,8 @@ main(void)
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
 
-    fprintf(stderr, "[LUMEN] started %ux%u\n", fb_w, fb_h);
+    /* No fprintf to stderr — it goes through console/printk which
+     * writes to the framebuffer, interfering with compositor output. */
 
     /* Create terminal window: 3/5 of screen, centered */
     int term_pw = fb_w * 3 / 5;
