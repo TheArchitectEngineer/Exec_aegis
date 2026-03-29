@@ -27,6 +27,19 @@ typedef struct __attribute__((packed)) {
 
 #define INFO_BG 0x00F0F4F8
 
+static fb_info_t s_dbg_fb_info;
+
+void dbg_fb_strip(uint32_t color, int strip)
+{
+    if (s_dbg_fb_info.addr == 0) return;
+    uint32_t *fb = (uint32_t *)(uintptr_t)s_dbg_fb_info.addr;
+    int p = (int)(s_dbg_fb_info.pitch / (s_dbg_fb_info.bpp / 8));
+    int y0 = strip * 20;
+    for (int y = y0; y < y0 + 20 && y < (int)s_dbg_fb_info.height; y++)
+        for (int x = 0; x < (int)s_dbg_fb_info.width; x++)
+            fb[y * p + x] = color;
+}
+
 static struct termios s_orig_termios;
 
 static void
@@ -124,6 +137,9 @@ main(void)
     } while(0)
 
     dbg_strip(0x00336699, 0); /* blue = FB mapped */
+
+    /* Expose for terminal.c debug use */
+    s_dbg_fb_info = fb_info;
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;

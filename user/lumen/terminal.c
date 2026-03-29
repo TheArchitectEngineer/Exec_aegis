@@ -100,16 +100,23 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
     glyph_window_mark_all_dirty(win);
 }
 
+/* Debug: write to FB strip from terminal_create (uses fb_info from main) */
+extern void dbg_fb_strip(uint32_t color, int strip);
+
 glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
 {
     int master_fd, pts_num, slave_fd;
     char slave_path[32];
     pid_t pid;
 
+    dbg_fb_strip(0x00FF0000, 6); /* red = entered terminal_create */
+
     /* Open PTY master */
     master_fd = open("/dev/ptmx", O_RDWR);
     if (master_fd < 0)
         return NULL;
+
+    dbg_fb_strip(0x00FF4400, 7); /* dark orange = ptmx opened */
 
     /* Get slave number */
     if (ioctl(master_fd, 0x80045430 /* TIOCGPTN */, &pts_num) < 0) {
@@ -122,6 +129,8 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         int unlock = 0;
         ioctl(master_fd, 0x40045431 /* TIOCSPTLCK */, &unlock);
     }
+
+    dbg_fb_strip(0x00FF8800, 8); /* orange = slave unlocked */
 
     /* Build slave path */
     {
@@ -180,8 +189,11 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     /* Set master non-blocking */
     fcntl(master_fd, F_SETFL, O_NONBLOCK);
 
+    dbg_fb_strip(0x00FFCC00, 9); /* gold = about to fork */
+
     /* Fork child shell */
     pid = fork();
+
     if (pid < 0) {
         free(tp->grid);
         free(tp);
@@ -213,6 +225,8 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         execve("/bin/oksh", argv, envp);
         _exit(1);
     }
+
+    dbg_fb_strip(0x00FFFFFF, 10); /* white = fork returned to parent */
 
     /* parent */
     *master_fd_out = master_fd;
