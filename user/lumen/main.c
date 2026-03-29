@@ -153,18 +153,17 @@ main(void)
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
     write(2, "lumen: term done\n", 17);
     if (term_win) {
-        /* Center the terminal */
         term_win->x = (fb_w - term_win->surf_w) / 2;
         term_win->y = (fb_h - term_win->surf_h) / 2;
         comp_add_window(&comp, term_win);
     }
+    write(2, "lumen: win add\n", 15);
 
-    /* Create system info window */
     glyph_window_t *info_win = create_info_window(fb_w, fb_h);
+    write(2, "lumen: info win\n", 16);
     if (info_win)
         comp_add_window(&comp, info_win);
 
-    /* Focus and raise terminal above info window */
     if (term_win) {
         comp_raise_window(&comp, term_win);
         if (comp.focused)
@@ -172,6 +171,7 @@ main(void)
         comp.focused = term_win;
         term_win->focused_window = 1;
     }
+    write(2, "lumen: focus ok\n", 16);
 
     /* Do initial full composite */
     write(2, "lumen: composite\n", 17);
