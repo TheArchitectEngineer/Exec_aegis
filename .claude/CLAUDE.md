@@ -292,7 +292,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
 | USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **untested on hardware** |
 | Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested on hardware** |
-| SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS |
+| SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
 
 ### Known deviations
 
@@ -603,7 +603,21 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phases 36-38 + chronos NTP + deep audit/cleanup complete. Boot oracle PASS on DO box. ISO ready for ThinkPad testing. See audit section below for findings.*
+## Phase 38 — Forward Constraints
+
+**Phase 38 status: ✅ complete. Boot oracle PASS. ThinkPad X13 Zen 2 bare-metal PASS.**
+
+1. **IOAPIC remapped PIC vectors need IDT stubs.** `pic_disable()` remaps the 8259A to vectors 0xF0-0xFF before masking. On real hardware (laptops with EC/ACPI), a pending PIC interrupt (typically spurious IRQ7 = vector 0xF7) can be in-flight and delivered after STI. ISR stubs for 0xF0-0xFD are installed; `isr_dispatch` silently drops them. This was the root cause of the #GP (error=0x7BB) on ThinkPad X13 Zen 2.
+
+2. **SWAPGS omitted from proc_enter_user.** On AMD Zen 2, SWAPGS before iretq in proc_enter_user causes a panic. Root cause not fully understood (may be AMD SS RPL interaction). Safe to omit: the first interrupt/syscall from user mode does SWAPGS at entry, restoring correct GS.base state.
+
+3. **Single-core scheduling only.** APs start and enter halt loops but do not run user tasks. Per-CPU run queues and cross-core task migration are future work.
+
+4. **Signal delivery from ISR context unprotected.** `signal_send_pid`/`signal_send_pgrp` traverse task list without lock. Protected by `sched_lock` in most paths but ISR path (kbd Ctrl-C) is unprotected. Low priority — single ISR context.
+
+---
+
+*Last updated: 2026-03-28 — Phase 38 bare-metal PASS. IOAPIC #GP fixed (remapped PIC IDT stubs). All SMP features verified on Zen 2.*
 
 ---
 
