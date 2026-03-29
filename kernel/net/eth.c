@@ -190,21 +190,9 @@ int eth_send(netdev_t *dev, const mac_addr_t *dst_mac,
 
 /* ---- arp_resolve ------------------------------------------------------- */
 
-/* Check if interrupts are currently enabled (IF flag in RFLAGS).
- * Used to detect ISR context — arp_resolve must not block in ISR. */
-static int
-_irqs_enabled(void)
-{
-#ifdef __aarch64__
-    uint64_t daif;
-    __asm__ volatile("mrs %0, daif" : "=r"(daif));
-    return (daif & 0x80) == 0;  /* I bit clear = IRQs enabled */
-#else
-    uint64_t flags;
-    __asm__ volatile("pushfq; pop %0" : "=r"(flags));
-    return (flags & 0x200) != 0;  /* IF bit set = IRQs enabled */
-#endif
-}
+/* Set by netdev_poll_all — when 1, we're inside the PIT ISR RX path
+ * and arp_resolve must not block (would deadlock on netdev_lock). */
+extern volatile int g_in_netdev_poll;
 
 int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
 {
@@ -218,18 +206,16 @@ int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
     /* Send ARP request regardless of context. */
     arp_send_request(dev, ip);
 
-    /* If called from ISR context (interrupts disabled), we CANNOT block.
-     * Blocking here with arch_wait_for_irq() while holding netdev_lock +
-     * tcp_lock causes a permanent deadlock: the next PIT tick tries to
-     * acquire those same locks.  Instead, return -1 (EAGAIN).  The TCP
-     * retransmit timer will re-attempt the send on the next tick, by which
-     * time the ARP reply should have arrived via a subsequent poll cycle.
+    /* If called from the PIT ISR RX path (netdev_poll_all → virtio_net_poll
+     * → tcp_rx → tcp_send_segment → ip_send), we CANNOT block.  Blocking
+     * with arch_wait_for_irq() while holding netdev_lock + tcp_lock causes
+     * a permanent deadlock: the next PIT tick tries to acquire those locks.
+     * Return -1 so the TCP retransmit timer re-sends on the next tick.
      *
-     * This was the root cause of test_socket failures: DHCP uses broadcasts
-     * (no ARP needed), so the gateway ARP is uncached when the first TCP
-     * SYN arrives.  tcp_rx tries to send SYN-ACK, ip_send calls arp_resolve,
-     * which blocks → deadlock → no more packets ever processed. */
-    if (!_irqs_enabled()) {
+     * We check g_in_netdev_poll (not IF flag) because syscall-context callers
+     * like tcp_connect also hold spinlocks with IRQs disabled — those callers
+     * CAN safely block here since they're not in the ISR chain. */
+    if (g_in_netdev_poll) {
         return -1;  /* caller should retry later */
     }
 
