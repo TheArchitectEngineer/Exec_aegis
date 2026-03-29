@@ -10,6 +10,7 @@
 #include "kbd.h"
 #include "vma.h"
 #include "spinlock.h"
+#include "random.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -122,11 +123,25 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         vmm_write_user_bytes(proc->pml4_phys, str_va,
                              login_name, __builtin_strlen(login_name) + 1);
 
-        /* RSP = USER_STACK_TOP - 128; write argc + argv[0] pointer */
+        /* Write 16 random bytes for AT_RANDOM near the string area */
+        uint64_t at_random_va = USER_STACK_TOP - 32; /* just below the name string */
+        {
+            uint8_t rand_bytes[16];
+            random_get_bytes(rand_bytes, 16);
+            vmm_write_user_bytes(proc->pml4_phys, at_random_va, rand_bytes, 16);
+        }
+
+        /* RSP = USER_STACK_TOP - 128; write argc/argv/envp/auxv.
+         * Layout: [argc][argv[0]][argv NULL][envp NULL][AT_RANDOM key][AT_RANDOM val][AT_NULL][AT_NULL] */
         uint64_t rsp_va = USER_STACK_TOP - 128;
-        vmm_write_user_u64(proc->pml4_phys, rsp_va,      1ULL);    /* argc = 1 */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 8,  str_va);  /* argv[0] */
-        /* argv[1], envp[0], AT_NULL already zero from vmm_zero_page */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va,      1ULL);           /* argc = 1 */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 8,  str_va);        /* argv[0] */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 16, 0ULL);          /* argv[1] = NULL */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 24, 0ULL);          /* envp[0] = NULL */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 32, 25ULL);         /* AT_RANDOM */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 40, at_random_va);  /* → 16 random bytes */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 48, 0ULL);          /* AT_NULL */
+        vmm_write_user_u64(proc->pml4_phys, rsp_va + 56, 0ULL);          /* AT_NULL value */
     }
 
     /*
