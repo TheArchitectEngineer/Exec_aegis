@@ -161,7 +161,12 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
         has_deadline = 1;
     }
 
+    /* Bug C6 fix: the nready check and waiter_task assignment must be
+     * atomic with respect to epoll_notify (which runs under epoll_lock
+     * from ISR context). Without the lock, an epoll_notify between
+     * checking nready==0 and setting waiter_task loses the wake. */
     for (;;) {
+        irqflags_t efl = spin_lock_irqsave(&epoll_lock);
         if (ep->nready > 0) {
             int limit = (ep->nready < (uint8_t)maxevents) ? (int)ep->nready : maxevents;
             int delivered = 0;
@@ -171,11 +176,13 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
                 k_epoll_event_t kev;
                 kev.events = ep->watches[wi].events;
                 kev.data   = ep->watches[wi].data;
+                spin_unlock_irqrestore(&epoll_lock, efl);
                 /* copy_to_user returns void — no fault recovery without extable */
                 copy_to_user((void *)(uintptr_t)(events_uptr +
                              (uint64_t)delivered * sizeof(k_epoll_event_t)),
                              &kev, sizeof(kev));
                 delivered++;
+                efl = spin_lock_irqsave(&epoll_lock);
                 if (ep->watches[wi].events & EPOLLET) {
                     /* Edge-triggered: remove this entry from ready list */
                     uint8_t j;
@@ -188,13 +195,21 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
                     i++;  /* Level-triggered: keep in ready, advance */
                 }
             }
+            spin_unlock_irqrestore(&epoll_lock, efl);
             return delivered;
         }
 
-        if (timeout_ticks == 0) return 0;  /* non-blocking */
-        if (has_deadline && (uint32_t)arch_get_ticks() >= deadline) return 0;
+        if (timeout_ticks == 0) {
+            spin_unlock_irqrestore(&epoll_lock, efl);
+            return 0;  /* non-blocking */
+        }
+        if (has_deadline && (uint32_t)arch_get_ticks() >= deadline) {
+            spin_unlock_irqrestore(&epoll_lock, efl);
+            return 0;
+        }
 
         ep->waiter_task = (aegis_task_t *)sched_current();
+        spin_unlock_irqrestore(&epoll_lock, efl);
         sched_block();
         /* Loop: check ready list again after wake */
     }

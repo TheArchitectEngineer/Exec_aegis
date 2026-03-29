@@ -57,6 +57,20 @@ sys_exit(uint64_t arg1)
                    (uint32_t)(arg1 & 0xFF));
             arch_request_shutdown();
         }
+
+        /* C2: Reparent orphan children to init (PID 1) so they can be
+         * reaped by waitpid instead of staying as zombies forever. */
+        {
+            aegis_task_t *t = sched_current()->next;
+            while (t != sched_current()) {
+                if (t->is_user) {
+                    aegis_process_t *child = (aegis_process_t *)t;
+                    if (child->ppid == proc->pid)
+                        child->ppid = 1;
+                }
+                t = t->next;
+            }
+        }
     }
     sched_exit();
     __builtin_unreachable();
@@ -105,6 +119,19 @@ uint64_t sys_exit_group(uint64_t arg1)
             printk("[INIT] PID 1 exited with status %u — halting\n",
                    (uint32_t)(arg1 & 0xFF));
             arch_request_shutdown();
+        }
+
+        /* C2: Reparent orphan children to init (PID 1). */
+        {
+            aegis_task_t *t = sched_current()->next;
+            while (t != sched_current()) {
+                if (t->is_user) {
+                    aegis_process_t *child = (aegis_process_t *)t;
+                    if (child->ppid == proc->pid)
+                        child->ppid = 1;
+                }
+                t = t->next;
+            }
         }
     }
     sched_exit();
@@ -513,6 +540,9 @@ sys_fork(syscall_frame_t *frame)
     /* 3. Create child PML4 */
     child->pml4_phys = vmm_create_user_pml4();
     if (!child->pml4_phys) {
+        /* C3: free fd_table + VMA allocated above */
+        kva_free_pages(child->fd_table, 1);
+        vma_clear(child);
         kva_free_pages(child, 1);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
@@ -520,6 +550,8 @@ sys_fork(syscall_frame_t *frame)
     /* 4. Copy parent user pages into child PML4 */
     if (vmm_copy_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
         vmm_free_user_pml4(child->pml4_phys);
+        kva_free_pages(child->fd_table, 1);
+        vma_clear(child);
         kva_free_pages(child, 1);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
@@ -530,6 +562,8 @@ sys_fork(syscall_frame_t *frame)
     uint8_t *kstack = kva_alloc_pages(4);
     if (!kstack) {
         vmm_free_user_pml4(child->pml4_phys);
+        kva_free_pages(child->fd_table, 1);
+        vma_clear(child);
         kva_free_pages(child, 1);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
