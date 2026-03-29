@@ -210,15 +210,18 @@ main(void)
                 activity = 1;
         }
 
+        /* Hide cursor before composite so the FB is clean for partial flips.
+         * cursor_hide restores the saved-under pixels from the last show. */
+        cursor_hide();
+
         /* Composite if dirty (returns 0 if nothing to do = skip-if-clean) */
         int did_composite = comp_composite(&comp);
-        if (did_composite) {
-            /* Redraw cursor on top of FB after composite */
-            cursor_show(comp.cursor_x, comp.cursor_y);
-        } else if (activity) {
-            /* Input happened but no visual change -- update cursor position */
-            cursor_move(comp.cursor_x, comp.cursor_y);
-        }
+
+        /* Always redraw cursor on the FB after composite or cursor move.
+         * cursor_show saves the current FB pixels under the cursor, then
+         * draws the sprite. This must happen AFTER the flip so save-under
+         * captures the fresh composited content. */
+        cursor_show(comp.cursor_x, comp.cursor_y);
 
         /* Sleep if idle to avoid busy-looping */
         if (!activity)

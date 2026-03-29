@@ -133,8 +133,11 @@ render_chrome(glyph_window_t *win)
     draw_fill_rect(s, btn_x + BTN_SPACING * 2, btn_y,
                    BTN_RADIUS * 2, BTN_RADIUS * 2, C_CHROME_GREEN);
 
-    /* Client area background */
-    draw_fill_rect(s, client_ox(), client_oy(), win->client_w, win->client_h, C_CHROME_CLIENT);
+    /* Client area background — only fill if no custom content renderer (priv).
+     * Terminal and info windows render directly into the client area;
+     * filling white here would overwrite their content. */
+    if (!win->priv)
+        draw_fill_rect(s, client_ox(), client_oy(), win->client_w, win->client_h, C_CHROME_CLIENT);
 }
 
 void

@@ -230,12 +230,26 @@ comp_composite(compositor_t *c)
     for (int i = 1; i < c->ndirty; i++)
         combined = glyph_rect_union(combined, c->dirty_rects[i]);
 
-    /* Redraw background in dirty region */
-    if (c->bg_rendered) {
-        /* Re-render desktop gradient only in dirty region.
-         * For simplicity, re-render the full-width rows that overlap. */
-        draw_gradient_v(&c->back, 0, combined.y, c->back.w, combined.h,
-                        C_BG1, C_BG2);
+    /* Redraw background in dirty region.
+     * Compute gradient colors as if rendering the full screen, but only
+     * write the rows within the dirty rect. */
+    {
+        int dy0 = combined.y < 0 ? 0 : combined.y;
+        int dy1 = combined.y + combined.h;
+        if (dy1 > c->back.h) dy1 = c->back.h;
+        int total_h = c->back.h > 1 ? c->back.h - 1 : 1;
+        for (int y = dy0; y < dy1; y++) {
+            int t = y * 255 / total_h;
+            uint32_t r = ((C_BG1 >> 16 & 0xFF) * (255 - t) + (C_BG2 >> 16 & 0xFF) * t) / 255;
+            uint32_t g = ((C_BG1 >> 8 & 0xFF) * (255 - t) + (C_BG2 >> 8 & 0xFF) * t) / 255;
+            uint32_t b = ((C_BG1 & 0xFF) * (255 - t) + (C_BG2 & 0xFF) * t) / 255;
+            uint32_t color = (r << 16) | (g << 8) | b;
+            int x0 = combined.x < 0 ? 0 : combined.x;
+            int x1 = combined.x + combined.w;
+            if (x1 > c->back.w) x1 = c->back.w;
+            for (int x = x0; x < x1; x++)
+                c->back.buf[y * c->back.pitch + x] = color;
+        }
     }
 
     /* Render dirty windows and blit to backbuffer */
@@ -268,6 +282,16 @@ comp_composite(compositor_t *c)
 }
 
 /* ---- Mouse handling ---- */
+
+/* Hit-test the close button (red circle in titlebar) */
+static int
+hit_close_button(glyph_window_t *win, int mx, int my)
+{
+    int btn_x = win->x + GLYPH_BORDER_WIDTH + 8;
+    int btn_y = win->y + GLYPH_BORDER_WIDTH + 7;
+    return mx >= btn_x && mx < btn_x + 14 &&
+           my >= btn_y && my < btn_y + 14;
+}
 
 /* Hit-test the titlebar area of a glyph window */
 static int
@@ -332,6 +356,13 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
     if (left && !prev_left) {
         glyph_window_t *win = comp_window_at(c, c->cursor_x, c->cursor_y);
         if (win) {
+            /* Close button */
+            if (win->closeable && hit_close_button(win, c->cursor_x, c->cursor_y)) {
+                comp_remove_window(c, win);
+                c->prev_buttons = buttons;
+                return;
+            }
+
             /* Titlebar drag */
             if (hit_titlebar(win, c->cursor_x, c->cursor_y)) {
                 c->dragging = 1;
