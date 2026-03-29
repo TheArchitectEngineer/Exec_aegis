@@ -221,6 +221,10 @@ main(void)
                 n = read(master_fd, pty_buf, sizeof(pty_buf));
                 if (n <= 0)
                     break;
+                /* DEBUG: flash red block when PTY data arrives */
+                for (int dy = 0; dy < 10; dy++)
+                    for (int dx = 12; dx < 22; dx++)
+                        fb[dy * pitch_px + dx] = 0x00FF0000;
                 terminal_write(term_win, pty_buf, (int)n);
                 pty_activity = 1;
             }
