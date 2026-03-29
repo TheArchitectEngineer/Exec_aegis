@@ -100,10 +100,12 @@ main(void)
     fb_info_t fb_info;
     memset(&fb_info, 0, sizeof(fb_info));
 
+    write(2, "lumen: start\n", 13);
+
     /* Map framebuffer via sys_fb_map (513) */
     long ret = syscall(513, &fb_info);
-    if (ret < 0)
-        return 1;
+    if (ret < 0) { write(2, "lumen: no fb\n", 13); return 1; }
+    write(2, "lumen: fb ok\n", 13);
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
@@ -144,14 +146,18 @@ main(void)
      * while freeing forked pages + loading new ELF. Any parent
      * allocation (calloc->mmap) blocks on that lock. By creating all
      * windows before fork, the parent's post-fork path is pure memory. */
+    write(2, "lumen: pre-alloc\n", 17);
     glyph_window_t *info_win = create_info_window(fb_w, fb_h);
+    write(2, "lumen: info ok\n", 15);
 
     int term_pw = fb_w * 3 / 5;
     int term_ph = fb_h * 3 / 5;
     int term_cols = term_pw / FONT_W;
     int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
     int master_fd = -1;
+    write(2, "lumen: pre-fork\n", 16);
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
+    write(2, "lumen: post-fork\n", 17);
 
     /* Post-fork: pure userspace memory writes only. No syscalls that
      * contend with the child's execve on vmm_window_lock. */
@@ -174,10 +180,12 @@ main(void)
 
     /* Do initial full composite — writes to backbuffer + memcpy to FB.
      * All memory is already mapped, no syscalls needed. */
+    write(2, "lumen: composite\n", 17);
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
+    write(2, "lumen: running\n", 15);
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
