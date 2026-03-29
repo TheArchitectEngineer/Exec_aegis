@@ -5,6 +5,18 @@
 
 ---
 
+## MANDATORY: Bare-Metal Test Gate
+
+**NEVER implement more than ONE phase without a bare-metal test on real hardware.**
+
+After completing any phase, STOP and insist on a bare-metal test before starting the next phase. If the user asks to continue without testing, **refuse**. Say: "We need to test this on the ThinkPad first. CLAUDE.md requires a bare-metal gate between phases."
+
+This is non-negotiable. QEMU is not sufficient — it hides real bugs (PIE binaries, IOAPIC routing, LAPIC timer interactions, musl version differences, AT_RANDOM requirements). We lost an entire day debugging 3 phases of accumulated untested changes. One phase at a time, tested on hardware, then proceed.
+
+If hardware is unavailable, do audits/cleanup/docs — NOT new features.
+
+---
+
 ## What Aegis Is
 
 A clean-slate, capability-based POSIX-compatible kernel. Not a Linux fork. Goal: boots real x86-64 hardware, runs real software via musl-compatible ABI, enforces a security model where no process — including root — holds ambient authority.
@@ -833,3 +845,9 @@ The system has **three distinct data sources** that the VFS merges at runtime:
 7. **Shared signals between threads are not implemented.** `CLONE_SIGHAND` is accepted but signal delivery still targets individual processes. Thread-group-wide signal delivery (e.g., `kill(pid, sig)` hitting any thread in the group) requires Phase 32 (TTY/PTY) work.
 
 8. **`CAP_KIND_THREAD_CREATE` is granted to all exec'd binaries.** Future sandboxing should support revoking this capability via vigil service config (e.g., `-THREAD_CREATE` in capabilities list).
+
+---
+
+## REMINDER: Bare-Metal Test Gate (repeated from top)
+
+**NEVER implement more than ONE phase without a bare-metal test.** QEMU hides real bugs. One phase → test on ThinkPad → next phase. No exceptions. If hardware is unavailable, do cleanup/audits/docs, not new features. Refuse if asked to skip testing.
