@@ -248,6 +248,17 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
     {
         uint32_t ino = 0;
         if (ext2_open(path, &ino) >= 0) {
+            /* DAC permission check */
+            if (sched_current()->is_user) {
+                aegis_process_t *pr = (aegis_process_t *)sched_current();
+                int want = 4;  /* R_OK by default (O_RDONLY=0) */
+                if (flags & 1) want = 2;       /* O_WRONLY */
+                if (flags & 2) want = 4 | 2;   /* O_RDWR */
+                int perm = ext2_check_perm(ino,
+                    (uint16_t)pr->uid, (uint16_t)pr->gid, want);
+                if (perm != 0)
+                    return -13;  /* EACCES */
+            }
             ext2_fd_priv_t *p = ext2_pool_alloc(ino);
             if (!p) return -12;
             int sz = ext2_file_size(ino);
@@ -260,18 +271,30 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
             out->_pad   = 0;
             return 0;
         }
-        /* ext2 ENOENT + O_CREAT → create then retry */
-        if ((flags & (int)VFS_O_CREAT) && ext2_create(path, 0644) == 0) {
-            if (ext2_open(path, &ino) >= 0) {
-                ext2_fd_priv_t *p = ext2_pool_alloc(ino);
-                if (!p) return -12;
-                out->ops    = &s_ext2_ops;
-                out->priv   = (void *)p;
-                out->offset = 0;
-                out->size   = 0;
-                out->flags  = 0;
-                out->_pad   = 0;
-                return 0;
+        /* ext2 ENOENT + O_CREAT → check W+X on parent, then create */
+        if (flags & (int)VFS_O_CREAT) {
+            uint32_t parent_ino;
+            const char *bname;
+            if (ext2_lookup_parent(path, &parent_ino, &bname) == 0 &&
+                sched_current()->is_user) {
+                aegis_process_t *pr = (aegis_process_t *)sched_current();
+                int pperm = ext2_check_perm(parent_ino,
+                    (uint16_t)pr->uid, (uint16_t)pr->gid, 2 | 1); /* W+X */
+                if (pperm != 0)
+                    return -13;  /* EACCES */
+            }
+            if (ext2_create(path, 0644) == 0) {
+                if (ext2_open(path, &ino) >= 0) {
+                    ext2_fd_priv_t *p = ext2_pool_alloc(ino);
+                    if (!p) return -12;
+                    out->ops    = &s_ext2_ops;
+                    out->priv   = (void *)p;
+                    out->offset = 0;
+                    out->size   = 0;
+                    out->flags  = 0;
+                    out->_pad   = 0;
+                    return 0;
+                }
             }
         }
     }

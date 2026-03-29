@@ -770,6 +770,17 @@ sys_mkdir(uint64_t arg1, uint64_t arg2)
     (void)arg2; /* mode ignored for now */
     if (copy_path_from_user(kpath, arg1, sizeof(kpath)) != 0)
         return (uint64_t)-(int64_t)14; /* EFAULT */
+    /* Check W+X permission on parent directory */
+    {
+        uint32_t parent_ino;
+        const char *bname;
+        if (ext2_lookup_parent(kpath, &parent_ino, &bname) == 0) {
+            int pperm = ext2_check_perm(parent_ino,
+                (uint16_t)proc->uid, (uint16_t)proc->gid, 2 | 1);
+            if (pperm != 0)
+                return (uint64_t)(-13);  /* EACCES */
+        }
+    }
     int r = ext2_mkdir(kpath, 0755);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }
@@ -791,6 +802,17 @@ sys_unlink(uint64_t arg1)
     char kpath[256];
     if (copy_path_from_user(kpath, arg1, sizeof(kpath)) != 0)
         return (uint64_t)-(int64_t)14; /* EFAULT */
+    /* Check W+X permission on parent directory */
+    {
+        uint32_t parent_ino;
+        const char *bname;
+        if (ext2_lookup_parent(kpath, &parent_ino, &bname) == 0) {
+            int pperm = ext2_check_perm(parent_ino,
+                (uint16_t)proc->uid, (uint16_t)proc->gid, 2 | 1);
+            if (pperm != 0)
+                return (uint64_t)(-13);  /* EACCES */
+        }
+    }
     int r = ext2_unlink(kpath);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }
@@ -815,6 +837,23 @@ sys_rename(uint64_t arg1, uint64_t arg2)
         return (uint64_t)-(int64_t)14; /* EFAULT */
     if (copy_path_from_user(knew, arg2, sizeof(knew)) != 0)
         return (uint64_t)-(int64_t)14; /* EFAULT */
+    /* Check W+X permission on both source and destination parent dirs */
+    {
+        uint32_t parent_ino;
+        const char *bname;
+        if (ext2_lookup_parent(kold, &parent_ino, &bname) == 0) {
+            int pperm = ext2_check_perm(parent_ino,
+                (uint16_t)proc->uid, (uint16_t)proc->gid, 2 | 1);
+            if (pperm != 0)
+                return (uint64_t)(-13);  /* EACCES */
+        }
+        if (ext2_lookup_parent(knew, &parent_ino, &bname) == 0) {
+            int pperm = ext2_check_perm(parent_ino,
+                (uint16_t)proc->uid, (uint16_t)proc->gid, 2 | 1);
+            if (pperm != 0)
+                return (uint64_t)(-13);  /* EACCES */
+        }
+    }
     int r = ext2_rename(kold, knew);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }

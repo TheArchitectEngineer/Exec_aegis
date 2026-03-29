@@ -874,6 +874,17 @@ sys_execve(syscall_frame_t *frame,
         {
     int argc2 = argc;
 
+    /* Check execute permission on the binary (ext2 only; initrd is always allowed) */
+    {
+        uint32_t elf_ino;
+        if (ext2_open(path, &elf_ino) == 0) {
+            int xperm = ext2_check_perm(elf_ino,
+                (uint16_t)proc->uid, (uint16_t)proc->gid, 1); /* X_OK */
+            if (xperm != 0)
+                { ret = (uint64_t)-(int64_t)13; goto done; }  /* EACCES */
+        }
+    }
+
     /* 3. Look up binary: initrd first, then VFS (ext2 on nvme0p1). */
     vfs_file_t f;
     const uint8_t *elf_data;

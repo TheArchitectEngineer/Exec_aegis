@@ -151,6 +151,10 @@ int ext2_chown(const char *path, uint16_t uid, uint16_t gid, int follow);
  * follow_final: 1 = follow symlinks on final component, 0 = no-follow (lstat). */
 int ext2_open_ex(const char *path, uint32_t *inode_out, int follow_final);
 
+/* Split path into parent directory inode and basename */
+int ext2_lookup_parent(const char *path, uint32_t *parent_ino_out,
+                       const char **basename_out);
+
 /* Flush all dirty cache slots to disk */
 void ext2_sync(void);
 
