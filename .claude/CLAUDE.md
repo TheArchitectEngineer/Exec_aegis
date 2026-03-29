@@ -290,8 +290,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Framebuffer access | ✅ | sys_fb_map (513) maps FB into userspace; fb_test GUI mockup with Terminus 10x20; native resolution |
 | Password asterisks | ✅ | login echoes * for password input; raw termios mode |
 | DHCP no-NIC exit | ✅ | Exits on zero MAC; oneshot vigil policy (no respawn spam) |
-| USB HID mouse (Phase 36) | 🔶 | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **untested on hardware** |
-| Lumen compositor (Phase 37) | 🔶 | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **untested on hardware** |
+| USB HID mouse (Phase 36) | ✅ | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **ThinkPad Zen 2 bare-metal PASS** |
+| Lumen compositor (Phase 37) | ✅ | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **ThinkPad Zen 2 bare-metal PASS** (slow rendering — optimization needed) |
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
 
 ### Known deviations
@@ -364,8 +364,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 34 | **Writable root** — ext2-first VFS; embedded rootfs.img in ISO as multiboot2 module; RAM blkdev for live boot; Aegis GPT GUID family; NVMe-fail warning | ✅ Done |
 | 35 | **Installer** — text-mode; partition NVMe with Aegis GUIDs, flash rootfs.img to NVMe, install EFI GRUB | ✅ Done |
 | 35b | **Bare-metal polish** — UEFI EFI boot, ACPI power button, gfxmode=auto, GRUB background, password asterisks | ✅ Done |
-| 36 | **USB HID mouse** — boot protocol + PS/2 mouse; /dev/mouse VFS; installer crypt() | 🔶 Untested |
-| 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | 🔶 Untested |
+| 36 | **USB HID mouse** — boot protocol + PS/2 mouse; /dev/mouse VFS; installer crypt() | ✅ Done |
+| 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | ✅ Done |
 | 38 | **SMP** — LAPIC+IOAPIC, ~30 spinlocks, SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown | ✅ Done |
 | 39 | **Glyph** — widget toolkit (`libglyph.so`); buttons, labels, text fields, window chrome; developer headers | Not started |
 | 40 | **Citadel** — desktop shell; taskbar, app launcher, desktop icons, clock; first Glyph app | Not started |
@@ -617,7 +617,7 @@ The GUI uses **Terminus** bitmap font (SIL Open Font License 1.1):
 
 ---
 
-*Last updated: 2026-03-28 — Phase 38 bare-metal PASS. IOAPIC #GP fixed (remapped PIC IDT stubs). All SMP features verified on Zen 2.*
+*Last updated: 2026-03-28 — Phases 36-38 bare-metal PASS on ThinkPad X13 Zen 2. IOAPIC #GP fixed (remapped PIC IDT stubs). CAP_KIND_FB added for framebuffer access. Lumen renders (slow — optimization future work).*
 
 ---
 
