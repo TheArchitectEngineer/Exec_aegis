@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <time.h>
 
 typedef struct {
     int master_fd;  /* -1 if PTY failed */
@@ -207,9 +208,12 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     }
 
     if (pid == 0) {
-        /* child — exit immediately to test if child interference
-         * is what prevents the parent from rendering. */
-        _exit(0);
+        /* child — sleep forever to test if a live idle child
+         * prevents rendering (vs heavy execve work). */
+        for (;;) {
+            struct timespec ts = { 60, 0 };
+            nanosleep(&ts, 0);
+        }
     }
 
     /* parent — PTY succeeded */
