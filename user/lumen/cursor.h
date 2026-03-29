@@ -1,8 +1,8 @@
-/* cursor.h — Hardware cursor with save-under for Lumen compositor */
+/* cursor.h -- Hardware cursor with save-under for Lumen compositor */
 #ifndef LUMEN_CURSOR_H
 #define LUMEN_CURSOR_H
 
-#include "draw.h"
+#include <glyph.h>
 
 #define CURSOR_W 16
 #define CURSOR_H 16

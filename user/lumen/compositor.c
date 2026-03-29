@@ -1,87 +1,33 @@
-/* compositor.c — Lumen window management and compositing */
+/* compositor.c -- Lumen window management and dirty-rect compositing */
 #include "compositor.h"
 #include "cursor.h"
-#include "draw.h"
+#include <glyph.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define CLOSE_BTN_X  8
-#define CLOSE_BTN_Y  7
-#define BTN_RADIUS   7
-#define BTN_SPACING  22
+/* ---- Helpers ---- */
 
-static void
-draw_window(compositor_t *c, window_t *win)
+/* Total window bounds on screen (including chrome + shadow) */
+static glyph_rect_t
+win_screen_rect(glyph_window_t *win)
 {
-    surface_t *s = &c->back;
-    int bx = win->x - BORDER_WIDTH;
-    int by = win->y - TITLEBAR_HEIGHT - BORDER_WIDTH;
-    int total_w = win->w + 2 * BORDER_WIDTH;
-    int total_h = win->h + TITLEBAR_HEIGHT + 2 * BORDER_WIDTH;
-    int focused = (win == c->focused);
-
-    /* shadow */
-    draw_fill_rect(s, bx + SHADOW_OFFSET, by + SHADOW_OFFSET,
-                   total_w, total_h, C_SHADOW);
-
-    /* border */
-    draw_fill_rect(s, bx, by, total_w, total_h, C_BORDER);
-
-    /* titlebar gradient */
-    uint32_t t1 = focused ? C_TITLE1 : C_UTITLE1;
-    uint32_t t2 = focused ? C_TITLE2 : C_UTITLE2;
-    draw_gradient_v(s, win->x, by + BORDER_WIDTH,
-                    win->w, TITLEBAR_HEIGHT, t1, t2);
-
-    /* title text */
-    draw_text_t(s, win->x + 50, by + BORDER_WIDTH + 5,
-                win->title, C_TITLE_T);
-
-    /* traffic-light buttons */
-    int btn_y = by + BORDER_WIDTH + CLOSE_BTN_Y;
-    int btn_x = win->x + CLOSE_BTN_X;
-
-    /* close (red) */
-    draw_fill_rect(s, btn_x, btn_y, BTN_RADIUS * 2, BTN_RADIUS * 2, C_RED);
-    if (focused) {
-        draw_text_t(s, btn_x + 3, btn_y - 2, "x", 0x00FFFFFF);
-    }
-
-    /* minimize (yellow) */
-    draw_fill_rect(s, btn_x + BTN_SPACING, btn_y,
-                   BTN_RADIUS * 2, BTN_RADIUS * 2, C_YELLOW);
-
-    /* maximize (green) */
-    draw_fill_rect(s, btn_x + BTN_SPACING * 2, btn_y,
-                   BTN_RADIUS * 2, BTN_RADIUS * 2, C_GREEN);
-
-    /* client area background */
-    draw_fill_rect(s, win->x, win->y, win->w, win->h, C_WIN);
-
-    /* blit client pixels if present */
-    if (win->pixels) {
-        draw_blit(s, win->x, win->y, win->pixels, win->w, win->h);
-    }
+    glyph_rect_t r;
+    r.x = win->x;
+    r.y = win->y;
+    r.w = win->surf_w;
+    r.h = win->surf_h;
+    return r;
 }
 
+/* Check if screen point is inside a window's total area */
 static int
-hit_close_button(window_t *win, int mx, int my)
+point_in_window(glyph_window_t *win, int px, int py)
 {
-    int btn_x = win->x + CLOSE_BTN_X;
-    int btn_y = win->y - TITLEBAR_HEIGHT - BORDER_WIDTH + BORDER_WIDTH + CLOSE_BTN_Y;
-    return mx >= btn_x && mx < btn_x + BTN_RADIUS * 2 &&
-           my >= btn_y && my < btn_y + BTN_RADIUS * 2;
+    return px >= win->x && px < win->x + win->surf_w &&
+           py >= win->y && py < win->y + win->surf_h;
 }
 
-static int
-hit_titlebar(window_t *win, int mx, int my)
-{
-    int tb_x = win->x - BORDER_WIDTH;
-    int tb_y = win->y - TITLEBAR_HEIGHT - BORDER_WIDTH;
-    int total_w = win->w + 2 * BORDER_WIDTH;
-    return mx >= tb_x && mx < tb_x + total_w &&
-           my >= tb_y && my < tb_y + TITLEBAR_HEIGHT + BORDER_WIDTH;
-}
+/* ---- Init ---- */
 
 void
 comp_init(compositor_t *c, uint32_t *fb, uint32_t *backbuf,
@@ -98,21 +44,24 @@ comp_init(compositor_t *c, uint32_t *fb, uint32_t *backbuf,
     c->back.pitch = pitch;
     c->cursor_x = w / 2;
     c->cursor_y = h / 2;
-    c->needs_redraw = 1;
+    c->full_redraw = 1;
 }
 
+/* ---- Window management ---- */
+
 void
-comp_add_window(compositor_t *c, window_t *win)
+comp_add_window(compositor_t *c, glyph_window_t *win)
 {
     if (c->nwindows >= MAX_WINDOWS)
         return;
     c->windows[c->nwindows++] = win;
     c->focused = win;
-    c->needs_redraw = 1;
+    win->focused_window = 1;
+    c->full_redraw = 1;
 }
 
 void
-comp_remove_window(compositor_t *c, window_t *win)
+comp_remove_window(compositor_t *c, glyph_window_t *win)
 {
     int idx = -1;
     for (int i = 0; i < c->nwindows; i++) {
@@ -124,22 +73,26 @@ comp_remove_window(compositor_t *c, window_t *win)
     if (idx < 0)
         return;
 
+    /* Mark the window's screen area as dirty before removal */
+    comp_add_dirty(c, win_screen_rect(win));
+
     for (int i = idx; i < c->nwindows - 1; i++)
         c->windows[i] = c->windows[i + 1];
     c->nwindows--;
 
-    if (win->pixels)
-        free(win->pixels);
-    free(win);
-
     if (c->focused == win)
         c->focused = c->nwindows > 0 ? c->windows[c->nwindows - 1] : NULL;
 
-    c->needs_redraw = 1;
+    /* Update focused_window flags */
+    for (int i = 0; i < c->nwindows; i++)
+        c->windows[i]->focused_window = (c->windows[i] == c->focused) ? 1 : 0;
+
+    glyph_window_destroy(win);
+    c->full_redraw = 1;
 }
 
 void
-comp_raise_window(compositor_t *c, window_t *win)
+comp_raise_window(compositor_t *c, glyph_window_t *win)
 {
     int idx = -1;
     for (int i = 0; i < c->nwindows; i++) {
@@ -154,56 +107,178 @@ comp_raise_window(compositor_t *c, window_t *win)
     for (int i = idx; i < c->nwindows - 1; i++)
         c->windows[i] = c->windows[i + 1];
     c->windows[c->nwindows - 1] = win;
-    c->needs_redraw = 1;
+    c->full_redraw = 1;
 }
 
-window_t *
+glyph_window_t *
 comp_window_at(compositor_t *c, int x, int y)
 {
     for (int i = c->nwindows - 1; i >= 0; i--) {
-        window_t *win = c->windows[i];
+        glyph_window_t *win = c->windows[i];
         if (!win->visible)
             continue;
-        int bx = win->x - BORDER_WIDTH;
-        int by = win->y - TITLEBAR_HEIGHT - BORDER_WIDTH;
-        int total_w = win->w + 2 * BORDER_WIDTH;
-        int total_h = win->h + TITLEBAR_HEIGHT + 2 * BORDER_WIDTH;
-        if (x >= bx && x < bx + total_w && y >= by && y < by + total_h)
+        if (point_in_window(win, x, y))
             return win;
     }
     return NULL;
 }
 
+/* ---- Dirty rect management ---- */
+
 void
+comp_add_dirty(compositor_t *c, glyph_rect_t r)
+{
+    if (glyph_rect_empty(r))
+        return;
+
+    /* Clamp to screen */
+    if (r.x < 0) { r.w += r.x; r.x = 0; }
+    if (r.y < 0) { r.h += r.y; r.y = 0; }
+    if (r.x + r.w > c->fb.w) r.w = c->fb.w - r.x;
+    if (r.y + r.h > c->fb.h) r.h = c->fb.h - r.y;
+
+    if (r.w <= 0 || r.h <= 0)
+        return;
+
+    if (c->ndirty < MAX_DIRTY_RECTS) {
+        c->dirty_rects[c->ndirty++] = r;
+    } else {
+        /* Overflow: union into last rect */
+        c->dirty_rects[MAX_DIRTY_RECTS - 1] =
+            glyph_rect_union(c->dirty_rects[MAX_DIRTY_RECTS - 1], r);
+    }
+}
+
+/* ---- Composite ---- */
+
+static void
+blit_window_to_back(surface_t *back, glyph_window_t *win)
+{
+    /* Blit the window's surface to the backbuffer at (win->x, win->y) */
+    draw_blit(back, win->x, win->y, win->surface.buf,
+              win->surf_w, win->surf_h);
+}
+
+static void
+partial_flip(surface_t *fb, surface_t *back, glyph_rect_t r)
+{
+    /* Copy only the dirty rect from backbuffer to framebuffer */
+    for (int y = r.y; y < r.y + r.h && y < fb->h; y++) {
+        if (y < 0) continue;
+        int x0 = r.x < 0 ? 0 : r.x;
+        int x1 = r.x + r.w;
+        if (x1 > fb->w) x1 = fb->w;
+        int count = x1 - x0;
+        if (count <= 0) continue;
+        memcpy(&fb->buf[y * fb->pitch + x0],
+               &back->buf[y * back->pitch + x0],
+               (unsigned)count * sizeof(uint32_t));
+    }
+}
+
+int
 comp_composite(compositor_t *c)
 {
-    surface_t *s = &c->back;
-
-    /* desktop background gradient */
-    draw_gradient_v(s, 0, 0, s->w, s->h, C_BG1, C_BG2);
-
-    /* draw windows back-to-front */
+    /* Collect dirty rects from windows */
     for (int i = 0; i < c->nwindows; i++) {
-        window_t *win = c->windows[i];
+        glyph_window_t *win = c->windows[i];
         if (!win->visible)
             continue;
-        if (win->on_draw)
-            win->on_draw(win);
-        draw_window(c, win);
+        glyph_rect_t wr;
+        if (glyph_window_get_dirty_rect(win, &wr)) {
+            /* Convert window-local dirty rect to screen coords */
+            wr.x += win->x;
+            wr.y += win->y;
+            comp_add_dirty(c, wr);
+        }
     }
 
-    /* taskbar on top */
-    taskbar_draw(s, s->w, s->h);
+    /* Full redraw path (first frame, window raise, etc.) */
+    if (c->full_redraw) {
+        /* Desktop gradient */
+        draw_gradient_v(&c->back, 0, 0, c->back.w, c->back.h, C_BG1, C_BG2);
 
-    /* flip back buffer to framebuffer */
-    memcpy(c->fb.buf, c->back.buf,
-           (size_t)c->fb.pitch * (size_t)c->fb.h * sizeof(uint32_t));
+        /* Render and blit all windows */
+        for (int i = 0; i < c->nwindows; i++) {
+            glyph_window_t *win = c->windows[i];
+            if (!win->visible)
+                continue;
+            glyph_window_mark_all_dirty(win);
+            glyph_window_render(win);
+            blit_window_to_back(&c->back, win);
+        }
 
-    /* Cursor is drawn by the caller (main event loop) after composite,
-     * so that save-under captures the final composited image and not
-     * a stale cursor sprite. */
+        /* Taskbar */
+        taskbar_draw(&c->back, c->back.w, c->back.h);
 
-    c->needs_redraw = 0;
+        /* Full flip */
+        memcpy(c->fb.buf, c->back.buf,
+               (size_t)c->fb.pitch * (size_t)c->fb.h * sizeof(uint32_t));
+
+        c->full_redraw = 0;
+        c->ndirty = 0;
+        c->bg_rendered = 1;
+        return 1;
+    }
+
+    /* Skip if nothing dirty */
+    if (c->ndirty == 0)
+        return 0;
+
+    /* Union all dirty rects into one bounding rect for simplicity in v0.1 */
+    glyph_rect_t combined = c->dirty_rects[0];
+    for (int i = 1; i < c->ndirty; i++)
+        combined = glyph_rect_union(combined, c->dirty_rects[i]);
+
+    /* Redraw background in dirty region */
+    if (c->bg_rendered) {
+        /* Re-render desktop gradient only in dirty region.
+         * For simplicity, re-render the full-width rows that overlap. */
+        draw_gradient_v(&c->back, 0, combined.y, c->back.w, combined.h,
+                        C_BG1, C_BG2);
+    }
+
+    /* Render dirty windows and blit to backbuffer */
+    for (int i = 0; i < c->nwindows; i++) {
+        glyph_window_t *win = c->windows[i];
+        if (!win->visible)
+            continue;
+
+        /* Check if window overlaps dirty region */
+        glyph_rect_t wr = win_screen_rect(win);
+        if (!glyph_rect_intersects(wr, combined))
+            continue;
+
+        glyph_window_render(win);
+        blit_window_to_back(&c->back, win);
+    }
+
+    /* Taskbar -- check if dirty region overlaps */
+    {
+        glyph_rect_t tb = { 0, c->back.h - TASKBAR_HEIGHT, c->back.w, TASKBAR_HEIGHT };
+        if (glyph_rect_intersects(tb, combined))
+            taskbar_draw(&c->back, c->back.w, c->back.h);
+    }
+
+    /* Partial flip */
+    partial_flip(&c->fb, &c->back, combined);
+
+    c->ndirty = 0;
+    return 1;
+}
+
+/* ---- Mouse handling ---- */
+
+/* Hit-test the titlebar area of a glyph window */
+static int
+hit_titlebar(glyph_window_t *win, int mx, int my)
+{
+    int tb_x = win->x + GLYPH_BORDER_WIDTH;
+    int tb_y = win->y + GLYPH_BORDER_WIDTH;
+    int tb_w = win->client_w;
+    int tb_h = GLYPH_TITLEBAR_HEIGHT;
+    return mx >= tb_x && mx < tb_x + tb_w &&
+           my >= tb_y && my < tb_y + tb_h;
 }
 
 void
@@ -211,8 +286,10 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
 {
     int left = buttons & 1;
     int prev_left = c->prev_buttons & 1;
+    int old_cx = c->cursor_x;
+    int old_cy = c->cursor_y;
 
-    /* update cursor position, clamp to screen */
+    /* Update cursor position, clamp to screen */
     c->cursor_x += dx;
     c->cursor_y += dy;
     if (c->cursor_x < 0) c->cursor_x = 0;
@@ -220,21 +297,30 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
     if (c->cursor_x >= c->fb.w) c->cursor_x = c->fb.w - 1;
     if (c->cursor_y >= c->fb.h) c->cursor_y = c->fb.h - 1;
 
-    if (dx != 0 || dy != 0)
-        c->needs_redraw = 1;
+    /* If cursor moved, add old and new cursor rects as dirty */
+    if (c->cursor_x != old_cx || c->cursor_y != old_cy) {
+        glyph_rect_t old_r = { old_cx, old_cy, CURSOR_W, CURSOR_H };
+        glyph_rect_t new_r = { c->cursor_x, c->cursor_y, CURSOR_W, CURSOR_H };
+        comp_add_dirty(c, old_r);
+        comp_add_dirty(c, new_r);
+    }
 
-    /* drag in progress */
+    /* Drag in progress */
     if (c->dragging && left) {
         if (c->drag_win) {
+            glyph_rect_t old_r = win_screen_rect(c->drag_win);
             c->drag_win->x = c->cursor_x - c->drag_dx;
             c->drag_win->y = c->cursor_y - c->drag_dy;
-            c->needs_redraw = 1;
+            glyph_rect_t new_r = win_screen_rect(c->drag_win);
+            comp_add_dirty(c, old_r);
+            comp_add_dirty(c, new_r);
+            glyph_window_mark_all_dirty(c->drag_win);
         }
         c->prev_buttons = buttons;
         return;
     }
 
-    /* drag released */
+    /* Drag released */
     if (c->dragging && !left) {
         c->dragging = 0;
         c->drag_win = NULL;
@@ -242,43 +328,46 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         return;
     }
 
-    /* button press edge (0 -> 1) */
+    /* Button press edge (0 -> 1) */
     if (left && !prev_left) {
-        window_t *win = comp_window_at(c, c->cursor_x, c->cursor_y);
+        glyph_window_t *win = comp_window_at(c, c->cursor_x, c->cursor_y);
         if (win) {
-            /* close button */
-            if (win->closeable && hit_close_button(win, c->cursor_x, c->cursor_y)) {
-                comp_remove_window(c, win);
-                c->prev_buttons = buttons;
-                return;
-            }
-
-            /* titlebar drag */
+            /* Titlebar drag */
             if (hit_titlebar(win, c->cursor_x, c->cursor_y)) {
                 c->dragging = 1;
                 c->drag_win = win;
                 c->drag_dx = c->cursor_x - win->x;
                 c->drag_dy = c->cursor_y - win->y;
                 if (c->focused != win) {
+                    if (c->focused)
+                        c->focused->focused_window = 0;
                     c->focused = win;
+                    win->focused_window = 1;
                     comp_raise_window(c, win);
+                    /* Mark both windows dirty for title bar color change */
+                    for (int i = 0; i < c->nwindows; i++)
+                        glyph_window_mark_all_dirty(c->windows[i]);
                 }
-                c->needs_redraw = 1;
                 c->prev_buttons = buttons;
                 return;
             }
 
-            /* click on client area — focus, raise, forward */
+            /* Click on window */
             if (c->focused != win) {
+                if (c->focused) {
+                    c->focused->focused_window = 0;
+                    glyph_window_mark_all_dirty(c->focused);
+                }
                 c->focused = win;
+                win->focused_window = 1;
                 comp_raise_window(c, win);
-                c->needs_redraw = 1;
+                glyph_window_mark_all_dirty(win);
             }
-            if (win->on_mouse) {
-                int local_x = c->cursor_x - win->x;
-                int local_y = c->cursor_y - win->y;
-                win->on_mouse(win, 1, local_x, local_y);
-            }
+
+            /* Dispatch to glyph window (converts to window-local coords) */
+            int local_x = c->cursor_x - win->x;
+            int local_y = c->cursor_y - win->y;
+            glyph_window_dispatch_mouse(win, 1, local_x, local_y);
         }
     }
 
@@ -288,6 +377,6 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
 void
 comp_handle_key(compositor_t *c, char key)
 {
-    if (c->focused && c->focused->on_key)
-        c->focused->on_key(c->focused, key);
+    if (c->focused)
+        glyph_window_dispatch_key(c->focused, key);
 }

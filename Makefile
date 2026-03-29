@@ -396,7 +396,7 @@ user/dynlink_test/dynlink_test.elf: user/dynlink_test/main.c build/musl-dynamic/
 user/installer/installer.elf: user/installer/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/installer
 
-user/fb_test/fb_test.elf: user/fb_test/main.c $(MUSL_BUILT)
+user/fb_test/fb_test.elf: user/fb_test/main.c user/glyph/libglyph.a $(MUSL_BUILT)
 	$(MAKE) -C user/fb_test
 
 user/mouse_test/mouse_test.elf: user/mouse_test/main.c $(MUSL_BUILT)
@@ -649,4 +649,5 @@ clean:
 	rm -f user/dhcp/dhcp user/chronos/chronos user/lumen/lumen
 	rm -f user/httpd/httpd user/installer/installer
 	rm -f user/fb_test/fb_test user/mouse_test/mouse_test
+	rm -f user/glyph/libglyph.a
 	$(CARGO) clean --manifest-path kernel/cap/Cargo.toml

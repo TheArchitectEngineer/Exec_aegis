@@ -1,6 +1,6 @@
-/* taskbar.c — Desktop taskbar for Lumen compositor */
+/* taskbar.c -- Desktop taskbar for Lumen compositor */
 #include "compositor.h"
-#include "draw.h"
+#include <glyph.h>
 
 void
 taskbar_draw(surface_t *s, int screen_w, int screen_h)

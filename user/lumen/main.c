@@ -1,4 +1,4 @@
-/* main.c — Lumen compositor entry point and event loop */
+/* main.c -- Lumen compositor entry point and event loop */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +8,7 @@
 #include <time.h>
 #include <sys/syscall.h>
 
-#include "draw.h"
+#include <glyph.h>
 #include "cursor.h"
 #include "compositor.h"
 #include "terminal.h"
@@ -35,54 +35,48 @@ restore_terminal(void)
     tcsetattr(0, TCSANOW, &s_orig_termios);
 }
 
-static window_t *
+static glyph_window_t *
 create_info_window(int fb_w, int fb_h)
 {
     int cols = 35;
     int rows = 10;
     int cw = cols * FONT_W;
     int ch = rows * FONT_H;
-    window_t *win = calloc(1, sizeof(window_t));
+
+    glyph_window_t *win = glyph_window_create("System", cw, ch);
     if (!win)
         return NULL;
 
     win->x = 20;
-    win->y = 20 + TITLEBAR_HEIGHT;
-    win->w = cw;
-    win->h = ch;
-    win->pixels = calloc(cw * ch, sizeof(uint32_t));
-    if (!win->pixels) {
-        free(win);
-        return NULL;
-    }
-    strncpy(win->title, "System", sizeof(win->title) - 1);
-    win->visible = 1;
-    win->closeable = 1;
+    win->y = 20;
 
-    /* Draw static info content */
-    surface_t s = { win->pixels, cw, ch, cw };
-    draw_fill_rect(&s, 0, 0, cw, ch, INFO_BG);
+    /* Draw static info content directly into the window surface */
+    surface_t *s = &win->surface;
+    int ox = GLYPH_BORDER_WIDTH;
+    int oy = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
 
-    int y = 8;
-    int x = 10;
+    draw_fill_rect(s, ox, oy, cw, ch, INFO_BG);
+
+    int y = oy + 8;
+    int x = ox + 10;
     int lh = FONT_H + 2;
     char buf[80];
 
-    draw_text(&s, x, y, "SYSTEM", C_ACCENT, INFO_BG);
+    draw_text(s, x, y, "SYSTEM", C_ACCENT, INFO_BG);
     y += lh + 4;
 
-    draw_text(&s, x, y, "Kernel:   Aegis 0.1 (x86_64)", C_TEXT, INFO_BG);
+    draw_text(s, x, y, "Kernel:   Aegis 0.1 (x86_64)", C_TEXT, INFO_BG);
     y += lh;
-    draw_text(&s, x, y, "Arch:     x86_64 (AMD64)", C_TEXT, INFO_BG);
+    draw_text(s, x, y, "Arch:     x86_64 (AMD64)", C_TEXT, INFO_BG);
     y += lh;
     snprintf(buf, sizeof(buf), "Display:  %ux%u @ 32bpp", fb_w, fb_h);
-    draw_text(&s, x, y, buf, C_TEXT, INFO_BG);
+    draw_text(s, x, y, buf, C_TEXT, INFO_BG);
     y += lh;
-    draw_text(&s, x, y, "Security: Capability-based", C_TEXT, INFO_BG);
+    draw_text(s, x, y, "Security: Capability-based", C_TEXT, INFO_BG);
     y += lh;
-    draw_text(&s, x, y, "Shell:    oksh (OpenBSD ksh)", C_TEXT, INFO_BG);
+    draw_text(s, x, y, "Shell:    oksh (OpenBSD ksh)", C_TEXT, INFO_BG);
     y += lh;
-    draw_text(&s, x, y, "Init:     Vigil supervisor", C_TEXT, INFO_BG);
+    draw_text(s, x, y, "Init:     Vigil supervisor", C_TEXT, INFO_BG);
 
     return win;
 }
@@ -141,29 +135,29 @@ main(void)
     int term_pw = fb_w * 3 / 5;
     int term_ph = fb_h * 3 / 5;
     int term_cols = term_pw / FONT_W;
-    int term_rows = (term_ph - TITLEBAR_HEIGHT) / FONT_H;
+    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
     int master_fd = -1;
-    window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
+    glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
     if (term_win) {
         /* Center the terminal */
-        term_win->x = (fb_w - term_win->w) / 2;
-        term_win->y = (fb_h - term_win->h) / 2;
+        term_win->x = (fb_w - term_win->surf_w) / 2;
+        term_win->y = (fb_h - term_win->surf_h) / 2;
         comp_add_window(&comp, term_win);
     }
 
     /* Create system info window */
-    window_t *info_win = create_info_window(fb_w, fb_h);
+    glyph_window_t *info_win = create_info_window(fb_w, fb_h);
     if (info_win)
         comp_add_window(&comp, info_win);
 
     /* Focus and raise terminal above info window */
     if (term_win) {
         comp_raise_window(&comp, term_win);
+        if (comp.focused)
+            comp.focused->focused_window = 0;
         comp.focused = term_win;
+        term_win->focused_window = 1;
     }
-
-    /* Force initial composite */
-    comp.needs_redraw = 1;
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
@@ -173,39 +167,57 @@ main(void)
 
     for (;;) {
         int activity = 0;
+        ssize_t n;
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
-        ssize_t n = read(0, &kbd_byte, 1);
+        n = read(0, &kbd_byte, 1);
         if (n == 1) {
             comp_handle_key(&comp, kbd_byte);
             activity = 1;
         }
 
-        /* Poll mouse */
+        /* Poll mouse -- BATCH: drain all pending events */
         if (mouse_fd >= 0) {
-            n = read(mouse_fd, &mev, sizeof(mev));
-            if (n == (ssize_t)sizeof(mev)) {
-                comp_handle_mouse(&comp, mev.buttons, mev.dx, mev.dy);
+            int16_t total_dx = 0, total_dy = 0;
+            uint8_t final_buttons = 0;
+            int mouse_moved = 0;
+            while (1) {
+                n = read(mouse_fd, &mev, sizeof(mev));
+                if (n != (ssize_t)sizeof(mev))
+                    break;
+                total_dx += mev.dx;
+                total_dy += mev.dy;
+                final_buttons = mev.buttons;
+                mouse_moved = 1;
+            }
+            if (mouse_moved) {
+                comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                 activity = 1;
             }
         }
 
-        /* Poll PTY master */
+        /* Poll PTY master -- BATCH: drain all available bytes */
         if (master_fd >= 0) {
-            n = read(master_fd, pty_buf, sizeof(pty_buf));
-            if (n > 0) {
+            int pty_activity = 0;
+            while (1) {
+                n = read(master_fd, pty_buf, sizeof(pty_buf));
+                if (n <= 0)
+                    break;
                 terminal_write(term_win, pty_buf, (int)n);
-                comp.needs_redraw = 1;
-                activity = 1;
+                pty_activity = 1;
             }
+            if (pty_activity)
+                activity = 1;
         }
 
-        /* Composite if dirty */
-        if (comp.needs_redraw) {
-            cursor_hide();
-            comp_composite(&comp);
+        /* Composite if dirty (returns 0 if nothing to do = skip-if-clean) */
+        int did_composite = comp_composite(&comp);
+        if (did_composite) {
+            /* Redraw cursor on top of FB after composite */
             cursor_show(comp.cursor_x, comp.cursor_y);
-            comp.needs_redraw = 0;
+        } else if (activity) {
+            /* Input happened but no visual change -- update cursor position */
+            cursor_move(comp.cursor_x, comp.cursor_y);
         }
 
         /* Sleep if idle to avoid busy-looping */
