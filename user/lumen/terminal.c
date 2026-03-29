@@ -1,4 +1,10 @@
-/* terminal.c -- PTY-based terminal emulator window for Lumen */
+/* terminal.c -- PTY-based terminal emulator window for Lumen
+ *
+ * Uses sys_spawn (syscall 514) to create the shell process WITHOUT fork.
+ * This avoids the 30+ second stall on bare metal caused by fork's eager
+ * page copy of lumen's ~3000 pages + vmm_window_lock contention during
+ * the child's execve. sys_spawn creates a fresh PML4 with the ELF loaded
+ * directly — no page copy, no lock contention. */
 
 #include "terminal.h"
 #include "compositor.h"
@@ -9,7 +15,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
-#include <time.h>
+#include <sys/syscall.h>
+
+/* sys_spawn: create process from ELF path without fork.
+ * syscall(514, path, argv, envp, stdio_fd) */
+#define SYS_SPAWN 514
 
 typedef struct {
     int master_fd;  /* -1 if PTY failed */
@@ -30,15 +40,12 @@ static void term_render_content(glyph_window_t *win)
 {
     term_priv_t *tp = win->priv;
 
-    /* Render into the window's surface at the client area offset */
     surface_t *s = &win->surface;
     int ox = GLYPH_BORDER_WIDTH;
     int oy = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
 
-    /* Clear client area */
     draw_fill_rect(s, ox, oy, win->client_w, win->client_h, C_TERM_BG);
 
-    /* Draw grid */
     for (int r = 0; r < tp->rows; r++) {
         for (int c = 0; c < tp->cols; c++) {
             char ch = tp->grid[r * tp->cols + c];
@@ -48,7 +55,6 @@ static void term_render_content(glyph_window_t *win)
         }
     }
 
-    /* Cursor block (only if PTY is active) */
     if (tp->master_fd >= 0)
         draw_fill_rect(s, ox + tp->cx * FONT_W, oy + tp->cy * FONT_H,
                        FONT_W, FONT_H, C_TERM_FG);
@@ -61,7 +67,6 @@ static void term_on_key(glyph_window_t *self, char key)
         write(tp->master_fd, &key, 1);
 }
 
-/* Write a message into the terminal grid (no PTY needed) */
 static void term_grid_puts(term_priv_t *tp, const char *msg)
 {
     while (*msg) {
@@ -126,12 +131,11 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
 
 glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
 {
-    int master_fd = -1, pts_num = -1, slave_fd;
+    int master_fd = -1, pts_num = -1, slave_fd = -1;
     char slave_path[32];
-    pid_t pid;
     const char *fail_reason = NULL;
 
-    /* Create glyph window first — always succeeds or returns NULL */
+    /* Create glyph window */
     int client_w = cols * FONT_W;
     int client_h = rows * FONT_H;
     glyph_window_t *win = glyph_window_create("Terminal", client_w, client_h);
@@ -158,7 +162,7 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     memset(tp->grid, ' ', (unsigned)(cols * rows));
     win->priv = tp;
 
-    /* Try to set up PTY — any failure is non-fatal */
+    /* Open PTY master */
     master_fd = open("/dev/ptmx", O_RDWR);
     if (master_fd < 0) {
         fail_reason = "open /dev/ptmx failed";
@@ -197,49 +201,40 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         slave_path[j] = '\0';
     }
 
-    /* Set master non-blocking before fork */
-    fcntl(master_fd, F_SETFL, O_NONBLOCK);
-
-    /* Fork child shell */
-    pid = fork();
-    if (pid < 0) {
-        fail_reason = "fork failed";
+    /* Open slave fd — sys_spawn will dup it to child's fd 0/1/2 */
+    slave_fd = open(slave_path, O_RDWR);
+    if (slave_fd < 0) {
+        fail_reason = "open slave failed";
         goto pty_failed;
     }
 
-    if (pid == 0) {
-        /* child */
-        close(master_fd);
-        setsid();
-        slave_fd = open(slave_path, O_RDWR);
-        if (slave_fd < 0)
-            _exit(1);
-        dup2(slave_fd, 0);
-        dup2(slave_fd, 1);
-        dup2(slave_fd, 2);
-        if (slave_fd > 2)
-            close(slave_fd);
+    /* Set master non-blocking for polling */
+    fcntl(master_fd, F_SETFL, O_NONBLOCK);
 
-        char *argv[] = {"/bin/oksh", NULL};
-        char *envp[] = {
-            "TERM=dumb",
-            "HOME=/root",
-            "PATH=/bin",
-            NULL
-        };
-        execve("/bin/oksh", argv, envp);
-        _exit(1);
+    /* Spawn shell via sys_spawn — NO FORK, no page copy, instant. */
+    {
+        char *argv[] = {"-sh", NULL};  /* leading '-' = login shell */
+        char *envp[] = {NULL};
+
+        long pid = syscall(SYS_SPAWN, "/bin/sh", argv, envp, slave_fd);
+        if (pid < 0) {
+            fail_reason = "sys_spawn failed";
+            goto pty_failed;
+        }
     }
 
-    /* parent — PTY succeeded */
+    /* Parent doesn't need the slave fd */
+    close(slave_fd);
+
+    /* Success */
     tp->master_fd = master_fd;
     *master_fd_out = master_fd;
     term_render_content(win);
     return win;
 
 pty_failed:
-    /* PTY setup failed — show error in terminal window, still return
-     * a valid window so lumen renders normally. */
+    if (slave_fd >= 0)
+        close(slave_fd);
     if (master_fd >= 0)
         close(master_fd);
     tp->master_fd = -1;

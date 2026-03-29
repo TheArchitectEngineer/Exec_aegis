@@ -134,6 +134,7 @@ uint64_t sys_waitpid(uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_execve(syscall_frame_t *frame,
                     uint64_t a1, uint64_t a2, uint64_t a3);
 uint64_t sys_cap_grant_exec(uint64_t kind, uint64_t rights);
+uint64_t sys_spawn(uint64_t path, uint64_t argv, uint64_t envp, uint64_t stdio_fd);
 
 /* ── sys_file.c ─────────────────────────────────────────────────────────── */
 uint64_t sys_open(uint64_t a1, uint64_t a2, uint64_t a3);

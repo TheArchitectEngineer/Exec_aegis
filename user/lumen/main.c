@@ -66,7 +66,7 @@ info_render(glyph_window_t *win)
     y += lh;
     draw_text(s, x, y, "Security: Capability-based", C_TEXT, INFO_BG);
     y += lh;
-    draw_text(s, x, y, "Shell:    oksh (OpenBSD ksh)", C_TEXT, INFO_BG);
+    draw_text(s, x, y, "Shell:    /bin/sh", C_TEXT, INFO_BG);
     y += lh;
     draw_text(s, x, y, "Init:     Vigil supervisor", C_TEXT, INFO_BG);
 }
@@ -94,35 +94,132 @@ create_info_window(int fb_w, int fb_h)
     return win;
 }
 
+/* ---- Desktop icons ---- */
+
+#define ICON_SIZE   48
+#define ICON_LABEL_H (FONT_H + 4)
+#define MAX_ICONS   8
+
+typedef struct {
+    int x, y;
+    const char *label;
+    int id;
+} desktop_icon_t;
+
+static desktop_icon_t s_icons[MAX_ICONS];
+static int s_nicons;
+
+static void
+desktop_add_icon(int x, int y, const char *label, int id)
+{
+    if (s_nicons >= MAX_ICONS)
+        return;
+    s_icons[s_nicons].x = x;
+    s_icons[s_nicons].y = y;
+    s_icons[s_nicons].label = label;
+    s_icons[s_nicons].id = id;
+    s_nicons++;
+}
+
+static void desktop_draw_icons(surface_t *s);
+
+/* Callback for compositor — draws icons on desktop background */
+static void
+desktop_draw_icons_cb(surface_t *s, int w, int h)
+{
+    (void)w; (void)h;
+    desktop_draw_icons(s);
+}
+
+static void
+desktop_draw_icons(surface_t *s)
+{
+    for (int i = 0; i < s_nicons; i++) {
+        desktop_icon_t *ic = &s_icons[i];
+
+        /* Icon background (rounded-ish rect) */
+        draw_fill_rect(s, ic->x, ic->y, ICON_SIZE, ICON_SIZE, 0x00334455);
+        draw_rect(s, ic->x, ic->y, ICON_SIZE, ICON_SIZE, C_ACCENT);
+
+        /* Simple terminal icon: ">_" text centered */
+        if (ic->id == 1) {
+            draw_text(s, ic->x + 9, ic->y + 14, ">_", 0x0000FF88, 0x00334455);
+        } else if (ic->id == 2) {
+            draw_text(s, ic->x + 14, ic->y + 14, "i", C_ACCENT, 0x00334455);
+        }
+
+        /* Label below icon */
+        int lx = ic->x + (ICON_SIZE - (int)strlen(ic->label) * FONT_W) / 2;
+        draw_text_t(s, lx, ic->y + ICON_SIZE + 4, ic->label, 0x00CCDDEE);
+    }
+}
+
+static int
+desktop_hit_icon(int mx, int my)
+{
+    for (int i = 0; i < s_nicons; i++) {
+        desktop_icon_t *ic = &s_icons[i];
+        if (mx >= ic->x && mx < ic->x + ICON_SIZE &&
+            my >= ic->y && my < ic->y + ICON_SIZE + ICON_LABEL_H)
+            return ic->id;
+    }
+    return 0;
+}
+
+/* ---- Terminal spawning ---- */
+
+static compositor_t *s_comp;  /* for desktop icon handler */
+
+static void
+spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
+{
+    int term_pw = fb_w * 3 / 5;
+    int term_ph = fb_h * 3 / 5;
+    int term_cols = term_pw / FONT_W;
+    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
+    int master_fd = -1;
+
+    glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
+    if (!term_win)
+        return;
+
+    term_win->x = (fb_w - term_win->surf_w) / 2;
+    term_win->y = (fb_h - term_win->surf_h) / 2;
+    comp_add_window(comp, term_win);
+    comp_raise_window(comp, term_win);
+
+    /* Focus the new terminal */
+    if (comp->focused && comp->focused != term_win)
+        comp->focused->focused_window = 0;
+    comp->focused = term_win;
+    term_win->focused_window = 1;
+
+    /* Store master_fd in the window's tag for polling */
+    term_win->tag = master_fd;
+}
+
 int
 main(void)
 {
     fb_info_t fb_info;
     memset(&fb_info, 0, sizeof(fb_info));
 
-    write(2, "lumen: start\n", 13);
-
     /* Map framebuffer via sys_fb_map (513) */
     long ret = syscall(513, &fb_info);
-    if (ret < 0) { write(2, "lumen: no fb\n", 13); return 1; }
-    write(2, "lumen: fb ok\n", 13);
+    if (ret < 0)
+        return 1;
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
     int fb_h = (int)fb_info.height;
     int pitch_px = (int)(fb_info.pitch / (fb_info.bpp / 8));
 
-    /* Allocate backbuffer FIRST — before any fork.
-     * After fork, the child's execve holds vmm_window_lock for a long
-     * time (freeing forked pages + loading ELF).  Any parent syscall
-     * that touches vmm (malloc→mmap, open, etc.) blocks on that lock.
-     * By doing ALL allocations before fork, the parent's post-fork
-     * path is pure userspace memory operations — no kernel contention. */
+    /* Allocate backbuffer */
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
     if (!backbuf)
         return 1;
 
-    /* Set stdin to raw mode before fork — avoids post-fork ioctl */
+    /* Set stdin to raw mode */
     tcgetattr(0, &s_orig_termios);
     atexit(restore_terminal);
     struct termios raw = s_orig_termios;
@@ -131,61 +228,35 @@ main(void)
     raw.c_cc[VTIME] = 0;
     tcsetattr(0, TCSANOW, &raw);
 
-    /* Open mouse device before fork */
+    /* Open mouse device */
     int mouse_fd = open("/dev/mouse", O_RDONLY);
     if (mouse_fd >= 0)
         fcntl(mouse_fd, F_SETFL, O_NONBLOCK);
 
-    /* Init compositor and cursor before fork — pure memory ops */
+    /* Init compositor and cursor */
     compositor_t comp;
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
+    s_comp = &comp;
 
-    /* Create ALL windows BEFORE terminal_create (which forks).
-     * After fork, the child's execve holds vmm_window_lock for seconds
-     * while freeing forked pages + loading new ELF. Any parent
-     * allocation (calloc->mmap) blocks on that lock. By creating all
-     * windows before fork, the parent's post-fork path is pure memory. */
-    write(2, "lumen: pre-alloc\n", 17);
+    /* Desktop icons */
+    desktop_add_icon(fb_w - 80, 20, "Terminal", 1);
+    desktop_add_icon(fb_w - 80, 110, "System", 2);
+    comp.on_draw_desktop = desktop_draw_icons_cb;
+
+    /* Create windows */
     glyph_window_t *info_win = create_info_window(fb_w, fb_h);
-    write(2, "lumen: info ok\n", 15);
-
-    int term_pw = fb_w * 3 / 5;
-    int term_ph = fb_h * 3 / 5;
-    int term_cols = term_pw / FONT_W;
-    int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
-    int master_fd = -1;
-    write(2, "lumen: pre-fork\n", 16);
-    glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
-    write(2, "lumen: post-fork\n", 17);
-
-    /* Post-fork: pure userspace memory writes only. No syscalls that
-     * contend with the child's execve on vmm_window_lock. */
-    if (term_win) {
-        term_win->x = (fb_w - term_win->surf_w) / 2;
-        term_win->y = (fb_h - term_win->surf_h) / 2;
-        comp_add_window(&comp, term_win);
-    }
-
     if (info_win)
         comp_add_window(&comp, info_win);
 
-    if (term_win) {
-        comp_raise_window(&comp, term_win);
-        if (comp.focused)
-            comp.focused->focused_window = 0;
-        comp.focused = term_win;
-        term_win->focused_window = 1;
-    }
+    /* Spawn initial terminal — uses sys_spawn, no fork, instant */
+    spawn_terminal(&comp, fb_w, fb_h);
 
-    /* Do initial full composite — writes to backbuffer + memcpy to FB.
-     * All memory is already mapped, no syscalls needed. */
-    write(2, "lumen: composite\n", 17);
+    /* Initial full composite (icons drawn via on_draw_desktop callback) */
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
-    write(2, "lumen: running\n", 15);
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
@@ -219,19 +290,35 @@ main(void)
                 mouse_moved = 1;
             }
             if (mouse_moved) {
+                /* Check for desktop icon click (button press on background) */
+                if ((final_buttons & 1) && !(comp.prev_buttons & 1)) {
+                    int test_x = comp.cursor_x + total_dx;
+                    int test_y = comp.cursor_y + total_dy;
+                    if (test_x < 0) test_x = 0;
+                    if (test_y < 0) test_y = 0;
+                    if (!comp_window_at(&comp, test_x, test_y)) {
+                        int icon_id = desktop_hit_icon(test_x, test_y);
+                        if (icon_id == 1)
+                            spawn_terminal(&comp, fb_w, fb_h);
+                    }
+                }
                 comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                 activity = 1;
             }
         }
 
-        /* Poll PTY master -- BATCH: drain all available bytes */
-        if (master_fd >= 0) {
+        /* Poll PTY masters for ALL open terminal windows */
+        for (int wi = 0; wi < comp.nwindows; wi++) {
+            glyph_window_t *win = comp.windows[wi];
+            if (win->tag <= 0)
+                continue;
+            int mfd = win->tag;
             int pty_activity = 0;
             while (1) {
-                n = read(master_fd, pty_buf, sizeof(pty_buf));
+                n = read(mfd, pty_buf, sizeof(pty_buf));
                 if (n <= 0)
                     break;
-                terminal_write(term_win, pty_buf, (int)n);
+                terminal_write(win, pty_buf, (int)n);
                 pty_activity = 1;
             }
             if (pty_activity)

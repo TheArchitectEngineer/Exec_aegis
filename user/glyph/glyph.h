@@ -124,6 +124,7 @@ struct glyph_window {
     void (*on_close)(glyph_window_t *self);
     void (*on_render)(glyph_window_t *self);  /* custom client area render (after chrome) */
     void *priv;
+    int tag;  /* generic integer tag — lumen uses for PTY master fd */
 };
 
 glyph_window_t *glyph_window_create(const char *title, int client_w, int client_h);

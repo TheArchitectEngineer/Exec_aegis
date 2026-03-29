@@ -199,6 +199,10 @@ comp_composite(compositor_t *c)
         /* Desktop background — solid fill (gradient too slow at native res) */
         draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
 
+        /* Desktop icons/decorations */
+        if (c->on_draw_desktop)
+            c->on_draw_desktop(&c->back, c->back.w, c->back.h);
+
         /* Render and blit all windows */
         for (int i = 0; i < c->nwindows; i++) {
             glyph_window_t *win = c->windows[i];
@@ -243,6 +247,10 @@ comp_composite(compositor_t *c)
             for (int x = x0; x < x1; x++)
                 c->back.buf[y * c->back.pitch + x] = C_BG1;
     }
+
+    /* Desktop icons/decorations (redraw into dirty region) */
+    if (c->on_draw_desktop)
+        c->on_draw_desktop(&c->back, c->back.w, c->back.h);
 
     /* Render dirty windows and blit to backbuffer */
     for (int i = 0; i < c->nwindows; i++) {

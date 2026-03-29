@@ -187,8 +187,7 @@ sys_fb_map(uint64_t arg1)
     if (!fb_get_phys_info(&fb_phys, &width, &height, &pitch))
         return (uint64_t)-19;  /* ENODEV — no framebuffer */
 
-    /* TODO: re-enable once lumen rendering is confirmed on bare metal */
-    /* fb_lock_compositor(); */
+    fb_lock_compositor();
 
     uint32_t fb_bytes = pitch * height;
     uint32_t fb_pages = (fb_bytes + 0xFFF) / 0x1000;

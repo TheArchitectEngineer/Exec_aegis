@@ -28,6 +28,9 @@ typedef struct {
 
     /* Background rendered flag -- skip gradient after first frame */
     int bg_rendered;
+
+    /* Desktop background callback — called after bg fill, before windows */
+    void (*on_draw_desktop)(surface_t *back, int w, int h);
 } compositor_t;
 
 void comp_init(compositor_t *c, uint32_t *fb, uint32_t *backbuf, int w, int h, int pitch);

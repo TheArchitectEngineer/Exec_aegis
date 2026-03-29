@@ -1401,3 +1401,429 @@ sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
     if (r < 0) return (uint64_t)-(int64_t)12; /* ENOMEM/table full */
     return 0;
 }
+
+/*
+ * sys_spawn — syscall 514
+ *
+ * Create a new process from an ELF binary WITHOUT fork.
+ * No page copy — fresh PML4 with ELF loaded directly.
+ * Solves the lumen terminal problem: fork from a large process (3000+ pages)
+ * takes 30+ seconds on bare metal due to eager page copy + vmm_window_lock
+ * contention. sys_spawn creates the child instantly with a fresh address space.
+ *
+ * arg1 = user pointer to null-terminated path
+ * arg2 = user pointer to argv[] (NULL-terminated)
+ * arg3 = user pointer to envp[] (ignored; empty environment used)
+ * arg4 = stdio_fd: if >= 0, child's fd 0/1/2 are copies of parent's fd[arg4]
+ *         if (uint64_t)-1, child gets no open fds
+ *
+ * The child starts in a new session (sid = pid, pgid = pid).
+ * Capabilities: baseline + parent's exec_caps applied and consumed.
+ *
+ * Returns child PID on success, negative errno on failure.
+ */
+uint64_t
+sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
+          uint64_t envp_uptr, uint64_t stdio_fd_arg)
+{
+    (void)envp_uptr;
+
+    aegis_process_t *parent = (aegis_process_t *)sched_current();
+    if (!sched_current()->is_user)
+        return (uint64_t)-(int64_t)1;  /* EPERM */
+
+    if (s_fork_count >= MAX_PROCESSES)
+        return (uint64_t)-(int64_t)11;  /* EAGAIN */
+
+    /* Allocate argv working area from kva — too large for kernel stack. */
+    execve_argbuf_t *abuf = kva_alloc_pages(EXECVE_ARGBUF_PAGES);
+    if (!abuf)
+        return (uint64_t)-(int64_t)12;
+
+    uint64_t result = 0;
+    void    *ext2_buf   = (void *)0;
+    uint64_t ext2_pages = 0;
+
+    /* 1. Copy path from user (<=255 bytes) */
+    char path[256];
+    if (!user_ptr_valid(path_uptr, 1)) { result = (uint64_t)-(int64_t)14; goto fail_early; }
+    {
+        uint64_t i;
+        for (i = 0; i < sizeof(path) - 1; i++) {
+            if (!user_ptr_valid(path_uptr + i, 1))
+                { result = (uint64_t)-(int64_t)14; goto fail_early; }
+            char c;
+            copy_from_user(&c, (const void *)(uintptr_t)(path_uptr + i), 1);
+            path[i] = c;
+            if (c == '\0') break;
+        }
+        path[sizeof(path) - 1] = '\0';
+    }
+
+    /* 2. Copy argv from user (<=64 entries, each <=255 bytes) */
+    int argc = 0;
+    {
+        uint64_t ptr_addr = argv_uptr;
+        while (argc < 64) {
+            if (!user_ptr_valid(ptr_addr, 8))
+                { result = (uint64_t)-(int64_t)14; goto fail_early; }
+            uint64_t str_ptr;
+            copy_from_user(&str_ptr, (const void *)(uintptr_t)ptr_addr, 8);
+            if (!str_ptr) break;
+            {
+                uint64_t i;
+                for (i = 0; i < 255; i++) {
+                    if (!user_ptr_valid(str_ptr + i, 1))
+                        { result = (uint64_t)-(int64_t)14; goto fail_early; }
+                    char c;
+                    copy_from_user(&c, (const void *)(uintptr_t)(str_ptr + i), 1);
+                    abuf->argv_bufs[argc][i] = c;
+                    if (c == '\0') break;
+                }
+            }
+            abuf->argv_bufs[argc][255] = '\0';
+            abuf->argv_ptrs[argc] = abuf->argv_bufs[argc];
+            argc++;
+            ptr_addr += 8;
+        }
+        abuf->argv_ptrs[argc] = (char *)0;
+    }
+
+    /* 3. Look up binary: initrd first, then VFS (ext2). */
+    const uint8_t *elf_data;
+    uint64_t       elf_size;
+    {
+        vfs_file_t f;
+        if (initrd_open(path, &f) == 0) {
+            elf_data = (const uint8_t *)initrd_get_data(&f);
+            elf_size = (uint64_t)initrd_get_size(&f);
+        } else {
+            vfs_file_t vf;
+            int vr = vfs_open(path, 0, &vf);
+            if (vr != 0) { result = (uint64_t)-(int64_t)2; goto fail_early; }
+            if (vf.size == 0) { result = (uint64_t)-(int64_t)8; goto fail_early; }
+            ext2_pages = (vf.size + 4095ULL) / 4096ULL;
+            ext2_buf = kva_alloc_pages(ext2_pages);
+            if (!ext2_buf) { result = (uint64_t)-(int64_t)12; goto fail_early; }
+            int rr = vf.ops->read(vf.priv, ext2_buf, 0, vf.size);
+            if (rr < 0) { result = (uint64_t)-(int64_t)5; goto fail_early; }
+            elf_data = (const uint8_t *)ext2_buf;
+            elf_size = vf.size;
+        }
+    }
+
+    /* 4. Allocate child PCB */
+    aegis_process_t *child = kva_alloc_pages(1);
+    if (!child) { result = (uint64_t)-(int64_t)12; goto fail_early; }
+
+    /* 5. Create fresh PML4 for child */
+    child->pml4_phys = vmm_create_user_pml4();
+    if (!child->pml4_phys) { kva_free_pages(child, 1); result = (uint64_t)-(int64_t)12; goto fail_early; }
+
+    /* 6. Load ELF into child's PML4 */
+    elf_load_result_t er;
+    elf_load_result_t interp_er;
+    int has_interp = 0;
+    __builtin_memset(&interp_er, 0, sizeof(interp_er));
+
+    if (elf_load(child->pml4_phys, elf_data, (size_t)elf_size, 0, &er) != 0) {
+        vmm_free_user_pml4(child->pml4_phys);
+        kva_free_pages(child, 1);
+        result = (uint64_t)-(int64_t)8;  /* ENOEXEC */
+        goto fail_early;
+    }
+
+    /* Free ext2 buffer now that ELF is loaded. */
+    if (ext2_buf) {
+        kva_free_pages(ext2_buf, ext2_pages);
+        ext2_buf   = (void *)0;
+        ext2_pages = 0;
+    }
+
+    /* 6a. If PT_INTERP present, load interpreter at INTERP_BASE. */
+    has_interp = (er.interp[0] != '\0');
+    if (has_interp) {
+        const uint8_t *interp_data;
+        uint64_t interp_size;
+        void    *interp_buf   = (void *)0;
+        uint64_t interp_pages = 0;
+
+        vfs_file_t interp_f;
+        if (initrd_open(er.interp, &interp_f) == 0) {
+            interp_data = (const uint8_t *)initrd_get_data(&interp_f);
+            interp_size = (uint64_t)initrd_get_size(&interp_f);
+        } else {
+            vfs_file_t vf;
+            int vr = vfs_open(er.interp, 0, &vf);
+            if (vr != 0) goto fail_child;
+            interp_pages = (vf.size + 4095ULL) / 4096ULL;
+            interp_buf = kva_alloc_pages(interp_pages);
+            if (!interp_buf) goto fail_child;
+            int rr = vf.ops->read(vf.priv, interp_buf, 0, vf.size);
+            if (rr < 0) {
+                kva_free_pages(interp_buf, interp_pages);
+                goto fail_child;
+            }
+            interp_data = (const uint8_t *)interp_buf;
+            interp_size = vf.size;
+        }
+
+        if (elf_load(child->pml4_phys, interp_data, (size_t)interp_size,
+                     INTERP_BASE, &interp_er) != 0) {
+            if (interp_buf) kva_free_pages(interp_buf, interp_pages);
+            goto fail_child;
+        }
+        if (interp_buf) kva_free_pages(interp_buf, interp_pages);
+    }
+
+    /* 7. Allocate + map user stack pages */
+    {
+        uint64_t pn;
+        for (pn = 0; pn < USER_STACK_NPAGES; pn++) {
+            uint64_t phys = pmm_alloc_page();
+            if (!phys) goto fail_child;
+            vmm_zero_page(phys);
+            vmm_map_user_page(child->pml4_phys,
+                              USER_STACK_BASE_EXEC + pn * 4096ULL, phys,
+                              VMM_FLAG_PRESENT | VMM_FLAG_USER | VMM_FLAG_WRITABLE);
+        }
+    }
+
+    /* 8. Build ABI initial stack (same layout as execve) */
+    uint64_t sp_va = USER_STACK_TOP_EXEC;
+
+    /* 8a. Write argv strings */
+    {
+        int i;
+        for (i = argc - 1; i >= 0; i--) {
+            uint64_t slen = 0;
+            while (abuf->argv_ptrs[i][slen]) slen++;
+            slen++;
+            sp_va -= slen;
+            vmm_write_user_bytes(child->pml4_phys, sp_va,
+                                 abuf->argv_ptrs[i], slen);
+            abuf->str_ptrs[i] = sp_va;
+        }
+    }
+
+    /* AT_RANDOM: 16 random bytes */
+    sp_va -= 16;
+    {
+        uint8_t rnd[16];
+        random_get_bytes(rnd, 16);
+        vmm_write_user_bytes(child->pml4_phys, sp_va, rnd, 16);
+    }
+    uint64_t at_random_va = sp_va;
+
+    sp_va &= ~7ULL;
+
+    /* Pointer table: argc + argv + NULL + envp NULL + auxv */
+    {
+        uint64_t auxv_qwords = has_interp ? 16 : 12;
+        uint64_t table_qwords = (uint64_t)argc + 3 + auxv_qwords;
+        uint64_t table_bytes  = table_qwords * 8ULL;
+
+        sp_va -= table_bytes;
+        if ((sp_va % 16) != 8) sp_va -= 8;
+
+        uint64_t wp = sp_va;
+        vmm_write_user_u64(child->pml4_phys, wp, (uint64_t)argc); wp += 8;
+
+        {
+            int i;
+            for (i = 0; i < argc; i++) {
+                vmm_write_user_u64(child->pml4_phys, wp, abuf->str_ptrs[i]);
+                wp += 8;
+            }
+        }
+        vmm_write_user_u64(child->pml4_phys, wp, 0ULL); wp += 8; /* argv NULL */
+        vmm_write_user_u64(child->pml4_phys, wp, 0ULL); wp += 8; /* envp NULL */
+
+        /* auxv: AT_PHDR(3), AT_PHNUM(5), AT_PAGESZ(6), AT_ENTRY(9), AT_RANDOM(25) */
+        vmm_write_user_u64(child->pml4_phys, wp, 3ULL);  wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, er.phdr_va); wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, 5ULL);  wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, (uint64_t)er.phdr_count); wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, 6ULL);  wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, 4096ULL); wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, 9ULL);  wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, er.entry); wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, 25ULL); wp += 8;
+        vmm_write_user_u64(child->pml4_phys, wp, at_random_va); wp += 8;
+
+        if (has_interp) {
+            vmm_write_user_u64(child->pml4_phys, wp, 7ULL); wp += 8;  /* AT_BASE */
+            vmm_write_user_u64(child->pml4_phys, wp, INTERP_BASE); wp += 8;
+            vmm_write_user_u64(child->pml4_phys, wp, 4ULL); wp += 8;  /* AT_PHENT */
+            vmm_write_user_u64(child->pml4_phys, wp, 56ULL); wp += 8;
+        }
+
+        vmm_write_user_u64(child->pml4_phys, wp, 0ULL); wp += 8;  /* AT_NULL */
+        vmm_write_user_u64(child->pml4_phys, wp, 0ULL); wp += 8;
+    }
+
+    /* 9. Allocate kernel stack for child (4 pages / 16KB) */
+    uint8_t *kstack = kva_alloc_pages(4);
+    if (!kstack) goto fail_child;
+
+    /* 10. Build initial kernel stack frame for proc_enter_user (iretq to ring-3).
+     *     Same layout as proc_spawn — child starts fresh from ELF entry. */
+    {
+        uint64_t entry_rip = has_interp ? interp_er.entry : er.entry;
+        uint64_t *ksp = (uint64_t *)(kstack + 4 * 4096);
+
+        extern void proc_enter_user(void);
+
+#ifdef __aarch64__
+        *--ksp = child->pml4_phys;
+        *--ksp = sp_va;
+        *--ksp = entry_rip;
+        *--ksp = 0;  /* SPSR: EL0, interrupts enabled */
+        /* ctx_switch callee-save frame (12 slots) */
+        *--ksp = 0; *--ksp = 0; *--ksp = 0; *--ksp = 0;
+        *--ksp = 0; *--ksp = 0; *--ksp = 0; *--ksp = 0;
+        *--ksp = 0; *--ksp = 0;
+        *--ksp = (uint64_t)(uintptr_t)proc_enter_user;
+        *--ksp = 0;
+#else
+        *--ksp = (uint64_t)ARCH_USER_DS;   /* SS */
+        *--ksp = sp_va;                    /* RSP */
+        *--ksp = 0x202ULL;                 /* RFLAGS — IF=1, reserved bit 1 */
+        *--ksp = (uint64_t)ARCH_USER_CS;   /* CS */
+        *--ksp = entry_rip;                /* RIP */
+        *--ksp = child->pml4_phys;         /* PML4 phys — popped by proc_enter_user */
+        *--ksp = (uint64_t)(uintptr_t)proc_enter_user; /* ret → CR3 switch + iretq */
+        *--ksp = 0;  /* rbx */
+        *--ksp = 0;  /* rbp */
+        *--ksp = 0;  /* r12 */
+        *--ksp = 0;  /* r13 */
+        *--ksp = 0;  /* r14 */
+        *--ksp = 0;  /* r15 ← child->task.sp */
+#endif
+
+        child->task.sp               = (uint64_t)(uintptr_t)ksp;
+        child->task.stack_base       = kstack;
+        child->task.kernel_stack_top = (uint64_t)(uintptr_t)(kstack + 4 * 4096);
+    }
+
+    /* 11. Initialize child PCB fields */
+    child->task.is_user     = 1;
+    child->task.state       = TASK_RUNNING;
+    child->task.waiting_for = 0;
+    child->task.tid         = 0;  /* set below */
+    child->task.stack_pages = 4;
+    child->task.fs_base     = 0;
+    child->task.clear_child_tid = 0;
+    child->task.sleep_deadline  = 0;
+
+    child->pid             = proc_alloc_pid();
+    child->tgid            = child->pid;
+    child->thread_count    = 1;
+    child->ppid            = parent->pid;
+    child->uid             = parent->uid;
+    child->gid             = parent->gid;
+    child->pgid            = child->pid;   /* new process group */
+    child->sid             = child->pid;   /* new session leader */
+    child->umask           = parent->umask;
+    child->stop_signum     = 0;
+    child->exit_status     = 0;
+    child->task.tid        = child->pid;
+
+    child->brk             = er.brk;
+    child->mmap_base       = 0x0000700000000000ULL;
+    child->mmap_free_count = 0;
+
+    /* exe_path */
+    {
+        uint64_t pi;
+        for (pi = 0; pi < sizeof(child->exe_path) - 1 && path[pi]; pi++)
+            child->exe_path[pi] = path[pi];
+        child->exe_path[pi] = '\0';
+    }
+
+    /* cwd: inherit from parent */
+    __builtin_memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
+
+    /* VMA tracking */
+    vma_init((struct aegis_process *)child);
+    vma_insert((struct aegis_process *)child, USER_STACK_BASE_EXEC,
+               USER_STACK_NPAGES * 4096ULL, 0x01 | 0x02, VMA_STACK);
+
+    /* Signal state: default dispositions, no pending, no mask. */
+    child->pending_signals = 0;
+    child->signal_mask     = 0;
+    __builtin_memset(child->sigactions, 0, sizeof(child->sigactions));
+
+    /* 12. Capabilities: baseline + exec_caps applied and consumed. */
+    {
+        uint32_t ci;
+        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+            child->caps[ci].kind   = CAP_KIND_NULL;
+            child->caps[ci].rights = 0;
+        }
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,   CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,  CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_FB,         CAP_RIGHTS_READ);
+
+        /* Apply parent's pre-registered exec_caps, then consume them. */
+        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+            if (parent->exec_caps[ci].kind != CAP_KIND_NULL) {
+                cap_grant(child->caps, CAP_TABLE_SIZE,
+                          parent->exec_caps[ci].kind,
+                          parent->exec_caps[ci].rights);
+                parent->exec_caps[ci].kind   = CAP_KIND_NULL;
+                parent->exec_caps[ci].rights = 0;
+            }
+        }
+
+        /* Zero child's exec_caps. */
+        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+            child->exec_caps[ci].kind   = CAP_KIND_NULL;
+            child->exec_caps[ci].rights = 0;
+        }
+    }
+
+    /* 13. File descriptor table. */
+    child->fd_table = fd_table_alloc();
+    if (!child->fd_table) {
+        kva_free_pages(kstack, 4);
+        goto fail_child;
+    }
+
+    {
+        int64_t sfd = (int64_t)stdio_fd_arg;
+        if (sfd >= 0 && sfd < PROC_MAX_FDS &&
+            parent->fd_table->fds[sfd].ops) {
+            /* Copy the parent's fd to child's fd 0, 1, 2 */
+            int fd_i;
+            for (fd_i = 0; fd_i < 3; fd_i++) {
+                child->fd_table->fds[fd_i] = parent->fd_table->fds[sfd];
+                if (child->fd_table->fds[fd_i].ops->dup)
+                    child->fd_table->fds[fd_i].ops->dup(
+                        child->fd_table->fds[fd_i].priv);
+            }
+        }
+    }
+
+    /* 14. Add child to scheduler */
+    sched_add(&child->task);
+    s_fork_count++;
+
+    /* Success — free argv buffer and return child PID */
+    kva_free_pages(abuf, EXECVE_ARGBUF_PAGES);
+    return (uint64_t)child->pid;
+
+fail_child:
+    vmm_free_user_pml4(child->pml4_phys);
+    kva_free_pages(child, 1);
+    if (!result) result = (uint64_t)-(int64_t)12;  /* ENOMEM */
+
+fail_early:
+    if (ext2_buf) kva_free_pages(ext2_buf, ext2_pages);
+    kva_free_pages(abuf, EXECVE_ARGBUF_PAGES);
+    return result;
+}
