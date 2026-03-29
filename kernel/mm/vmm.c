@@ -889,6 +889,7 @@ vmm_free_user_pages(uint64_t pml4_phys)
 {
     irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
     uint64_t pml4i, pdpti, pdi, pti;
+    uint32_t batch = 0;
     for (pml4i = 0; pml4i < 256; pml4i++) {
         uint64_t *pml4 = vmm_window_map(pml4_phys);
         uint64_t pml4e = pml4[pml4i];
@@ -925,6 +926,14 @@ vmm_free_user_pages(uint64_t pml4_phys)
                     }
                 }
                 vmm_window_unmap();
+
+                /* Yield to interrupts periodically so other tasks
+                 * can run during large page teardowns (execve). */
+                if (++batch >= 32) {
+                    batch = 0;
+                    spin_unlock_irqrestore(&vmm_window_lock, fl);
+                    fl = spin_lock_irqsave(&vmm_window_lock);
+                }
             }
         }
     }

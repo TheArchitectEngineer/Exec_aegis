@@ -139,11 +139,13 @@ main(void)
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
 
-    /* Create terminal window (includes fork).
-     * Fork copies ~3000 pages (backbuffer + FB skip) which takes
-     * several seconds on bare metal.  After fork returns, the child
-     * runs execve in the background while the parent continues
-     * with pure memory operations (no vmm contention). */
+    /* Create ALL windows BEFORE terminal_create (which forks).
+     * After fork, the child's execve holds vmm_window_lock for seconds
+     * while freeing forked pages + loading new ELF. Any parent
+     * allocation (calloc->mmap) blocks on that lock. By creating all
+     * windows before fork, the parent's post-fork path is pure memory. */
+    glyph_window_t *info_win = create_info_window(fb_w, fb_h);
+
     int term_pw = fb_w * 3 / 5;
     int term_ph = fb_h * 3 / 5;
     int term_cols = term_pw / FONT_W;
@@ -151,7 +153,7 @@ main(void)
     int master_fd = -1;
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
 
-    /* Everything below is pure userspace memory ops — no syscalls that
+    /* Post-fork: pure userspace memory writes only. No syscalls that
      * contend with the child's execve on vmm_window_lock. */
     if (term_win) {
         term_win->x = (fb_w - term_win->surf_w) / 2;
@@ -159,7 +161,6 @@ main(void)
         comp_add_window(&comp, term_win);
     }
 
-    glyph_window_t *info_win = create_info_window(fb_w, fb_h);
     if (info_win)
         comp_add_window(&comp, info_win);
 
