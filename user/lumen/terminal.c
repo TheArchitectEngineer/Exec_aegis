@@ -11,7 +11,7 @@
 #include <sys/ioctl.h>
 
 typedef struct {
-    int master_fd;
+    int master_fd;  /* -1 if PTY failed */
     int cols, rows;
     int cx, cy;
     char *grid;
@@ -47,15 +47,40 @@ static void term_render_content(glyph_window_t *win)
         }
     }
 
-    /* Cursor block */
-    draw_fill_rect(s, ox + tp->cx * FONT_W, oy + tp->cy * FONT_H,
-                   FONT_W, FONT_H, C_TERM_FG);
+    /* Cursor block (only if PTY is active) */
+    if (tp->master_fd >= 0)
+        draw_fill_rect(s, ox + tp->cx * FONT_W, oy + tp->cy * FONT_H,
+                       FONT_W, FONT_H, C_TERM_FG);
 }
 
 static void term_on_key(glyph_window_t *self, char key)
 {
     term_priv_t *tp = self->priv;
-    write(tp->master_fd, &key, 1);
+    if (tp->master_fd >= 0)
+        write(tp->master_fd, &key, 1);
+}
+
+/* Write a message into the terminal grid (no PTY needed) */
+static void term_grid_puts(term_priv_t *tp, const char *msg)
+{
+    while (*msg) {
+        unsigned char ch = (unsigned char)*msg++;
+        if (ch == '\n') {
+            tp->cy++;
+            tp->cx = 0;
+            if (tp->cy >= tp->rows)
+                term_scroll(tp);
+        } else if (ch >= 32 && ch <= 126) {
+            tp->grid[tp->cy * tp->cols + tp->cx] = (char)ch;
+            tp->cx++;
+            if (tp->cx >= tp->cols) {
+                tp->cx = 0;
+                tp->cy++;
+                if (tp->cy >= tp->rows)
+                    term_scroll(tp);
+            }
+        }
+    }
 }
 
 void terminal_write(glyph_window_t *win, const char *data, int len)
@@ -95,29 +120,56 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
         /* other bytes (ANSI escapes, etc.) silently dropped */
     }
 
-    /* Mark dirty — content will be re-rendered via on_render callback
-     * when glyph_window_render is called during composite. */
     glyph_window_mark_all_dirty(win);
 }
 
 glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
 {
-    int master_fd, pts_num, slave_fd;
+    int master_fd = -1, pts_num = -1, slave_fd;
     char slave_path[32];
     pid_t pid;
+    const char *fail_reason = NULL;
 
-    /* Open PTY master */
-    master_fd = open("/dev/ptmx", O_RDWR);
-    if (master_fd < 0)
+    /* Create glyph window first — always succeeds or returns NULL */
+    int client_w = cols * FONT_W;
+    int client_h = rows * FONT_H;
+    glyph_window_t *win = glyph_window_create("Terminal", client_w, client_h);
+    if (!win)
         return NULL;
+    win->on_key = term_on_key;
+    win->on_render = term_render_content;
 
-    /* Get slave number */
-    if (ioctl(master_fd, 0x80045430 /* TIOCGPTN */, &pts_num) < 0) {
-        close(master_fd);
+    /* Allocate terminal private data */
+    term_priv_t *tp = calloc(1, sizeof(*tp));
+    if (!tp) {
+        glyph_window_destroy(win);
         return NULL;
     }
+    tp->master_fd = -1;
+    tp->cols = cols;
+    tp->rows = rows;
+    tp->grid = calloc((unsigned)(cols * rows), 1);
+    if (!tp->grid) {
+        free(tp);
+        glyph_window_destroy(win);
+        return NULL;
+    }
+    memset(tp->grid, ' ', (unsigned)(cols * rows));
+    win->priv = tp;
 
-    /* Unlock slave so child can open /dev/pts/N */
+    /* Try to set up PTY — any failure is non-fatal */
+    master_fd = open("/dev/ptmx", O_RDWR);
+    if (master_fd < 0) {
+        fail_reason = "open /dev/ptmx failed";
+        goto pty_failed;
+    }
+
+    if (ioctl(master_fd, 0x80045430 /* TIOCGPTN */, &pts_num) < 0) {
+        fail_reason = "TIOCGPTN failed";
+        goto pty_failed;
+    }
+
+    /* Unlock slave */
     {
         int unlock = 0;
         ioctl(master_fd, 0x40045431 /* TIOCSPTLCK */, &unlock);
@@ -144,51 +196,14 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         slave_path[j] = '\0';
     }
 
-    /* Create glyph window */
-    int client_w = cols * FONT_W;
-    int client_h = rows * FONT_H;
-    glyph_window_t *win = glyph_window_create("Terminal", client_w, client_h);
-    if (!win) {
-        close(master_fd);
-        return NULL;
-    }
-    win->on_key = term_on_key;
-    win->on_render = term_render_content;
-
-    /* Allocate terminal private data */
-    term_priv_t *tp = calloc(1, sizeof(*tp));
-    if (!tp) {
-        glyph_window_destroy(win);
-        close(master_fd);
-        return NULL;
-    }
-    tp->master_fd = master_fd;
-    tp->cols = cols;
-    tp->rows = rows;
-    tp->cx = 0;
-    tp->cy = 0;
-    tp->grid = calloc((unsigned)(cols * rows), 1);
-    if (!tp->grid) {
-        free(tp);
-        glyph_window_destroy(win);
-        close(master_fd);
-        return NULL;
-    }
-    memset(tp->grid, ' ', (unsigned)(cols * rows));
-    win->priv = tp;
-
-    /* Set master non-blocking */
+    /* Set master non-blocking before fork */
     fcntl(master_fd, F_SETFL, O_NONBLOCK);
 
     /* Fork child shell */
     pid = fork();
-
     if (pid < 0) {
-        free(tp->grid);
-        free(tp);
-        glyph_window_destroy(win);
-        close(master_fd);
-        return NULL;
+        fail_reason = "fork failed";
+        goto pty_failed;
     }
 
     if (pid == 0) {
@@ -215,11 +230,26 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         _exit(1);
     }
 
-    /* parent */
+    /* parent — PTY succeeded */
+    tp->master_fd = master_fd;
     *master_fd_out = master_fd;
-
-    /* Do initial render */
     term_render_content(win);
+    return win;
 
+pty_failed:
+    /* PTY setup failed — show error in terminal window, still return
+     * a valid window so lumen renders normally. */
+    if (master_fd >= 0)
+        close(master_fd);
+    tp->master_fd = -1;
+    *master_fd_out = -1;
+
+    term_grid_puts(tp, "Terminal: PTY unavailable\n");
+    if (fail_reason)
+        term_grid_puts(tp, fail_reason);
+    term_grid_puts(tp, "\n\nLumen is running without a shell.\n");
+    term_grid_puts(tp, "Reboot into text mode for a shell.");
+
+    term_render_content(win);
     return win;
 }
