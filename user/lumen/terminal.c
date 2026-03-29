@@ -210,16 +210,6 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     /* parent */
     *master_fd_out = master_fd;
 
-    /* Write test string to grid to verify rendering works */
-    {
-        const char *test = "Terminal ready. Waiting for shell...";
-        int i = 0;
-        while (test[i] && i < tp->cols) {
-            tp->grid[i] = test[i];
-            i++;
-        }
-    }
-
     /* Do initial render */
     term_render_content(win);
 
