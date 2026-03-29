@@ -195,13 +195,8 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
         close(master_fd);
         setsid();
         slave_fd = open(slave_path, O_RDWR);
-        if (slave_fd < 0) {
-            /* Can't use fprintf — stderr is about to be redirected.
-             * Write diagnostic directly to fd 2 (still console at this point). */
-            const char *msg = "[LUMEN] child: open slave failed\n";
-            write(2, msg, 33);
+        if (slave_fd < 0)
             _exit(1);
-        }
         dup2(slave_fd, 0);
         dup2(slave_fd, 1);
         dup2(slave_fd, 2);
@@ -216,17 +211,10 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
             NULL
         };
         execve("/bin/oksh", argv, envp);
-        /* execve failed — write to slave (now stderr) */
-        {
-            const char *msg = "execve failed\n";
-            write(2, msg, 14);
-        }
         _exit(1);
     }
 
     /* parent */
-    fprintf(stderr, "[LUMEN] PTY: master_fd=%d slave=%s pid=%d\n",
-            master_fd, slave_path, (int)pid);
     *master_fd_out = master_fd;
 
     /* Do initial render */
