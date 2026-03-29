@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Debug: write colored strip to FB (defined in main.c) */
-extern void dbg_fb_strip(uint32_t color, int strip);
 
 /* ---- Helpers ---- */
 
@@ -198,12 +196,8 @@ comp_composite(compositor_t *c)
 
     /* Full redraw path (first frame, window raise, etc.) */
     if (c->full_redraw) {
-        dbg_fb_strip(0x00FF0000, 14); /* red = entered full_redraw */
-
         /* Desktop background — solid fill (gradient too slow at native res) */
         draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
-
-        dbg_fb_strip(0x0000FF00, 15); /* green = background done */
 
         /* Render and blit all windows */
         for (int i = 0; i < c->nwindows; i++) {
@@ -211,17 +205,12 @@ comp_composite(compositor_t *c)
             if (!win->visible)
                 continue;
             glyph_window_mark_all_dirty(win);
-            dbg_fb_strip(0x00FFAA00, 16 + i); /* amber = rendering win i */
             glyph_window_render(win);
             blit_window_to_back(&c->back, win);
         }
 
-        dbg_fb_strip(0x00FF00FF, 19); /* pink = all windows done */
-
         /* Taskbar */
         taskbar_draw(&c->back, c->back.w, c->back.h);
-
-        dbg_fb_strip(0x0000FFFF, 20); /* cyan = taskbar done */
 
         /* Full flip */
         memcpy(c->fb.buf, c->back.buf,

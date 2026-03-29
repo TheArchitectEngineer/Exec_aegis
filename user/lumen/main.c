@@ -27,19 +27,6 @@ typedef struct __attribute__((packed)) {
 
 #define INFO_BG 0x00F0F4F8
 
-static fb_info_t s_dbg_fb_info;
-
-void dbg_fb_strip(uint32_t color, int strip)
-{
-    if (s_dbg_fb_info.addr == 0) return;
-    uint32_t *fb = (uint32_t *)(uintptr_t)s_dbg_fb_info.addr;
-    int p = (int)(s_dbg_fb_info.pitch / (s_dbg_fb_info.bpp / 8));
-    int y0 = strip * 20;
-    for (int y = y0; y < y0 + 20 && y < (int)s_dbg_fb_info.height; y++)
-        for (int x = 0; x < (int)s_dbg_fb_info.width; x++)
-            fb[y * p + x] = color;
-}
-
 static struct termios s_orig_termios;
 
 static void
@@ -115,31 +102,8 @@ main(void)
 
     /* Map framebuffer via sys_fb_map (513) */
     long ret = syscall(513, &fb_info);
-    if (ret < 0) {
-        write(2, "lumen: fb_map failed\n", 20);
+    if (ret < 0)
         return 1;
-    }
-    /* Debug: color checkpoints — fill top strip with color at each stage.
-     * Strip 0 (y=0..19)  = blue    = FB mapped
-     * Strip 1 (y=20..39) = green   = backbuffer allocated
-     * Strip 2 (y=40..59) = yellow  = compositor init done
-     * Strip 3 (y=60..79) = cyan    = terminal created
-     * Strip 4 (y=80..99) = magenta = first composite done
-     * If screen is blue only, it stalled after FB map. */
-    #define DBG_STRIP_H 20
-    #define dbg_strip(color, strip) do { \
-        uint32_t *_fb = (uint32_t *)(uintptr_t)fb_info.addr; \
-        int _p = (int)(fb_info.pitch / (fb_info.bpp / 8)); \
-        int _y0 = (strip) * DBG_STRIP_H; \
-        for (int _y = _y0; _y < _y0 + DBG_STRIP_H && _y < (int)fb_info.height; _y++) \
-            for (int _x = 0; _x < (int)fb_info.width; _x++) \
-                _fb[_y * _p + _x] = (color); \
-    } while(0)
-
-    dbg_strip(0x00336699, 0); /* blue = FB mapped */
-
-    /* Expose for terminal.c debug use */
-    s_dbg_fb_info = fb_info;
 
     uint32_t *fb = (uint32_t *)(uintptr_t)fb_info.addr;
     int fb_w = (int)fb_info.width;
@@ -148,11 +112,8 @@ main(void)
 
     /* Allocate backbuffer */
     uint32_t *backbuf = malloc((size_t)pitch_px * fb_h * 4);
-    if (!backbuf) {
-        write(2, "lumen: malloc failed\n", 21);
+    if (!backbuf)
         return 1;
-    }
-    dbg_strip(0x0033CC33, 1); /* green = backbuffer allocated */
 
     /* Set stdin to raw mode: no echo, no canonical, no signals */
     tcgetattr(0, &s_orig_termios);
@@ -174,10 +135,6 @@ main(void)
     compositor_t comp;
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
-    dbg_strip(0x00CCCC33, 2); /* yellow = compositor init done */
-
-    /* No fprintf to stderr — it goes through console/printk which
-     * writes to the framebuffer, interfering with compositor output. */
 
     /* Create terminal window: 3/5 of screen, centered */
     int term_pw = fb_w * 3 / 5;
@@ -185,9 +142,7 @@ main(void)
     int term_cols = term_pw / FONT_W;
     int term_rows = (term_ph - GLYPH_TITLEBAR_HEIGHT) / FONT_H;
     int master_fd = -1;
-    dbg_strip(0x0033CCCC, 3); /* cyan = about to create terminal */
     glyph_window_t *term_win = terminal_create(term_cols, term_rows, &master_fd);
-    dbg_strip(0x00CC33CC, 4); /* magenta = terminal_create returned */
     if (term_win) {
         /* Center the terminal */
         term_win->x = (fb_w - term_win->surf_w) / 2;
@@ -209,28 +164,11 @@ main(void)
         term_win->focused_window = 1;
     }
 
-    dbg_strip(0x00888888, 12); /* gray = about to composite */
-
     /* Do initial full composite */
     comp.full_redraw = 1;
+    cursor_hide();
     comp_composite(&comp);
-
-    dbg_strip(0x0000FFFF, 13); /* cyan = composite returned */
-
-    /* Debug: verify backbuffer has content — check pixel at (100,100) */
-    {
-        uint32_t px = backbuf[100 * pitch_px + 100];
-        if (px == 0)
-            dbg_strip(0x00FF0000, 5); /* red = backbuffer is black (gradient failed) */
-        else
-            dbg_strip(0x0000FF00, 5); /* green = backbuffer has content */
-    }
-
-    /* Debug: force a direct copy of first 200 rows from backbuf to fb */
-    for (int y = 0; y < 200 && y < fb_h; y++)
-        memcpy(&fb[y * pitch_px], &backbuf[y * pitch_px],
-               (size_t)fb_w * sizeof(uint32_t));
-    dbg_strip(0x00FF6600, 11); /* orange = manual flip done */
+    cursor_show(comp.cursor_x, comp.cursor_y);
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
