@@ -120,8 +120,16 @@ sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen)
     aegis_process_t *proc = (aegis_process_t *)sched_current();
 
     for (;;) {
+        /* Set waiter_task BEFORE checking the queue to prevent lost wakeups.
+         * If sock_wake fires between our check and sched_block, it sets
+         * state=RUNNING, so sched_block becomes a no-op (task stays runnable).
+         * Without this, sock_wake could fire while waiter_task is NULL and
+         * the wakeup would be silently lost — accept() blocks forever. */
+        ls->waiter_task = (aegis_task_t *)sched_current();
+
         /* Check accept queue */
         if (ls->accept_head != ls->accept_tail) {
+            ls->waiter_task = (aegis_task_t *)0;
             uint32_t conn_id = ls->accept_queue[ls->accept_head];
             ls->accept_head = (ls->accept_head + 1) & 7;
 
@@ -158,9 +166,11 @@ sys_accept(uint64_t fd, uint64_t addr, uint64_t addrlen)
             return (uint64_t)new_fd;
         }
 
-        if (ls->nonblocking) return (uint64_t)-(int64_t)11;  /* EAGAIN */
+        if (ls->nonblocking) {
+            ls->waiter_task = (aegis_task_t *)0;
+            return (uint64_t)-(int64_t)11;  /* EAGAIN */
+        }
 
-        ls->waiter_task = (aegis_task_t *)sched_current();
         sched_block();
     }
 }
@@ -189,15 +199,20 @@ sys_connect(uint64_t fd, uint64_t addr, uint64_t addrlen)
         return 0;
     }
 
-    /* TCP: initiate SYN */
+    /* TCP: initiate SYN.  Set waiter_task BEFORE sending SYN so that
+     * if the ACK arrives in the same PIT tick, sock_wake finds us. */
+    s->waiter_task = (aegis_task_t *)sched_current();
+
     uint32_t conn_id;
     int r = tcp_connect(sid, sa.sin_addr, ntohs(sa.sin_port), &conn_id);
-    if (r < 0) return (uint64_t)(int64_t)r;
+    if (r < 0) {
+        s->waiter_task = (aegis_task_t *)0;
+        return (uint64_t)(int64_t)r;
+    }
     s->tcp_conn_id = conn_id;
     s->state       = SOCK_CONNECTING;
 
     /* Block until ESTABLISHED */
-    s->waiter_task = (aegis_task_t *)sched_current();
     sched_block();
     /* After wake: check if connected */
     if (s->state != SOCK_CONNECTED) return (uint64_t)-(int64_t)111;  /* ECONNREFUSED */
@@ -281,10 +296,13 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
     }
 
     if (s->type == SOCK_TYPE_STREAM) {
-        /* TCP recv */
+        /* TCP recv — set waiter_task before checking data to prevent
+         * lost wakeups (same pattern as accept fix). */
         for (;;) {
-            int n = tcp_conn_recv(s->tcp_conn_id, (void *)0, 0);  /* peek: available bytes */
+            s->waiter_task = (aegis_task_t *)sched_current();
+            int n = tcp_conn_recv(s->tcp_conn_id, (void *)0, 0);
             if (n > 0) {
+                s->waiter_task = (aegis_task_t *)0;
                 static uint8_t s_rcvbuf[8192];
                 uint32_t want = (uint32_t)len < (uint32_t)n ? (uint32_t)len : (uint32_t)n;
                 if (want > 8192) want = 8192;
@@ -294,6 +312,7 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
                     return (uint64_t)n;
                 }
             }
+            s->waiter_task = (aegis_task_t *)0;
             if (n == 0) return 0;  /* EOF / FIN */
             if (s->nonblocking) return (uint64_t)-(int64_t)11;  /* EAGAIN */
             if (has_timeout && (uint32_t)arch_get_ticks() >= deadline)
@@ -303,9 +322,12 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
         }
     }
 
-    /* UDP recv */
+    /* UDP recv — set waiter_task before checking data to prevent
+     * lost wakeups. */
     for (;;) {
+        s->waiter_task = (aegis_task_t *)sched_current();
         if (s->udp_rx_head != s->udp_rx_tail) {
+            s->waiter_task = (aegis_task_t *)0;
             udp_rx_slot_t *slot = &s->udp_rx[s->udp_rx_head];
             s->udp_rx_head = (s->udp_rx_head + 1) & (UDP_RX_SLOTS - 1);
             uint32_t copy_len = slot->len < (uint32_t)len ? slot->len : (uint32_t)len;
@@ -325,6 +347,7 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
             slot->in_use = 0;
             return (uint64_t)copy_len;
         }
+        s->waiter_task = (aegis_task_t *)0;
         if (s->nonblocking) return (uint64_t)-(int64_t)11;  /* EAGAIN */
         if (has_timeout && (uint32_t)arch_get_ticks() >= deadline)
             return (uint64_t)-(int64_t)110;  /* ETIMEDOUT */
