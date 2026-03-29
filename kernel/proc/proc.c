@@ -11,6 +11,8 @@
 #include "vma.h"
 #include "spinlock.h"
 #include "random.h"
+#include "initrd.h"
+#include "vfs.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -78,11 +80,61 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 
     /* Load ELF into the user address space */
     elf_load_result_t er;
+    elf_load_result_t interp_er;
+    int has_interp = 0;
+    __builtin_memset(&interp_er, 0, sizeof(interp_er));
+
     if (elf_load(proc->pml4_phys, elf_data, elf_len, 0, &er) != 0) {
         printk("[PROC] FAIL: ELF parse error\n");
         for (;;) {}
     }
-    uint64_t entry_rip = er.entry;
+
+    /* If the ELF has a PT_INTERP (dynamically linked), load the interpreter
+     * at INTERP_BASE. Without this, _start jumps through an unresolved PLT
+     * stub to address 0x0 — the root cause of the q35-without-NVMe crash. */
+    has_interp = (er.interp[0] != '\0');
+    if (has_interp) {
+        const uint8_t *interp_data;
+        uint64_t interp_size;
+        void    *interp_buf   = (void *)0;
+        uint64_t interp_pages = 0;
+
+        vfs_file_t interp_f;
+        if (initrd_open(er.interp, &interp_f) == 0) {
+            interp_data = (const uint8_t *)initrd_get_data(&interp_f);
+            interp_size = (uint64_t)initrd_get_size(&interp_f);
+        } else {
+            vfs_file_t vf;
+            int vr = vfs_open(er.interp, 0, &vf);
+            if (vr != 0) {
+                printk("[PROC] FAIL: interpreter not found: %s\n", er.interp);
+                for (;;) {}
+            }
+            interp_pages = (vf.size + 4095ULL) / 4096ULL;
+            interp_buf = kva_alloc_pages(interp_pages);
+            if (!interp_buf) {
+                printk("[PROC] FAIL: OOM loading interpreter\n");
+                for (;;) {}
+            }
+            int rr = vf.ops->read(vf.priv, interp_buf, 0, vf.size);
+            if (rr < 0) {
+                printk("[PROC] FAIL: error reading interpreter\n");
+                for (;;) {}
+            }
+            interp_data = (const uint8_t *)interp_buf;
+            interp_size = vf.size;
+        }
+
+        if (elf_load(proc->pml4_phys, interp_data, (size_t)interp_size,
+                     INTERP_BASE, &interp_er) != 0) {
+            printk("[PROC] FAIL: interpreter ELF parse error\n");
+            for (;;) {}
+        }
+        if (interp_buf)
+            kva_free_pages(interp_buf, interp_pages);
+    }
+
+    uint64_t entry_rip = has_interp ? interp_er.entry : er.entry;
     uint64_t brk_start = er.brk;
 
     /* Allocate and map user stack page.
@@ -109,39 +161,77 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         }
     }
 
-    /* Write "init" string near the top of the stack page.
-     * Prefix with '-' so shells (oksh/sh) treat this as a login shell
-     * and source /etc/profile on startup. */
+    /* Build SysV ABI initial stack.
+     * Layout (top → bottom): argv string, AT_RANDOM data, pointer table.
+     * Matches the layout used by sys_execve. */
+    uint64_t rsp_init;
     {
-        uint64_t str_va = USER_STACK_TOP - 16; /* 16 bytes reserved for the name */
+        uint64_t sp_va = USER_STACK_TOP;
+
+        /* Write argv[0] string "- init" (login shell prefix) at top of stack */
         char login_name[16];
         login_name[0] = '-';
-        uint64_t nm_len = 4;
-        if (nm_len > 14) nm_len = 14;
-        __builtin_memcpy(login_name + 1, "init", nm_len);
-        login_name[1 + nm_len] = '\0';
-        vmm_write_user_bytes(proc->pml4_phys, str_va,
-                             login_name, __builtin_strlen(login_name) + 1);
+        __builtin_memcpy(login_name + 1, "init", 5); /* includes '\0' */
+        uint64_t slen = __builtin_strlen(login_name) + 1;
+        sp_va -= slen;
+        vmm_write_user_bytes(proc->pml4_phys, sp_va, login_name, slen);
+        uint64_t str_va = sp_va;
 
-        /* Write 16 random bytes for AT_RANDOM near the string area */
-        uint64_t at_random_va = USER_STACK_TOP - 32; /* just below the name string */
+        /* Write 16 random bytes for AT_RANDOM */
+        sp_va -= 16;
         {
             uint8_t rand_bytes[16];
             random_get_bytes(rand_bytes, 16);
-            vmm_write_user_bytes(proc->pml4_phys, at_random_va, rand_bytes, 16);
+            vmm_write_user_bytes(proc->pml4_phys, sp_va, rand_bytes, 16);
         }
+        uint64_t at_random_va = sp_va;
 
-        /* RSP = USER_STACK_TOP - 128; write argc/argv/envp/auxv.
-         * Layout: [argc][argv[0]][argv NULL][envp NULL][AT_RANDOM key][AT_RANDOM val][AT_NULL][AT_NULL] */
-        uint64_t rsp_va = USER_STACK_TOP - 128;
-        vmm_write_user_u64(proc->pml4_phys, rsp_va,      1ULL);           /* argc = 1 */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 8,  str_va);        /* argv[0] */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 16, 0ULL);          /* argv[1] = NULL */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 24, 0ULL);          /* envp[0] = NULL */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 32, 25ULL);         /* AT_RANDOM */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 40, at_random_va);  /* → 16 random bytes */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 48, 0ULL);          /* AT_NULL */
-        vmm_write_user_u64(proc->pml4_phys, rsp_va + 56, 0ULL);          /* AT_NULL value */
+        /* Align to 8 bytes for pointer table */
+        sp_va &= ~7ULL;
+
+        /* Pointer table: argc + argv[0] + NULL + envp NULL + auxv pairs + AT_NULL.
+         * Base: 4 + 10 + 2 = 16 qwords.  With interp: +4 = 20 qwords. */
+        uint64_t auxv_qwords = has_interp ? 16 : 12;
+        uint64_t table_qwords = 4 + auxv_qwords; /* argc,argv[0],NULL,envpNULL + auxv */
+        uint64_t table_bytes  = table_qwords * 8;
+        sp_va -= table_bytes;
+        /* Ensure RSP % 16 == 8 at _start per SysV ABI */
+        if ((sp_va % 16) != 8) sp_va -= 8;
+
+        uint64_t wp = sp_va;
+        vmm_write_user_u64(proc->pml4_phys, wp, 1ULL);        wp += 8; /* argc = 1 */
+        vmm_write_user_u64(proc->pml4_phys, wp, str_va);      wp += 8; /* argv[0] */
+        vmm_write_user_u64(proc->pml4_phys, wp, 0ULL);        wp += 8; /* argv NULL */
+        vmm_write_user_u64(proc->pml4_phys, wp, 0ULL);        wp += 8; /* envp NULL */
+        /* AT_PHDR (3) */
+        vmm_write_user_u64(proc->pml4_phys, wp, 3ULL);        wp += 8;
+        vmm_write_user_u64(proc->pml4_phys, wp, er.phdr_va);  wp += 8;
+        /* AT_PHNUM (5) */
+        vmm_write_user_u64(proc->pml4_phys, wp, 5ULL);        wp += 8;
+        vmm_write_user_u64(proc->pml4_phys, wp, (uint64_t)er.phdr_count); wp += 8;
+        /* AT_PAGESZ (6) */
+        vmm_write_user_u64(proc->pml4_phys, wp, 6ULL);        wp += 8;
+        vmm_write_user_u64(proc->pml4_phys, wp, 4096ULL);     wp += 8;
+        /* AT_ENTRY (9) */
+        vmm_write_user_u64(proc->pml4_phys, wp, 9ULL);        wp += 8;
+        vmm_write_user_u64(proc->pml4_phys, wp, er.entry);    wp += 8;
+        /* AT_RANDOM (25) */
+        vmm_write_user_u64(proc->pml4_phys, wp, 25ULL);       wp += 8;
+        vmm_write_user_u64(proc->pml4_phys, wp, at_random_va); wp += 8;
+        if (has_interp) {
+            /* AT_BASE (7) — interpreter load address */
+            vmm_write_user_u64(proc->pml4_phys, wp, 7ULL);    wp += 8;
+            vmm_write_user_u64(proc->pml4_phys, wp, INTERP_BASE); wp += 8;
+            /* AT_PHENT (4) — program header entry size */
+            vmm_write_user_u64(proc->pml4_phys, wp, 4ULL);    wp += 8;
+            vmm_write_user_u64(proc->pml4_phys, wp, 56ULL);   wp += 8;
+        }
+        /* AT_NULL */
+        vmm_write_user_u64(proc->pml4_phys, wp, 0ULL);        wp += 8;
+        vmm_write_user_u64(proc->pml4_phys, wp, 0ULL);        wp += 8;
+
+        /* rsp_va used for the iretq frame below */
+        rsp_init = sp_va;
     }
 
     /*
@@ -174,7 +264,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      *   [x29=0][x30=proc_enter_user] ... [x19=0][x20=0]
      */
     *--sp = proc->pml4_phys;
-    *--sp = USER_STACK_TOP - 128;   /* user SP */
+    *--sp = rsp_init;               /* user SP */
     *--sp = entry_rip;              /* ELR (entry point) */
     *--sp = 0;                      /* SPSR: EL0, all interrupts enabled */
 
@@ -194,7 +284,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 #else
     /* x86-64: iretq frame + ctx_switch callee-saves. */
     *--sp = (uint64_t)ARCH_USER_DS; /* SS  — user data | RPL=3    */
-    *--sp = USER_STACK_TOP - 128; /* RSP */
+    *--sp = rsp_init;             /* RSP */
     *--sp = 0x202ULL;           /* RFLAGS — IF=1, reserved bit 1  */
     *--sp = (uint64_t)ARCH_USER_CS; /* CS  — user code | RPL=3     */
     *--sp = entry_rip;          /* RIP — ELF entry point          */

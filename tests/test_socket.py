@@ -90,8 +90,15 @@ def run_test():
             sys.exit(1)
         print("  vigil started as init (caps granted)")
 
-        # Drain more serial output for 5 seconds to let vigil start httpd
-        print("  draining serial output (5s) for httpd startup...")
+        # Wait for DHCP to acquire an IP — unicast packets are dropped until
+        # s_my_ip is set, so HTTP requests fail before DHCP completes.
+        print("  waiting for DHCP...")
+        out_dhcp = _read_until(proc, time.time() + 60, "acquired")
+        if "acquired" not in out_dhcp:
+            print("WARN: DHCP not confirmed, continuing anyway")
+
+        # Wait for httpd to be ready
+        print("  waiting for httpd...")
         out2 = _read_until(proc, time.time() + 30, "httpd: waiting for connection")
         sys.stdout.write(out2)
         sys.stdout.flush()
