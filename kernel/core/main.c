@@ -43,7 +43,8 @@
 static void
 task_idle(void)
 {
-    lapic_timer_init();     /* per-CPU LAPIC timer (~100Hz on vector 0x30)   */
+    /* LAPIC timer disabled on BSP — causes #GP error=0x7bb on Zen 2.
+     * PIT drives BSP scheduling. APs use LAPIC timer. */
     arch_enable_irq();
     for (;;)
         arch_halt();
