@@ -874,18 +874,9 @@ sys_execve(syscall_frame_t *frame,
         {
     int argc2 = argc;
 
-    /* Check execute permission on the binary (ext2 only; initrd is always allowed) */
-    {
-        uint32_t elf_ino;
-        if (ext2_open(path, &elf_ino) == 0) {
-            int xperm = ext2_check_perm(elf_ino,
-                (uint16_t)proc->uid, (uint16_t)proc->gid, 1); /* X_OK */
-            if (xperm != 0)
-                { ret = (uint64_t)-(int64_t)13; goto done; }  /* EACCES */
-        }
-    }
-
-    /* 3. Look up binary: initrd first, then VFS (ext2 on nvme0p1). */
+    /* 3. Look up binary: initrd first, then VFS (ext2 on nvme0p1).
+     *    Initrd binaries are always trusted (no permission check).
+     *    ext2 binaries get an X_OK DAC check before loading. */
     vfs_file_t f;
     const uint8_t *elf_data;
     uint64_t       elf_size;
@@ -893,6 +884,16 @@ sys_execve(syscall_frame_t *frame,
         elf_data = (const uint8_t *)initrd_get_data(&f);
         elf_size = (uint64_t)initrd_get_size(&f);
     } else {
+        /* ext2 path: check execute permission before loading */
+        {
+            uint32_t elf_ino;
+            if (ext2_open(path, &elf_ino) == 0) {
+                int xperm = ext2_check_perm(elf_ino,
+                    (uint16_t)proc->uid, (uint16_t)proc->gid, 1);
+                if (xperm != 0)
+                    { ret = (uint64_t)-(int64_t)13; goto done; }
+            }
+        }
         vfs_file_t vf;
         int vr = vfs_open(path, 0, &vf);
         if (vr != 0)
