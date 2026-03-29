@@ -284,6 +284,7 @@ static const uint8_t s_font[256 * 16] = {
 
 /* -- Framebuffer state ----------------------------------------------------- */
 int fb_available = 0;
+static int s_fb_locked = 0;  /* 1 = compositor owns FB, suppress text output */
 
 static volatile uint32_t *s_fb_va    = (void *)0;
 /* Shadow buffer: normal WB-cached DRAM copy of the framebuffer.
@@ -494,7 +495,7 @@ _fb_dispatch_csi(char cmd)
 void
 fb_putchar(char c)
 {
-    if (!fb_available) return;
+    if (!fb_available || s_fb_locked) return;
 
     /* ANSI CSI state machine */
     if (s_esc_state == 1) {
@@ -550,6 +551,12 @@ fb_write_string(const char *s)
 {
     while (*s)
         fb_putchar(*s++);
+}
+
+void
+fb_lock_compositor(void)
+{
+    s_fb_locked = 1;
 }
 
 void

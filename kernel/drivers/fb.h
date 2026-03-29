@@ -37,4 +37,8 @@ extern int fb_available;
 int fb_get_phys_info(uint64_t *phys_out, uint32_t *width_out,
                      uint32_t *height_out, uint32_t *pitch_out);
 
+/* fb_lock_compositor — suppress kernel text output to the framebuffer.
+ * Called by sys_fb_map when a user compositor maps the FB. */
+void fb_lock_compositor(void);
+
 #endif /* FB_H */
