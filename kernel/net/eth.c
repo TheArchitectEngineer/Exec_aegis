@@ -190,6 +190,22 @@ int eth_send(netdev_t *dev, const mac_addr_t *dst_mac,
 
 /* ---- arp_resolve ------------------------------------------------------- */
 
+/* Check if interrupts are currently enabled (IF flag in RFLAGS).
+ * Used to detect ISR context — arp_resolve must not block in ISR. */
+static int
+_irqs_enabled(void)
+{
+#ifdef __aarch64__
+    uint64_t daif;
+    __asm__ volatile("mrs %0, daif" : "=r"(daif));
+    return (daif & 0x80) == 0;  /* I bit clear = IRQs enabled */
+#else
+    uint64_t flags;
+    __asm__ volatile("pushfq; pop %0" : "=r"(flags));
+    return (flags & 0x200) != 0;  /* IF bit set = IRQs enabled */
+#endif
+}
+
 int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
 {
     arp_entry_t *e = arp_find(ip);
@@ -199,47 +215,43 @@ int arp_resolve(netdev_t *dev, ip4_addr_t ip, mac_addr_t *mac_out)
         return 0;
     }
 
-    /* Not cached — send ARP REQUEST and poll using sti+hlt+cli.
-     *
-     * net_init() is called before sched_start(), so interrupts are disabled
-     * (IF=0) and arch_get_ticks() never advances.  We must NOT use a
-     * tick-based timeout.
-     *
-     * On TCG (no KVM) QEMU, the guest vCPU and QEMU's SLIRP/virtio backend
-     * share a single host thread.  To let SLIRP generate the ARP reply we
-     * must give QEMU real CPU time.  The pattern "sti; hlt; cli" achieves
-     * this: sti unmasks the PIT IRQ, hlt yields until the next PIT interrupt
-     * (10 ms), the PIT ISR runs (and calls netdev_poll_all() → virtio_net_poll
-     * → delivers any pending RX frames including the ARP reply), then cli
-     * re-masks interrupts for the table check.
-     *
-     * Concurrency: the PIT ISR may deliver the ARP reply via netdev_poll_all()
-     * before we call arp_find() here.  That is fine — arp_insert() is
-     * idempotent and arp_find() will see the cached entry on the next check.
-     *
-     * Timeout: 500 iterations × 10 ms/tick ≈ 5 seconds.  More than enough
-     * for SLIRP on any host.
-     */
+    /* Send ARP request regardless of context. */
     arp_send_request(dev, ip);
 
+    /* If called from ISR context (interrupts disabled), we CANNOT block.
+     * Blocking here with arch_wait_for_irq() while holding netdev_lock +
+     * tcp_lock causes a permanent deadlock: the next PIT tick tries to
+     * acquire those same locks.  Instead, return -1 (EAGAIN).  The TCP
+     * retransmit timer will re-attempt the send on the next tick, by which
+     * time the ARP reply should have arrived via a subsequent poll cycle.
+     *
+     * This was the root cause of test_socket failures: DHCP uses broadcasts
+     * (no ARP needed), so the gateway ARP is uncached when the first TCP
+     * SYN arrives.  tcp_rx tries to send SYN-ACK, ip_send calls arp_resolve,
+     * which blocks → deadlock → no more packets ever processed. */
+    if (!_irqs_enabled()) {
+        return -1;  /* caller should retry later */
+    }
+
+    /* Syscall/task context — safe to block and wait for ARP reply.
+     *
+     * On TCG QEMU, the guest vCPU and SLIRP share a thread.  "sti; hlt; cli"
+     * yields to QEMU so SLIRP can generate the ARP reply.  The PIT ISR
+     * calls netdev_poll_all() which delivers pending RX frames. */
     {
         uint32_t n;
         for (n = 0; n < 500u; n++) {
-            /* Yield to QEMU/SLIRP: enable interrupts, halt until PIT fires,
-             * re-disable.  The PIT ISR calls netdev_poll_all() which drains
-             * the virtio RX ring and delivers any pending frames. */
             arch_wait_for_irq();
-            /* Also poll directly in case PIT ISR didn't run yet. */
             if (dev->poll)
                 dev->poll(dev);
             e = arp_find(ip);
             if (e && e->resolved) {
-                arch_enable_irq(); /* restore interrupts */
+                arch_enable_irq();
                 *mac_out = e->mac;
                 return 0;
             }
         }
     }
-    arch_enable_irq(); /* restore interrupts on timeout path */
-    return -1; /* timeout — caller returns EHOSTUNREACH */
+    arch_enable_irq();
+    return -1;
 }

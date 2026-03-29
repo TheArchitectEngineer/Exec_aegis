@@ -1,6 +1,7 @@
 /* sys_socket.c — POSIX socket API syscalls */
 #include "sys_impl.h"
 #include "netdev.h"
+#include "eth.h"
 #include "udp.h"
 #include "tcp.h"
 #include "ip.h"
@@ -716,6 +717,19 @@ sys_netcfg(uint64_t op, uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (op == 0) {
         /* Set IP/mask/gw */
         net_set_config((ip4_addr_t)arg1, (ip4_addr_t)arg2, (ip4_addr_t)arg3);
+
+        /* Proactively resolve gateway ARP so it's cached before any TCP
+         * connections arrive.  Without this, the first inbound TCP SYN
+         * triggers arp_resolve from the PIT ISR (via tcp_rx → ip_send),
+         * which would deadlock if ARP isn't cached.  Safe to call here:
+         * syscall context, interrupts enabled, no spinlocks held. */
+        if (arg3 != 0) {
+            netdev_t *dev = netdev_get("eth0");
+            if (dev) {
+                mac_addr_t gw_mac;
+                arp_resolve(dev, (ip4_addr_t)arg3, &gw_mac);
+            }
+        }
         return 0;
     }
     if (op == 1) {
