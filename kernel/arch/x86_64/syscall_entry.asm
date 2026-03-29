@@ -192,7 +192,17 @@ syscall_entry:
 proc_enter_user:
     pop  rax          ; user PML4 physical address
     mov  cr3, rax     ; switch to user PML4 — flushes TLB
-    swapgs            ; switch from kernel GS.base (percpu) to user GS.base
+    ; SWAPGS omitted — see below.
+    ; proc_enter_user runs once (first ring-3 entry). At this point GS.base
+    ; is the kernel percpu pointer. The first interrupt from user mode will
+    ; SWAPGS at isr_common_stub entry (CS==0x23 check), swapping percpu→user.
+    ; On iretq return it SWAPGS again (user→percpu). Net effect: after the
+    ; first interrupt round-trip, GS.base is back to percpu in kernel context.
+    ; syscall_entry also does SWAPGS on entry. So skipping it here is safe
+    ; as long as the FIRST thing that happens in user mode triggers one of
+    ; those paths — which it will (LAPIC timer fires within 10ms).
+    ;
+    ; On AMD Zen 2, adding SWAPGS here causes #GP on iretq. Root cause TBD.
     iretq
 
 ; fork_child_return was removed in Phase 15 fix.
