@@ -43,8 +43,7 @@
 static void
 task_idle(void)
 {
-    /* lapic_timer_init() disabled — PIT drives BSP scheduling.
-     * LAPIC timer vector 0x30 causes #GP on Zen 2 bare metal. */
+    lapic_timer_init();     /* per-CPU LAPIC timer (~100Hz on vector 0x30)   */
     arch_enable_irq();
     for (;;)
         arch_halt();
@@ -94,9 +93,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     console_init();         /* register stdout device (silent)               */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
-    /* ioapic_init() disabled — causes #GP error=0x7bb on ThinkPad X13 Zen 2.
-     * PIC handles IRQ routing. LAPIC still active for EOI/IPI.
-     * TODO: debug IOAPIC routing on AMD bare metal. */
+    ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */
     pcie_init();            /* enumerate PCIe devices — [PCIE] OK            */
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
