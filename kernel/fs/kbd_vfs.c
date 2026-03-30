@@ -3,6 +3,8 @@
 #include "vfs.h"
 #include "kbd.h"
 #include "printk.h"
+#include "arch.h"
+#include "../drivers/fb.h"
 #include "uaccess.h"
 #include "syscall_util.h"
 #include <stdint.h>
@@ -11,15 +13,24 @@
 
 static tty_t s_console_tty;
 
-/* console_tty_write_out — backend callback: emit characters via printk.
- * printk handles serial + VGA routing; the serial driver adds \r before \n
- * internally, so we must NOT enable OPOST/ONLCR on the console tty. */
+/* console_tty_write_out — backend callback: emit characters directly.
+ * Bypasses printk so that printk_quiet (boot=quiet) does not suppress
+ * TTY echo (username display, line editing). Writes char-by-char to
+ * serial + VGA + FB for correct control character handling. */
 static int
 console_tty_write_out(tty_t *tty, const char *buf, uint32_t len)
 {
 	(void)tty;
-	for (uint32_t i = 0; i < len; i++)
-		printk("%c", buf[i]);
+	for (uint32_t i = 0; i < len; i++) {
+		char tmp[2];
+		tmp[0] = buf[i];
+		tmp[1] = '\0';
+		serial_write_string(tmp);
+		if (vga_available)
+			vga_write_string(tmp);
+		if (fb_available)
+			fb_putchar(buf[i]);
+	}
 	return (int)len;
 }
 
