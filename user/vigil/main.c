@@ -167,15 +167,12 @@ start_service(service_t *s)
         if (s->needs_cap_query)
             syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_READ);
 
-        /* In quiet mode, redirect stdout/stderr to /dev/null for non-getty
-         * services so daemon chatter doesn't pollute the login screen. */
+        /* In quiet mode, close stdout/stderr for non-getty services
+         * so daemon chatter doesn't pollute the login screen.
+         * (No /dev/null on Aegis — just close the fds.) */
         if (s_quiet && !s->needs_auth) {
-            int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) {
-                dup2(devnull, 1);
-                dup2(devnull, 2);
-                close(devnull);
-            }
+            close(1);
+            close(2);
         }
 
         /* Exec the binary directly when run_cmd is an absolute path — this
@@ -281,9 +278,7 @@ process_cmd(void)
 int
 main(void)
 {
-    vigil_log("starting");
-
-    /* Detect boot mode from kernel command line */
+    /* Detect boot mode + quiet flag from kernel command line BEFORE any output */
     {
         char cmdline[256] = "";
         read_file("/proc/cmdline", cmdline, sizeof(cmdline));
@@ -294,6 +289,8 @@ main(void)
         /* else keep default "text" */
         if (strstr(cmdline, "quiet"))
             s_quiet = 1;
+
+        vigil_log("starting");
 
         char msg[80] = "boot mode: ";
         size_t ml = strlen(msg);
