@@ -20,6 +20,7 @@
 #include "arch.h"
 #include "ext2.h"
 #include "kbd_vfs.h"
+#include "tty.h"
 #include "socket.h"
 #include "epoll.h"
 #include "random.h"

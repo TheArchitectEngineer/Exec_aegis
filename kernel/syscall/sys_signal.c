@@ -275,6 +275,14 @@ sys_setfg(uint64_t arg1)
     if (cap_check(proc->caps, CAP_TABLE_SIZE,
                   CAP_KIND_PROC_READ, CAP_RIGHTS_WRITE) < 0)
         return (uint64_t)-1; /* EPERM */
-    kbd_set_tty_pgrp((uint32_t)arg1);
+    /* Set fg_pgrp on the caller's controlling terminal, not blindly the
+     * console.  A shell inside a PTY must only affect its own PTY's
+     * fg_pgrp — changing the console's fg_pgrp would SIGTTIN the
+     * compositor (lumen) which continuously reads the console TTY. */
+    tty_t *tty = tty_find_controlling(proc->sid);
+    if (tty)
+        tty->fg_pgrp = (uint32_t)arg1;
+    else
+        kbd_set_tty_pgrp((uint32_t)arg1);
     return 0;
 }
