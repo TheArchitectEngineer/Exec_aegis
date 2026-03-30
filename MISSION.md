@@ -156,11 +156,20 @@ capability broker daemon supervised by Vigil. It reads declarative policy files
 Unix domain socket with kernel-attested peer credentials, and logs every
 delegation. All built-in Aegis services use capd for dynamic capability grants.
 
-capd is the default, not the mandate. The broker interface (socket protocol +
-kernel syscalls) is stable and documented. Operators who need custom validation
-logic — challenge-response tokens, hardware attestation, external auth — can
-substitute their own daemon. capd handles the common case correctly. You build
-whatever you want.
+capd is the default, not the mandate. The broker path is configured in
+`/etc/aegis/capd.conf` — a file writable only through an authenticated stsh
+session (DAC + `CAP_DELEGATE` required). Change the path, change the engine:
+
+```
+broker = /bin/capd              # default — declarative policy files
+broker = /opt/vendor/capd-hsm   # vendor-supplied, HSM-backed attestation
+broker = /usr/local/bin/my-capd # custom, application-specific logic
+```
+
+Vigil supervises whatever binary the config points to. The kernel does not know
+or care what the broker is — it enforces that `sys_cap_grant` requires
+`CAP_DELEGATE`, period. The socket protocol is the contract, not the binary.
+capd handles the common case correctly. You build whatever you want.
 
 ---
 
