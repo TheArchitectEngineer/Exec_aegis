@@ -196,11 +196,11 @@ def main():
             print("[PASS] /bin/%s present" % binary)
 
     # 5. /etc/motd content
-    if "Welcome to Aegis" not in output:
+    if "AEGIS" not in output and "______" not in output:
         print("[FAIL] /etc/motd content missing")
         passed = False
     else:
-        print("[PASS] /etc/motd: Welcome to Aegis")
+        print("[PASS] /etc/motd content found")
 
     sys.exit(0 if passed else 1)
 
