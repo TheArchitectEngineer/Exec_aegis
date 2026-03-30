@@ -1,11 +1,13 @@
 /* login — capability-delegating login binary for Aegis.
  *
- * Capabilities held at start (granted by proc_spawn):
- *   CAP_KIND_VFS_OPEN, VFS_READ, VFS_WRITE, AUTH, CAP_GRANT, SETUID
+ * Capabilities held at start (granted by vigil via exec_caps):
+ *   CAP_KIND_VFS_OPEN, VFS_READ, VFS_WRITE, AUTH, CAP_GRANT, SETUID,
+ *   CAP_DELEGATE, CAP_QUERY
  *
  * After execve(shell):
- *   shell holds only baseline caps (execve resets to VFS_OPEN/READ/WRITE).
+ *   shell holds baseline caps + CAP_DELEGATE + CAP_QUERY (via exec_caps).
  *   CAP_KIND_AUTH and CAP_KIND_SETUID do not survive exec.
+ *   CAP_DELEGATE + CAP_QUERY allow stsh to manage capabilities.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -207,8 +209,20 @@ main(void)
         memcpy(login_shell + 1, name, (size_t)nlen);
         login_shell[1 + nlen] = '\0';
 
+        /* Pre-register CAP_DELEGATE + CAP_QUERY for the shell.
+         * These are granted to login by vigil's getty service config.
+         * They survive execve via exec_caps and give stsh its management
+         * capabilities. For /bin/sh, they are harmless (unused). */
+        syscall(361, 13L, 1L);  /* CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ */
+        syscall(361, 14L, 1L);  /* CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ */
+
         char *argv[] = { login_shell, NULL };
         execve(shell, argv, NULL);
+        /* Fallback: if configured shell not found, try /bin/sh */
+        {
+            char *fallback_argv[] = { "-sh", NULL };
+            execve("/bin/sh", fallback_argv, NULL);
+        }
         /* execve failed */
         write(2, "login: execve failed\n", 21);
         return 1;
