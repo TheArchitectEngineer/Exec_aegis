@@ -150,13 +150,17 @@ process for this specific purpose?" — which is the right question.
 - **Auditable.** Every grant is logged. stsh can query the audit trail. The
   operator sees exactly when and why every capability was delegated.
 
-**Aegis ships the primitives, not the policy engine.** The kernel provides
-`sys_cap_grant` (runtime delegation) and `sys_cap_query` (introspection). The
-IPC mechanism provides kernel-attested peer credentials. stsh provides the
-operator interface. A minimal reference helper and hardening guidance are
-included. The policy logic itself is written by the operator — because a
-one-size-fits-all policy framework is a monoculture attack surface, and
-Polkit's CVE history proves it.
+**Aegis ships `capd` — the smallest correct policy engine.** capd is a minimal
+capability broker daemon supervised by Vigil. It reads declarative policy files
+(one per service, human-readable in 5 seconds), handles grant requests over a
+Unix domain socket with kernel-attested peer credentials, and logs every
+delegation. All built-in Aegis services use capd for dynamic capability grants.
+
+capd is the default, not the mandate. The broker interface (socket protocol +
+kernel syscalls) is stable and documented. Operators who need custom validation
+logic — challenge-response tokens, hardware attestation, external auth — can
+substitute their own daemon. capd handles the common case correctly. You build
+whatever you want.
 
 ---
 
@@ -298,7 +302,7 @@ These are enforced throughout development. They are not preferences.
 |-------|-----------|
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. |
 | 43 | **IPC** — Unix domain sockets, shared memory, fd passing |
-| 44 | **Capability helpers** — runtime delegation, reference daemon, hardening guidance |
+| 44 | **capd** — runtime capability delegation, declarative policy, replaceable broker |
 | 45 | **Timers** — setitimer, alarm, timerfd, proper nanosleep |
 | 46 | **Bastion** — graphical display manager (login screen) |
 | 47 | **GUI installer** — graphical version of text-mode installer |

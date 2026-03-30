@@ -376,7 +376,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 41 | **Symlinks + chmod/chown** — ext2 symlinks; POSIX DAC permission enforcement; chmod/chown/lchown syscalls | ✅ Done |
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. `caps`/`sandbox` builtins; `CAP_KIND_CAP_DELEGATE` + `CAP_KIND_CAP_QUERY` syscalls; line editing; history; tab completion; paste detection. Login chain grants delegate/query caps; exec baseline does not. | Not started |
 | 43 | **IPC** — Unix domain sockets (SO_PEERCRED); POSIX shared memory (MAP_SHARED); fd passing; all capability-gated. **Required for**: Glyph external apps (pixel buffers), capability helper daemons (authenticated grant channel). Until Phase 43, all GUI apps are compiled into Lumen. | Not started |
-| 44 | **Capability helpers** — `sys_cap_grant` (runtime delegation); reference helper daemon; stsh helper management; hardening guidance. Requires IPC (Phase 43) for kernel-attested peer credentials on Unix domain sockets. | Not started |
+| 44 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh helper management; stable broker interface (replaceable). Requires IPC (Phase 43) for kernel-attested peer credentials. | Not started |
 | 45 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
 | 46 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
