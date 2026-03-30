@@ -535,9 +535,11 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	# /etc/hosts and /etc/profile for writable root
 	printf '127.0.0.1 localhost\n10.0.2.15 aegis\n104.18.27.120 example.com\n' > /tmp/aegis-hosts
 	printf "PS1='root@aegis:\$${PWD:-/}# '\nexport PS1\nPATH=/bin\nexport PATH\n" > /tmp/aegis-profile
-	printf 'write /tmp/aegis-hosts /etc/hosts\nwrite /tmp/aegis-profile /etc/profile\n' \
+	@printf '\n _______ _______  ______ _____ _______\n |_____| |______ |  ____   |   |______\n |     | |______ |_____| __|__ ______|\n\n WARNING: This system is restricted to authorized users.\n All activity is monitored and logged. Unauthorized access\n will be investigated and may result in prosecution.\n\n' > /tmp/aegis-banner
+	@printf '\n _______ _______  ______ _____ _______\n |_____| |______ |  ____   |   |______\n |     | |______ |_____| __|__ ______|\n\n WARNING: This system is restricted to authorized users.\n All connections are monitored and logged.\n\n' > /tmp/aegis-banner-net
+	printf 'write /tmp/aegis-hosts /etc/hosts\nwrite /tmp/aegis-profile /etc/profile\nwrite /tmp/aegis-banner /etc/banner\nwrite /tmp/aegis-banner-net /etc/banner.net\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	rm -f /tmp/aegis-hosts /tmp/aegis-profile
+	rm -f /tmp/aegis-hosts /tmp/aegis-profile /tmp/aegis-banner /tmp/aegis-banner-net
 	# Vigil init directories and service declarations
 	printf 'mkdir /var\nmkdir /run\nmkdir /etc/vigil\nmkdir /etc/vigil/services\nmkdir /etc/vigil/services/getty\n' \
 	    | /sbin/debugfs -w $(ROOTFS)

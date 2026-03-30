@@ -11,6 +11,27 @@
 /* /etc/motd content — displayed by stsh on login.
  * The filter keeps only lines starting with '['; content not matching is
  * silently dropped from the serial diff. */
+static const char s_banner[] =
+    "\n"
+    " _______ _______  ______ _____ _______\n"
+    " |_____| |______ |  ____   |   |______\n"
+    " |     | |______ |_____| __|__ ______|\n"
+    "\n"
+    " WARNING: This system is restricted to authorized users.\n"
+    " All activity is monitored and logged. Unauthorized access\n"
+    " will be investigated and may result in prosecution.\n"
+    "\n";
+
+static const char s_banner_net[] =
+    "\n"
+    " _______ _______  ______ _____ _______\n"
+    " |_____| |______ |  ____   |   |______\n"
+    " |     | |______ |_____| __|__ ______|\n"
+    "\n"
+    " WARNING: This system is restricted to authorized users.\n"
+    " All connections are monitored and logged.\n"
+    "\n";
+
 static const char s_motd[] =
     "\n"
     " _______ _______  ______ _____ _______\n"
@@ -104,7 +125,9 @@ typedef struct {
 } initrd_entry_t;
 
 static const initrd_entry_t s_files[] = {
-    { "/etc/motd",  (const unsigned char *)s_motd, (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
+    { "/etc/motd",       (const unsigned char *)s_motd,       (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
+    { "/etc/banner",     (const unsigned char *)s_banner,     (const unsigned char *)s_banner + sizeof(s_banner) - 1 },
+    { "/etc/banner.net", (const unsigned char *)s_banner_net, (const unsigned char *)s_banner_net + sizeof(s_banner_net) - 1 },
     { "/bin/login",   _binary_login_bin_start,     _binary_login_bin_end },
     { "/bin/vigil",   _binary_vigil_bin_start,     _binary_vigil_bin_end },
     { "/bin/sh",      _binary_shell_bin_start,     _binary_shell_bin_end },
@@ -228,7 +251,7 @@ static const dir_entry_t s_root_entries[] = {
     { (const char *)0, 0 }
 };
 static const dir_entry_t s_etc_entries[] = {
-    { "motd", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 },
+    { "motd", 8 }, { "banner", 8 }, { "banner.net", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 },
     { "vigil", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_vigil_entries[] = {

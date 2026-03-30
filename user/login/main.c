@@ -129,6 +129,18 @@ main(void)
     char shell[256];
     int  uid = 0, gid = 0;
 
+    /* Display pre-auth banner */
+    {
+        int bfd = open("/etc/banner", O_RDONLY);
+        if (bfd >= 0) {
+            char bbuf[512];
+            int br;
+            while ((br = (int)read(bfd, bbuf, sizeof(bbuf))) > 0)
+                write(1, bbuf, (size_t)br);
+            close(bfd);
+        }
+    }
+
     for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         /* Prompt username */
         write(1, "\nlogin: ", 8);
@@ -186,7 +198,9 @@ main(void)
             continue;
         }
 
-        /* Authentication succeeded */
+        /* Authentication succeeded — clear screen for clean motd display */
+        write(1, "\033[2J\033[H", 7);
+
         syscall(105, (long)uid);  /* sys_setuid */
         syscall(106, (long)gid);  /* sys_setgid */
 
