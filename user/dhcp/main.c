@@ -274,10 +274,10 @@ apply_config(void)
 
     if (s_has_dns) {
         ip_to_str(s_dns, dns_s, sizeof(dns_s));
-        dprintf(1, "[DHCP] acquired %s/%d gw %s lease %us dns %s\n",
+        dprintf(2, "[DHCP] acquired %s/%d gw %s lease %us dns %s\n",
                 ip_s, plen, gw_s, s_lease, dns_s);
     } else {
-        dprintf(1, "[DHCP] acquired %s/%d gw %s lease %us\n",
+        dprintf(2, "[DHCP] acquired %s/%d gw %s lease %us\n",
                 ip_s, plen, gw_s, s_lease);
     }
 }
@@ -396,7 +396,7 @@ main(void)
     /* Check if we have a real NIC (non-zero MAC) */
     if (s_mac[0] == 0 && s_mac[1] == 0 && s_mac[2] == 0 &&
         s_mac[3] == 0 && s_mac[4] == 0 && s_mac[5] == 0) {
-        dprintf(1, "[DHCP] no network interface (MAC 00:00:00:00:00:00), exiting\n");
+        dprintf(2, "[DHCP] no network interface (MAC 00:00:00:00:00:00), exiting\n");
         return 0;
     }
 
@@ -404,7 +404,7 @@ main(void)
     for (attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         if (attempt > 0) {
             int delay = s_backoff[attempt - 1];
-            dprintf(1, "[DHCP] retry %d, waiting %ds\n", attempt, delay);
+            dprintf(2, "[DHCP] retry %d, waiting %ds\n", attempt, delay);
             sleep((unsigned int)delay);
         }
 
@@ -422,10 +422,10 @@ main(void)
                 sleep((unsigned int)t1);
                 s_xid = make_xid();
                 if (try_renew(fd)) {
-                    dprintf(1, "[DHCP] renewed lease, next renewal in %us\n",
+                    dprintf(2, "[DHCP] renewed lease, next renewal in %us\n",
                             s_lease / 2);
                 } else {
-                    dprintf(1, "[DHCP] renewal failed, restarting\n");
+                    dprintf(2, "[DHCP] renewal failed, restarting\n");
                     close(fd);
                     attempt = -1;  /* for-loop ++attempt makes it 0 — restart fresh */
                     goto next_attempt;
@@ -436,6 +436,6 @@ main(void)
     next_attempt:;
     }
 
-    dprintf(1, "[DHCP] failed after %d attempts, exiting\n", MAX_ATTEMPTS);
+    dprintf(2, "[DHCP] failed after %d attempts, exiting\n", MAX_ATTEMPTS);
     return 1;
 }

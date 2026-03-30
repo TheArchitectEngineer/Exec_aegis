@@ -167,10 +167,12 @@ start_service(service_t *s)
         if (s->needs_cap_query)
             syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_READ);
 
-        /* Services keep stdout/stderr open — console_write_fn respects
-         * printk_quiet in the kernel (serial always, VGA/FB only when not
-         * quiet).  Closing fds here would silence serial output that tests
-         * depend on (e.g. [DHCP] acquired). */
+        /* In quiet mode, close stdout for non-getty services so daemon
+         * chatter doesn't pollute the serial stream (breaks test pattern
+         * matching).  Keep stderr open — services that need serial
+         * visibility (e.g. DHCP) can log via stderr/dprintf(2,...). */
+        if (s_quiet && !s->needs_auth)
+            close(1);
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed
