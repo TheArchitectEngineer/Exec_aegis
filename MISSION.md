@@ -348,12 +348,14 @@ These are enforced throughout development. They are not preferences.
 | Phase | Milestone |
 |-------|-----------|
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. |
-| 43 | **IPC** — Unix domain sockets, shared memory, fd passing |
-| 44 | **capd** — runtime capability delegation, declarative policy, replaceable broker |
-| 45 | **Timers** — setitimer, alarm, timerfd, proper nanosleep |
-| 46 | **Bastion** — graphical display manager (login screen) |
-| 47 | **GUI installer** — graphical version of text-mode installer |
-| 48 | **Release** |
+| 43a | **Deep architecture audit** — file-by-file, every line, every interface |
+| 43b | **Deep security audit** — adversarial, CVE-grade, zero tolerance |
+| 44 | **IPC** — Unix domain sockets, shared memory, fd passing |
+| 45 | **capd** — runtime capability delegation, declarative policy, replaceable broker |
+| 46 | **Timers** — setitimer, alarm, timerfd, proper nanosleep |
+| 47 | **Bastion** — graphical display manager (login screen) |
+| 48 | **GUI installer** — graphical version of text-mode installer |
+| 49 | **Release** |
 
 ---
 
