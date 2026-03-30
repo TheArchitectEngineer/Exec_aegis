@@ -20,22 +20,14 @@ Notes on keyboard interaction:
 import subprocess, time, sys, os, select, fcntl, re, tempfile
 
 QEMU         = "qemu-system-x86_64"
-ISO          = "build/aegis.iso"
+ISO          = "build/aegis-test.iso"
 BOOT_TIMEOUT = int(os.environ.get("BOOT_TIMEOUT", "900"))
 
 
 def build_iso():
-    """Build the shell ISO (make INIT=shell iso)."""
-    real_uid = os.getuid()
-    real_gid = os.getgid()
-
-    def drop_euid():
-        os.setegid(real_gid)
-        os.seteuid(real_uid)
-
-    r = subprocess.run(["make", "INIT=shell", "iso"], preexec_fn=drop_euid)
-    if r.returncode != 0:
-        print("[FAIL] make INIT=shell iso failed")
+    """No-op: aegis-test.iso built by 'make test' upfront."""
+    if not os.path.exists(ISO):
+        print("[FAIL] %s not found — run 'make test' to build" % ISO)
         sys.exit(1)
 
 

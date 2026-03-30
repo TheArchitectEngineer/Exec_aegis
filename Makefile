@@ -674,6 +674,8 @@ sym:
 	@addr2line -e $(BUILD)/aegis.elf -f -p $(ADDR)
 
 test:
+	$(MAKE) INIT=shell iso
+	@cp $(BUILD)/aegis.iso $(BUILD)/aegis-test.iso
 	$(MAKE) INIT=vigil iso
 	$(MAKE) disk
 	@bash tests/run_tests.sh

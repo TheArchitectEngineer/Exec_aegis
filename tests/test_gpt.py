@@ -11,7 +11,7 @@ Boots the shell ISO with a GPT-partitioned NVMe disk image and verifies:
 import subprocess, time, sys, os, socket, select, fcntl, tempfile
 
 QEMU         = "qemu-system-x86_64"
-ISO          = "build/aegis.iso"
+ISO          = "build/aegis-test.iso"
 DISK         = "build/disk.img"
 BOOT_TIMEOUT = 900
 CMD_TIMEOUT  = 120
@@ -39,14 +39,9 @@ def _char_to_key(ch):
 
 
 def build_iso():
-    real_uid = os.getuid()
-    real_gid = os.getgid()
-    def drop_euid():
-        os.setegid(real_gid)
-        os.seteuid(real_uid)
-    r = subprocess.run(["make", "INIT=shell", "iso"], preexec_fn=drop_euid)
-    if r.returncode != 0:
-        print("[FAIL] make INIT=shell iso failed")
+    """No-op: aegis-test.iso built by 'make test' upfront."""
+    if not os.path.exists(ISO):
+        print("[FAIL] %s not found — run 'make test' to build" % ISO)
         sys.exit(1)
 
 

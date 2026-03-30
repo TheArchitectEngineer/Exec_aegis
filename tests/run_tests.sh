@@ -37,9 +37,10 @@ sed 's/mounted ramdisk0, [0-9]* blocks/mounted ramdisk0, NBLK blocks/' \
 diff /tmp/aegis_expected_norm.txt "$ACTUAL"
 echo "PASS boot oracle"
 
-# ── Test 2: Hardware-specific tests (INIT=shell, separate boots) ─────────────
-# These tests use INIT=shell with custom disk configs or special hardware.
-# They need separate QEMU instances because each has unique device flags.
+# ── Test 2: Hardware-specific tests (separate boots) ─────────────────────────
+# These tests boot QEMU with custom device flags.
+# INIT=shell tests use build/aegis-test.iso (built by 'make test' upfront).
+# INIT=vigil tests use build/aegis.iso and handle login themselves.
 
 echo "--- test_nvme ---"
 python3 tests/test_nvme.py
