@@ -27,6 +27,9 @@ static volatile int s_shift = 0;
 /* Ctrl state */
 static volatile int s_ctrl = 0;
 
+/* Alt state */
+static volatile int s_alt = 0;
+
 /* US QWERTY scancode set 1 — unshifted (make codes 0x01–0x39) */
 static const char s_sc_lower[] = {
     0,    0,   '1', '2', '3', '4', '5', '6',  /* 0x00–0x07 */
@@ -94,6 +97,7 @@ kbd_handler(void)
         if (make == 0x2A || make == 0x36)
             s_shift = 0;
         if (make == 0x1D) { s_ctrl = 0; }
+        if (make == 0x38) { s_alt = 0; }
         return;
     }
 
@@ -105,6 +109,9 @@ kbd_handler(void)
 
     /* Ctrl key: left Ctrl = 0x1D make, 0x9D break */
     if (sc == 0x1D) { s_ctrl = 1; return; }
+
+    /* Alt key: left Alt = 0x38 make, 0xB8 break */
+    if (sc == 0x38) { s_alt = 1; return; }
 
     /* Ctrl-C = Ctrl held + scancode 0x2E ('c') — send SIGINT to fg pgrp */
     if (s_ctrl && sc == 0x2E) {
@@ -136,8 +143,11 @@ kbd_handler(void)
 
     if (sc < SC_TABLE_SIZE) {
         char c = s_shift ? s_sc_upper[sc] : s_sc_lower[sc];
-        if (c)
+        if (c) {
+            if (s_ctrl) c &= 0x1F;  /* General Ctrl: mask to control char */
+            if (s_alt) buf_push(0x1B);  /* Alt: ESC prefix */
             buf_push(c);
+        }
     }
 }
 

@@ -264,15 +264,29 @@ main(void)
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
 
-    /* Debug status bar — toggled with F12 */
-    int dbg_visible = 0;
-    int dbg_key_count = 0;
-    char dbg_line[80];
-    dbg_line[0] = '\0';
+    /* Dropdown terminal — created at startup, starts hidden */
+    int dropdown_master_fd = -1;
+    glyph_window_t *dropdown_win = terminal_create_dropdown(fb_w, fb_h,
+                                                            &dropdown_master_fd);
+    glyph_window_t *prev_focus = NULL;  /* focus before dropdown opened */
 
-    /* Escape sequence accumulator for function keys */
-    char esc_buf[8];
-    int esc_len = 0;
+    if (dropdown_win) {
+        comp_add_window(&comp, dropdown_win);
+        comp_raise_window(&comp, dropdown_win);
+        dropdown_win->visible = 0;
+        /* Restore focus to the initial terminal (dropdown stole it on add) */
+        if (comp.nwindows > 1) {
+            comp.focused = comp.windows[comp.nwindows - 2];
+            comp.focused->focused_window = 1;
+            dropdown_win->focused_window = 0;
+        }
+        /* comp_add_window set full_redraw; clear it since dropdown is hidden
+         * and initial composite already completed above. */
+        comp.full_redraw = 0;
+    }
+
+    /* Escape state for Ctrl+Alt+T detection (ESC prefix from kbd driver) */
+    int esc_pending = 0;
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
@@ -286,56 +300,83 @@ main(void)
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);
-        dbg_key_count++;
         if (n == 1) {
-            /* Accumulate escape sequences to detect F12 (\033[24~) */
+            /* Ctrl+Alt+T detection: kbd driver sends ESC (0x1B) as Alt
+             * prefix, Ctrl masks char to 0x1F & c. Ctrl+T = 0x14.
+             * So Ctrl+Alt+T = ESC then 0x14. */
             if (kbd_byte == '\033') {
-                esc_buf[0] = '\033';
-                esc_len = 1;
+                esc_pending = 1;
                 activity = 1;
                 goto next_poll;
             }
-            if (esc_len > 0) {
-                esc_buf[esc_len++] = kbd_byte;
-                /* F12 = \033[24~ (5 bytes) */
-                if (esc_len == 5 && esc_buf[1] == '[' && esc_buf[2] == '2'
-                    && esc_buf[3] == '4' && esc_buf[4] == '~') {
-                    dbg_visible = !dbg_visible;
-                    esc_len = 0;
+            if (esc_pending) {
+                esc_pending = 0;
+                if (kbd_byte == 0x14 && dropdown_win) {
+                    /* Toggle dropdown terminal visibility */
+                    if (dropdown_win->visible) {
+                        /* Hide dropdown, restore previous focus */
+                        dropdown_win->visible = 0;
+                        dropdown_win->focused_window = 0;
+                        /* Verify prev_focus is still in window list */
+                        int prev_valid = 0;
+                        if (prev_focus) {
+                            for (int wi = 0; wi < comp.nwindows; wi++) {
+                                if (comp.windows[wi] == prev_focus) {
+                                    prev_valid = 1;
+                                    break;
+                                }
+                            }
+                        }
+                        if (prev_valid) {
+                            comp.focused = prev_focus;
+                            prev_focus->focused_window = 1;
+                        } else {
+                            /* Find any visible window to focus */
+                            comp.focused = NULL;
+                            for (int wi = comp.nwindows - 1; wi >= 0; wi--) {
+                                if (comp.windows[wi]->visible &&
+                                    comp.windows[wi] != dropdown_win) {
+                                    comp.focused = comp.windows[wi];
+                                    comp.focused->focused_window = 1;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        /* Show dropdown, save current focus, take focus */
+                        prev_focus = comp.focused;
+                        if (prev_focus)
+                            prev_focus->focused_window = 0;
+                        dropdown_win->visible = 1;
+                        comp.focused = dropdown_win;
+                        dropdown_win->focused_window = 1;
+                        comp_raise_window(&comp, dropdown_win);
+                        glyph_window_mark_all_dirty(dropdown_win);
+                    }
+                    comp.full_redraw = 1;
                     activity = 1;
-                    comp.full_redraw = 1; /* clear overlay on hide */
                     goto next_poll;
                 }
-                /* Sequence complete or too long — flush to PTY */
-                if (esc_len >= 6 || (esc_len == 2 && kbd_byte != '[')
-                    || (esc_len >= 3 && kbd_byte == '~')) {
-                    int mfd = (comp.focused && comp.focused->tag > 0)
-                              ? comp.focused->tag : -1;
-                    if (mfd >= 0)
-                        write(mfd, esc_buf, (size_t)esc_len);
-                    esc_len = 0;
-                    activity = 1;
-                    goto next_poll;
+                /* Not Ctrl+Alt+T — flush ESC + char to focused PTY */
+                int mfd = (comp.focused && comp.focused->tag > 0)
+                          ? comp.focused->tag : -1;
+                if (mfd >= 0) {
+                    char esc = '\033';
+                    write(mfd, &esc, 1);
+                    write(mfd, &kbd_byte, 1);
                 }
-                /* Mid-sequence — keep accumulating */
                 activity = 1;
                 goto next_poll;
             }
 
             /* Normal key — forward to focused PTY */
-            int mfd = (comp.focused && comp.focused->tag > 0)
-                      ? comp.focused->tag : -1;
-            if (mfd >= 0)
-                write(mfd, &kbd_byte, 1);
-
-            if (dbg_visible) {
-                snprintf(dbg_line, sizeof(dbg_line),
-                         "KEY 0x%02x '%c'  focus=%s mfd=%d nwin=%d   ",
-                         (unsigned char)kbd_byte,
-                         (kbd_byte >= 0x20 && kbd_byte < 0x7f) ? kbd_byte : '.',
-                         comp.focused ? "yes" : "no",
-                         mfd, comp.nwindows);
+            {
+                int mfd = (comp.focused && comp.focused->tag > 0)
+                          ? comp.focused->tag : -1;
+                if (mfd >= 0)
+                    write(mfd, &kbd_byte, 1);
             }
+
             activity = 1;
         }
 next_poll:
@@ -394,12 +435,6 @@ next_poll:
         if (activity) {
             cursor_hide();
             comp_composite(&comp);
-            /* Debug overlay (F12 toggle) */
-            if (dbg_visible && dbg_line[0]) {
-                surface_t dbg_surf = { fb, fb_w, fb_h, pitch_px };
-                draw_fill_rect(&dbg_surf, 0, 0, fb_w, FONT_H + 2, 0x00200000);
-                draw_text(&dbg_surf, 4, 1, dbg_line, 0x0000FF00, 0x00200000);
-            }
             cursor_show(comp.cursor_x, comp.cursor_y);
         }
 

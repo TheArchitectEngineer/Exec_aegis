@@ -5,6 +5,8 @@
 #include <glyph.h>
 
 glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out);
+glyph_window_t *terminal_create_dropdown(int screen_w, int screen_h,
+                                         int *master_fd_out);
 void terminal_write(glyph_window_t *win, const char *data, int len);
 
 #endif

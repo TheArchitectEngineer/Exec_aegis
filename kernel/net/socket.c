@@ -45,8 +45,13 @@ static int sock_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
          *   CLOSE_WAIT/CLOSED:    return 0 (EOF — FIN received).
          */
         for (;;) {
+            /* Set waiter BEFORE checking data to prevent lost wakeup:
+             * if sock_wake fires between the peek and sched_block while
+             * waiter_task is NULL, the wakeup would be silently lost. */
+            s->waiter_task = (aegis_task_t *)sched_current();
             int avail = tcp_conn_recv(s->tcp_conn_id, (void *)0, 0);  /* peek */
             if (avail > 0) {
+                s->waiter_task = (aegis_task_t *)0;  /* clear — not blocking */
                 uint32_t want = (uint32_t)len < (uint32_t)avail ? (uint32_t)len : (uint32_t)avail;
                 if (want > 8192) want = 8192;
                 return tcp_conn_recv(s->tcp_conn_id, buf, (uint16_t)want);
@@ -55,11 +60,15 @@ static int sock_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
             {
                 tcp_conn_t *tc = tcp_conn_get(s->tcp_conn_id);
                 if (!tc || tc->state == TCP_CLOSE_WAIT || tc->state == TCP_CLOSED
-                    || tc->state == TCP_TIME_WAIT)
+                    || tc->state == TCP_TIME_WAIT) {
+                    s->waiter_task = (aegis_task_t *)0;
                     return 0;  /* EOF — FIN received */
+                }
             }
-            if (s->nonblocking) return -11;  /* EAGAIN */
-            s->waiter_task = (aegis_task_t *)sched_current();
+            if (s->nonblocking) {
+                s->waiter_task = (aegis_task_t *)0;
+                return -11;  /* EAGAIN */
+            }
             sched_block();
         }
     }
