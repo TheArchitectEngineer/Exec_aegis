@@ -374,12 +374,14 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 39 | **Glyph** — widget toolkit (libglyph.a); dirty-rect compositor; PTY terminal fix | 🔶 PTY hang |
 | 40 | **Citadel** — sys_spawn syscall; lumen terminal via spawn (no fork); desktop icons; /bin/sh shell | ✅ Done |
 | 41 | **Symlinks + chmod/chown** — ext2 symlinks; POSIX DAC permission enforcement; chmod/chown/lchown syscalls | ✅ Done |
-| 42 | **IPC** — SysV shm/sem/msg; Unix domain sockets; POSIX shared memory; all capability-gated. **Required for Glyph external apps**: MAP_SHARED pixel buffers, command pipe/socket for window create/destroy, fd passing for shared memory. Until Phase 42, all GUI apps are compiled into Lumen. | Not started |
-| 43 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
-| 44 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
-| 45 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
-| 46 | Release | Not started |
-| 46 | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
+| 42 | **stsh** — the Styx shell. Capability-aware control plane. `caps`/`sandbox` builtins; `CAP_KIND_CAP_DELEGATE` + `CAP_KIND_CAP_QUERY` syscalls; line editing; history; tab completion; paste detection. Login chain grants delegate/query caps; exec baseline does not. | Not started |
+| 43 | **IPC** — Unix domain sockets (SO_PEERCRED); POSIX shared memory (MAP_SHARED); fd passing; all capability-gated. **Required for**: Glyph external apps (pixel buffers), capability helper daemons (authenticated grant channel). Until Phase 43, all GUI apps are compiled into Lumen. | Not started |
+| 44 | **Capability helpers** — `sys_cap_grant` (runtime delegation); reference helper daemon; stsh helper management; hardening guidance. Requires IPC (Phase 43) for kernel-attested peer credentials on Unix domain sockets. | Not started |
+| 45 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers; nanosleep via sched_block (replace busy-wait) | Not started |
+| 46 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
+| 47 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
+| 48 | Release | Not started |
+| — | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 ---
 

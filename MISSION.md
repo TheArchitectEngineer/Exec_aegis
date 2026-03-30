@@ -111,6 +111,53 @@ delegates subsets to each service. A web server gets `CAP_KIND_NET_SOCKET` and
 what the other has. Compromise of one service reveals nothing about the other's
 authority.
 
+### Dynamic Capability Delegation: Capability Helpers
+
+Static capability grants at spawn time are a simplification. Real workloads
+need capabilities on demand — a service that only needs network access during
+a sync window, or disk access only when processing a specific request.
+
+Aegis solves this with **capability helper daemons** — small, purpose-built
+processes that hold `CAP_KIND_CAP_DELEGATE` and grant capabilities to their
+assigned service at runtime, on request, after validation.
+
+```
+httpd needs CAP_NET_SOCKET for an outbound request
+  -> sends authenticated request to its capability helper
+  -> helper validates (kernel-attested PID + challenge-response)
+  -> helper calls sys_cap_grant(target_pid, CAP_NET_SOCKET)
+  -> httpd now has the capability
+```
+
+This is the same pattern as Linux's Polkit — but on a correct foundation.
+Polkit mediates privilege escalation because Linux's permission model is
+fundamentally ambient. Polkit asks "should I let this process temporarily act
+as root?" — which is the wrong question. An Aegis capability helper asks
+"should I grant this specific, scoped, unforgeable token to this specific
+process for this specific purpose?" — which is the right question.
+
+**Key security properties:**
+
+- **Kernel-attested identity.** The helper learns who is asking from the kernel
+  (SO_PEERCRED on the Unix domain socket), not from the requester. A hijacked
+  process cannot lie about its PID.
+- **Challenge-response validation.** A compromised service that controls the
+  socket channel still cannot replay or forge a valid grant request. The helper
+  injects a nonce at spawn time; the service must prove it holds the nonce.
+- **Narrow scope.** Each helper is purpose-built for one service. The httpd
+  helper can only grant network capabilities — it does not hold disk
+  capabilities, so it cannot grant them even if tricked.
+- **Auditable.** Every grant is logged. stsh can query the audit trail. The
+  operator sees exactly when and why every capability was delegated.
+
+**Aegis ships the primitives, not the policy engine.** The kernel provides
+`sys_cap_grant` (runtime delegation) and `sys_cap_query` (introspection). The
+IPC mechanism provides kernel-attested peer credentials. stsh provides the
+operator interface. A minimal reference helper and hardening guidance are
+included. The policy logic itself is written by the operator — because a
+one-size-fits-all policy framework is a monoculture attack surface, and
+Polkit's CVE history proves it.
+
 ---
 
 ## What Exists Today
@@ -250,11 +297,12 @@ These are enforced throughout development. They are not preferences.
 | Phase | Milestone |
 |-------|-----------|
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. |
-| 43 | **IPC** — shared memory, Unix domain sockets, fd passing |
-| 44 | **Timers** — setitimer, alarm, timerfd, proper nanosleep |
-| 45 | **Bastion** — graphical display manager (login screen) |
-| 46 | **GUI installer** — graphical version of text-mode installer |
-| 47 | **Release** |
+| 43 | **IPC** — Unix domain sockets, shared memory, fd passing |
+| 44 | **Capability helpers** — runtime delegation, reference daemon, hardening guidance |
+| 45 | **Timers** — setitimer, alarm, timerfd, proper nanosleep |
+| 46 | **Bastion** — graphical display manager (login screen) |
+| 47 | **GUI installer** — graphical version of text-mode installer |
+| 48 | **Release** |
 
 ---
 
