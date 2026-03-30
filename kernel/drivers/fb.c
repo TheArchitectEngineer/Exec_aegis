@@ -560,6 +560,22 @@ fb_lock_compositor(void)
 }
 
 void
+fb_heartbeat(void)
+{
+    if (!fb_available || s_fb_va == (void *)0 || s_pitch_px == 0)
+        return;
+    /* Toggle a 4x4 block in the top-left corner between green and black.
+     * Called from sched_tick (~100Hz). Visible change every ~50 ticks. */
+    static uint32_t counter = 0;
+    counter++;
+    uint32_t color = (counter & 64) ? 0x0000FF00u : 0x00003300u;
+    uint32_t y, x;
+    for (y = 0; y < 4 && y < s_fb_height; y++)
+        for (x = 0; x < 4 && x < s_fb_width; x++)
+            s_fb_va[y * s_pitch_px + x] = color;
+}
+
+void
 fb_check_amd(void)
 {
     const pcie_device_t *amd;
