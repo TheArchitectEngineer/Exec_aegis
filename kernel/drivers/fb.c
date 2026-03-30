@@ -798,18 +798,6 @@ fb_boot_splash(void)
     _blit_logo_rgba(logo_boot_data, LOGO_BOOT_W, LOGO_BOOT_H,
                     lx, ly, SPLASH_BG);
 
-    /* Tagline below logo */
-    {
-        const char *tag = "capability-based security kernel";
-        uint32_t tlen = 0;
-        const char *p = tag;
-        while (*p++) tlen++;
-        uint32_t tx = (s_fb_width > tlen * PANIC_FONT_W)
-                      ? (s_fb_width - tlen * PANIC_FONT_W) / 2 : 0;
-        uint32_t ty = ly + LOGO_BOOT_H + 30;
-        _panic_draw_string(&tx, ty, tag, 0x00888888u);
-    }
-
     /* Suppress printk FB output so the splash stays visible through
      * all [SUBSYSTEM] OK lines (they go to serial only).
      * fb_boot_splash_end() unlocks when the kernel is ready. */
