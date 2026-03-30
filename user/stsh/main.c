@@ -82,7 +82,16 @@ main(int argc, char **argv, char **envp)
         return last_exit;
     }
 
-    printf("[SHELL] stsh ready\n");
+    /* Display /etc/motd if it exists (login shell banner) */
+    {
+        FILE *motd = fopen("/etc/motd", "r");
+        if (motd) {
+            char buf[256];
+            while (fgets(buf, sizeof(buf), motd))
+                fputs(buf, stdout);
+            fclose(motd);
+        }
+    }
 
     /* Ignore SIGCHLD to prevent zombie accumulation */
     {
