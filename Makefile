@@ -197,7 +197,8 @@ USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
            $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(BLOB_OBJS)
 
-.PHONY: all iso disk run run-fb shell oksh login test clean gdb sym curl_bin build-musl
+.PHONY: all iso disk run run-fb shell oksh login test clean gdb sym curl_bin build-musl \
+        user/vigil/vigil user/login/login.elf user/vigictl/vigictl user/stsh/stsh.elf
 
 all: $(BUILD)/aegis.elf
 
