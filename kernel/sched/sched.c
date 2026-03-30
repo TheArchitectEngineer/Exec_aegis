@@ -483,7 +483,6 @@ sched_start(void)
 void
 sched_tick(void)
 {
-    fb_heartbeat();                        /* visual watchdog — blinks if alive */
     if (!s_sched_ready)                    /* PIT fires before sched_start */
         return;
     aegis_task_t *cur = sched_current();
