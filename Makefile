@@ -504,11 +504,22 @@ DISK_USER_BINS = \
 rootfs: $(ROOTFS)
 disk: $(DISK)
 
+# ── Wallpaper conversion (PNG → raw BGRA) ──
+WALLPAPER_SRC ?= assets/wallpaper.png
+$(BUILD)/wallpaper.raw:
+	@mkdir -p $(BUILD)
+	@if [ -f $(WALLPAPER_SRC) ] && command -v python3 >/dev/null 2>&1; then \
+	    python3 tools/convert-wallpaper.py $(WALLPAPER_SRC) $@; \
+	else \
+	    echo "Note: wallpaper source not found — skipping"; \
+	    touch $@; \
+	fi
+
 # ── rootfs.img: standalone ext2 filesystem image (embedded in ISO as module) ──
 # ALWAYS rebuild rootfs — stale rootfs.img inside the ISO caused the
 # 2026-03-28 debugging catastrophe. Deleting it first ensures every
 # user binary is freshly written even on incremental builds.
-$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
+$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw
 	@rm -f $(ROOTFS)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
@@ -598,6 +609,11 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
+	# Desktop wallpaper (converted from PNG at build time)
+	@if [ -f $(BUILD)/wallpaper.raw ]; then \
+	    printf 'mkdir /usr\nmkdir /usr/share\n' | /sbin/debugfs -w $(ROOTFS); \
+	    printf 'write $(BUILD)/wallpaper.raw /usr/share/wallpaper.raw\n' | /sbin/debugfs -w $(ROOTFS); \
+	fi
 	# Kernel binary for installed-system boot
 	printf 'mkdir /boot\nmkdir /boot/grub\n' \
 	    | /sbin/debugfs -w $(ROOTFS)

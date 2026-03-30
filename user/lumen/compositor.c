@@ -1,5 +1,6 @@
 /* compositor.c -- Lumen window management and dirty-rect compositing */
 #include "compositor.h"
+#include "dock.h"
 #include "cursor.h"
 #include <glyph.h>
 #include <stdlib.h>
@@ -196,10 +197,16 @@ comp_composite(compositor_t *c)
 
     /* Full redraw path (first frame, window raise, etc.) */
     if (c->full_redraw) {
-        /* Desktop background — solid fill (gradient too slow at native res) */
-        draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
+        /* Desktop background — wallpaper or solid fill */
+        if (c->wallpaper.pixels) {
+            draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
+                             c->wallpaper.pixels,
+                             (int)c->wallpaper.w, (int)c->wallpaper.h);
+        } else {
+            draw_fill_rect(&c->back, 0, 0, c->back.w, c->back.h, C_BG1);
+        }
 
-        /* Desktop icons/decorations */
+        /* Desktop decorations */
         if (c->on_draw_desktop)
             c->on_draw_desktop(&c->back, c->back.w, c->back.h);
 
@@ -212,9 +219,6 @@ comp_composite(compositor_t *c)
             glyph_window_render(win);
             blit_window_to_back(&c->back, win);
         }
-
-        /* Taskbar */
-        taskbar_draw(&c->back, c->back.w, c->back.h);
 
         /* Full flip */
         memcpy(c->fb.buf, c->back.buf,
@@ -235,8 +239,13 @@ comp_composite(compositor_t *c)
     for (int i = 1; i < c->ndirty; i++)
         combined = glyph_rect_union(combined, c->dirty_rects[i]);
 
-    /* Redraw background in dirty region — solid fill for performance */
-    {
+    /* Redraw background in dirty region */
+    if (c->wallpaper.pixels) {
+        /* Re-blit wallpaper region (scaled) — expensive, but correct */
+        draw_blit_scaled(&c->back, 0, 0, c->back.w, c->back.h,
+                         c->wallpaper.pixels,
+                         (int)c->wallpaper.w, (int)c->wallpaper.h);
+    } else {
         int dy0 = combined.y < 0 ? 0 : combined.y;
         int dy1 = combined.y + combined.h;
         if (dy1 > c->back.h) dy1 = c->back.h;
@@ -248,7 +257,7 @@ comp_composite(compositor_t *c)
                 c->back.buf[y * c->back.pitch + x] = C_BG1;
     }
 
-    /* Desktop icons/decorations (redraw into dirty region) */
+    /* Desktop decorations (redraw into dirty region) */
     if (c->on_draw_desktop)
         c->on_draw_desktop(&c->back, c->back.w, c->back.h);
 
@@ -265,13 +274,6 @@ comp_composite(compositor_t *c)
 
         glyph_window_render(win);
         blit_window_to_back(&c->back, win);
-    }
-
-    /* Taskbar -- check if dirty region overlaps */
-    {
-        glyph_rect_t tb = { 0, c->back.h - TASKBAR_HEIGHT, c->back.w, TASKBAR_HEIGHT };
-        if (glyph_rect_intersects(tb, combined))
-            taskbar_draw(&c->back, c->back.w, c->back.h);
     }
 
     /* Partial flip */
@@ -313,9 +315,9 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
     int old_cx = c->cursor_x;
     int old_cy = c->cursor_y;
 
-    /* Update cursor position, clamp to screen */
-    c->cursor_x += dx;
-    c->cursor_y += dy;
+    /* Update cursor position with speed multiplier (1.5x via integer math) */
+    c->cursor_x += dx + dx / 2;
+    c->cursor_y += dy + dy / 2;
     if (c->cursor_x < 0) c->cursor_x = 0;
     if (c->cursor_y < 0) c->cursor_y = 0;
     if (c->cursor_x >= c->fb.w) c->cursor_x = c->fb.w - 1;

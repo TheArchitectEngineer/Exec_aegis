@@ -13,6 +13,7 @@
 #include <glyph.h>
 #include "cursor.h"
 #include "compositor.h"
+#include "dock.h"
 #include "terminal.h"
 
 typedef struct {
@@ -27,8 +28,6 @@ typedef struct __attribute__((packed)) {
     int16_t  scroll;
 } mouse_event_t;
 
-#define INFO_BG 0x00F0F4F8
-
 static struct termios s_orig_termios;
 
 static void
@@ -37,140 +36,155 @@ restore_terminal(void)
     tcsetattr(0, TCSANOW, &s_orig_termios);
 }
 
-/* Store fb dimensions for info window render callback */
-static int s_fb_w, s_fb_h;
+/* ---- Context menu ---- */
 
-static void
-info_render(glyph_window_t *win)
-{
-    surface_t *s = &win->surface;
-    int ox = GLYPH_BORDER_WIDTH;
-    int oy = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
-    int cw = win->client_w;
-    int ch = win->client_h;
+#define MENU_ITEM_ABOUT     0
+#define MENU_ITEM_TERMINAL  1
+#define MENU_ITEM_SEPARATOR 2
+#define MENU_ITEM_POWEROFF  3
+#define MENU_ITEMS          4
 
-    draw_fill_rect(s, ox, oy, cw, ch, INFO_BG);
+static const char *menu_labels[] = {
+    "About Aegis", "Terminal", "---", "Power Off"
+};
 
-    int y = oy + 8;
-    int x = ox + 10;
-    int lh = FONT_H + 2;
-    char buf[80];
+static int menu_open;
+static int menu_hover = -1;
 
-    draw_text(s, x, y, "SYSTEM", C_ACCENT, INFO_BG);
-    y += lh + 4;
-
-    draw_text(s, x, y, "Kernel:   Aegis 0.1 (x86_64)", C_TEXT, INFO_BG);
-    y += lh;
-    draw_text(s, x, y, "Arch:     x86_64 (AMD64)", C_TEXT, INFO_BG);
-    y += lh;
-    snprintf(buf, sizeof(buf), "Display:  %ux%u @ 32bpp", s_fb_w, s_fb_h);
-    draw_text(s, x, y, buf, C_TEXT, INFO_BG);
-    y += lh;
-    draw_text(s, x, y, "Security: Capability-based", C_TEXT, INFO_BG);
-    y += lh;
-    draw_text(s, x, y, "Shell:    /bin/sh", C_TEXT, INFO_BG);
-    y += lh;
-    draw_text(s, x, y, "Init:     Vigil supervisor", C_TEXT, INFO_BG);
-}
-
-static glyph_window_t *
-create_info_window(int fb_w, int fb_h)
-{
-    int cols = 35;
-    int rows = 10;
-    int cw = cols * FONT_W;
-    int ch = rows * FONT_H;
-
-    s_fb_w = fb_w;
-    s_fb_h = fb_h;
-
-    glyph_window_t *win = glyph_window_create("System", cw, ch);
-    if (!win)
-        return NULL;
-
-    win->x = 20;
-    win->y = 20;
-    win->on_render = info_render;
-    win->priv = (void *)1;  /* non-NULL so chrome skips client fill */
-
-    return win;
-}
-
-/* ---- Desktop icons ---- */
-
-#define ICON_SIZE   48
-#define ICON_LABEL_H (FONT_H + 4)
-#define MAX_ICONS   8
-
-typedef struct {
-    int x, y;
-    const char *label;
-    int id;
-} desktop_icon_t;
-
-static desktop_icon_t s_icons[MAX_ICONS];
-static int s_nicons;
-
-static void
-desktop_add_icon(int x, int y, const char *label, int id)
-{
-    if (s_nicons >= MAX_ICONS)
-        return;
-    s_icons[s_nicons].x = x;
-    s_icons[s_nicons].y = y;
-    s_icons[s_nicons].label = label;
-    s_icons[s_nicons].id = id;
-    s_nicons++;
-}
-
-static void desktop_draw_icons(surface_t *s);
-
-/* Callback for compositor — draws icons on desktop background */
-static void
-desktop_draw_icons_cb(surface_t *s, int w, int h)
-{
-    (void)w; (void)h;
-    desktop_draw_icons(s);
-}
-
-static void
-desktop_draw_icons(surface_t *s)
-{
-    for (int i = 0; i < s_nicons; i++) {
-        desktop_icon_t *ic = &s_icons[i];
-
-        /* Icon background (rounded-ish rect) */
-        draw_fill_rect(s, ic->x, ic->y, ICON_SIZE, ICON_SIZE, 0x00334455);
-        draw_rect(s, ic->x, ic->y, ICON_SIZE, ICON_SIZE, C_ACCENT);
-
-        /* Simple terminal icon: ">_" text centered */
-        if (ic->id == 1) {
-            draw_text(s, ic->x + 9, ic->y + 14, ">_", 0x0000FF88, 0x00334455);
-        } else if (ic->id == 2) {
-            draw_text(s, ic->x + 14, ic->y + 14, "i", C_ACCENT, 0x00334455);
-        }
-
-        /* Label below icon */
-        int lx = ic->x + (ICON_SIZE - (int)strlen(ic->label) * FONT_W) / 2;
-        draw_text_t(s, lx, ic->y + ICON_SIZE + 4, ic->label, 0x00CCDDEE);
-    }
-}
+#define MENU_X        4
+#define MENU_Y        TOPBAR_HEIGHT
+#define MENU_W        160
+#define MENU_ITEM_H   28
+#define MENU_SEP_H    10
+#define MENU_BG       0x00222238
+#define MENU_HOVER_BG 0x003A3A58
+#define MENU_TEXT      0x00E0E0F0
+#define MENU_SEP_COL  0x00444460
 
 static int
-desktop_hit_icon(int mx, int my)
+menu_total_height(void)
 {
-    for (int i = 0; i < s_nicons; i++) {
-        desktop_icon_t *ic = &s_icons[i];
-        if (mx >= ic->x && mx < ic->x + ICON_SIZE &&
-            my >= ic->y && my < ic->y + ICON_SIZE + ICON_LABEL_H)
-            return ic->id;
+    int h = 8; /* top padding */
+    for (int i = 0; i < MENU_ITEMS; i++) {
+        if (menu_labels[i][0] == '-')
+            h += MENU_SEP_H;
+        else
+            h += MENU_ITEM_H;
     }
-    return 0;
+    h += 8; /* bottom padding */
+    return h;
+}
+
+static void
+menu_draw(surface_t *fb)
+{
+    if (!menu_open)
+        return;
+
+    int mh = menu_total_height();
+
+    /* Background with rounded corners */
+    draw_rounded_rect(fb, MENU_X, MENU_Y, MENU_W, mh, 8, MENU_BG);
+
+    /* Draw items */
+    int y = MENU_Y + 8;
+    for (int i = 0; i < MENU_ITEMS; i++) {
+        if (menu_labels[i][0] == '-') {
+            /* Separator line */
+            draw_fill_rect(fb, MENU_X + 12, y + MENU_SEP_H / 2 - 1,
+                           MENU_W - 24, 1, MENU_SEP_COL);
+            y += MENU_SEP_H;
+        } else {
+            /* Hover highlight */
+            if (i == menu_hover)
+                draw_fill_rect(fb, MENU_X + 4, y, MENU_W - 8, MENU_ITEM_H,
+                               MENU_HOVER_BG);
+
+            draw_text(fb, MENU_X + 16, y + 4, menu_labels[i],
+                      MENU_TEXT, (i == menu_hover) ? MENU_HOVER_BG : MENU_BG);
+            y += MENU_ITEM_H;
+        }
+    }
+}
+
+/* Returns which menu item index the point is over, or -1 */
+static int
+menu_hit_test(int mx, int my)
+{
+    if (!menu_open)
+        return -1;
+
+    int mh = menu_total_height();
+    if (mx < MENU_X || mx >= MENU_X + MENU_W ||
+        my < MENU_Y || my >= MENU_Y + mh)
+        return -1;
+
+    int y = MENU_Y + 8;
+    for (int i = 0; i < MENU_ITEMS; i++) {
+        if (menu_labels[i][0] == '-') {
+            y += MENU_SEP_H;
+        } else {
+            if (my >= y && my < y + MENU_ITEM_H)
+                return i;
+            y += MENU_ITEM_H;
+        }
+    }
+    return -1;
+}
+
+/* ---- Wallpaper loading ---- */
+
+static void
+load_wallpaper(wallpaper_t *wp)
+{
+    wp->pixels = NULL;
+    wp->w = 0;
+    wp->h = 0;
+
+    int fd = open("/usr/share/wallpaper.raw", O_RDONLY);
+    if (fd < 0)
+        return;
+
+    uint32_t hdr[2];
+    ssize_t n = read(fd, hdr, 8);
+    if (n != 8 || hdr[0] == 0 || hdr[1] == 0 ||
+        hdr[0] > 8192 || hdr[1] > 8192) {
+        close(fd);
+        return;
+    }
+
+    uint32_t w = hdr[0], h = hdr[1];
+    size_t sz = (size_t)w * h * 4;
+    uint32_t *px = malloc(sz);
+    if (!px) {
+        close(fd);
+        return;
+    }
+
+    /* Read all pixel data (may need multiple reads) */
+    size_t total = 0;
+    while (total < sz) {
+        n = read(fd, (char *)px + total, sz - total);
+        if (n <= 0)
+            break;
+        total += (size_t)n;
+    }
+    close(fd);
+
+    if (total < sz) {
+        free(px);
+        return;
+    }
+
+    wp->pixels = px;
+    wp->w = w;
+    wp->h = h;
 }
 
 /* ---- Terminal spawning ---- */
 
-static compositor_t *s_comp;  /* for desktop icon handler */
+static compositor_t *s_comp;
+static int s_fb_w, s_fb_h;
 
 static void
 spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
@@ -200,6 +214,17 @@ spawn_terminal(compositor_t *comp, int fb_w, int fb_h)
     term_win->tag = master_fd;
 }
 
+/* ---- Desktop draw callback (dock + top bar) ---- */
+
+static char s_clock_str[8] = "00:00";
+
+static void
+desktop_draw_cb(surface_t *s, int w, int h)
+{
+    topbar_draw(s, w, s_clock_str);
+    dock_draw(s, w, h);
+}
+
 int
 main(void)
 {
@@ -221,7 +246,7 @@ main(void)
     if (!backbuf)
         return 1;
 
-    /* Ignore job control signals — compositor always reads keyboard */
+    /* Ignore job control signals -- compositor always reads keyboard */
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
 
@@ -244,27 +269,25 @@ main(void)
     comp_init(&comp, fb, backbuf, fb_w, fb_h, pitch_px);
     cursor_init(&comp.fb);
     s_comp = &comp;
+    s_fb_w = fb_w;
+    s_fb_h = fb_h;
 
-    /* Desktop icons */
-    desktop_add_icon(fb_w - 80, 20, "Terminal", 1);
-    desktop_add_icon(fb_w - 80, 110, "System", 2);
-    comp.on_draw_desktop = desktop_draw_icons_cb;
+    /* Load wallpaper (optional) */
+    load_wallpaper(&comp.wallpaper);
 
-    /* Create windows */
-    glyph_window_t *info_win = create_info_window(fb_w, fb_h);
-    if (info_win)
-        comp_add_window(&comp, info_win);
+    /* Init dock */
+    dock_init(fb_w, fb_h);
 
-    /* Spawn initial terminal — uses sys_spawn, no fork, instant */
-    spawn_terminal(&comp, fb_w, fb_h);
+    /* Desktop draw callback draws top bar + dock */
+    comp.on_draw_desktop = desktop_draw_cb;
 
-    /* Initial full composite (icons drawn via on_draw_desktop callback) */
+    /* Initial full composite — clean desktop, no windows */
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
     cursor_show(comp.cursor_x, comp.cursor_y);
 
-    /* Dropdown terminal — created at startup, starts hidden */
+    /* Dropdown terminal -- created at startup, starts hidden */
     int dropdown_master_fd = -1;
     glyph_window_t *dropdown_win = terminal_create_dropdown(fb_w, fb_h,
                                                             &dropdown_master_fd);
@@ -274,19 +297,22 @@ main(void)
         comp_add_window(&comp, dropdown_win);
         comp_raise_window(&comp, dropdown_win);
         dropdown_win->visible = 0;
-        /* Restore focus to the initial terminal (dropdown stole it on add) */
+        /* Restore focus (dropdown stole it on add) */
         if (comp.nwindows > 1) {
             comp.focused = comp.windows[comp.nwindows - 2];
             comp.focused->focused_window = 1;
             dropdown_win->focused_window = 0;
+        } else {
+            comp.focused = NULL;
         }
-        /* comp_add_window set full_redraw; clear it since dropdown is hidden
-         * and initial composite already completed above. */
         comp.full_redraw = 0;
     }
 
     /* Escape state for Ctrl+Alt+T detection (ESC prefix from kbd driver) */
     int esc_pending = 0;
+
+    /* Clock update counter */
+    int clock_counter = 0;
 
     /* Main event loop */
     struct timespec sleep_ts = { 0, 16000000 }; /* 16ms ~ 60fps */
@@ -317,7 +343,6 @@ main(void)
                         /* Hide dropdown, restore previous focus */
                         dropdown_win->visible = 0;
                         dropdown_win->focused_window = 0;
-                        /* Verify prev_focus is still in window list */
                         int prev_valid = 0;
                         if (prev_focus) {
                             for (int wi = 0; wi < comp.nwindows; wi++) {
@@ -331,7 +356,6 @@ main(void)
                             comp.focused = prev_focus;
                             prev_focus->focused_window = 1;
                         } else {
-                            /* Find any visible window to focus */
                             comp.focused = NULL;
                             for (int wi = comp.nwindows - 1; wi >= 0; wi--) {
                                 if (comp.windows[wi]->visible &&
@@ -357,7 +381,7 @@ main(void)
                     activity = 1;
                     goto next_poll;
                 }
-                /* Not Ctrl+Alt+T — flush ESC + char to focused PTY */
+                /* Not Ctrl+Alt+T -- flush ESC + char to focused PTY */
                 int mfd = (comp.focused && comp.focused->tag > 0)
                           ? comp.focused->tag : -1;
                 if (mfd >= 0) {
@@ -369,7 +393,7 @@ main(void)
                 goto next_poll;
             }
 
-            /* Normal key — forward to focused PTY */
+            /* Normal key -- forward to focused PTY */
             {
                 int mfd = (comp.focused && comp.focused->tag > 0)
                           ? comp.focused->tag : -1;
@@ -396,22 +420,83 @@ next_poll:
                 mouse_moved = 1;
             }
             if (mouse_moved) {
-                /* Check for desktop icon click (button press on background) */
-                if ((final_buttons & 1) && !(comp.prev_buttons & 1)) {
-                    int test_x = comp.cursor_x + total_dx;
-                    int test_y = comp.cursor_y + total_dy;
-                    if (test_x < 0) test_x = 0;
-                    if (test_y < 0) test_y = 0;
-                    if (!comp_window_at(&comp, test_x, test_y)) {
-                        int icon_id = desktop_hit_icon(test_x, test_y);
-                        if (icon_id == 1)
-                            spawn_terminal(&comp, fb_w, fb_h);
+                /* Compute predicted cursor position for hit testing */
+                int test_x = comp.cursor_x + total_dx + total_dx / 2;
+                int test_y = comp.cursor_y + total_dy + total_dy / 2;
+                if (test_x < 0) test_x = 0;
+                if (test_y < 0) test_y = 0;
+                if (test_x >= fb_w) test_x = fb_w - 1;
+                if (test_y >= fb_h) test_y = fb_h - 1;
+
+                /* Update dock hover state */
+                int dock_item = dock_hit_test(test_x, test_y);
+                {
+                    /* Redraw dock when hover state changes */
+                    static int prev_dock_hover = -1;
+                    if (dock_item != prev_dock_hover) {
+                        dock_set_hover(dock_item);
+                        comp.full_redraw = 1;
+                        prev_dock_hover = dock_item;
                     }
                 }
+
+                /* Update context menu hover */
+                if (menu_open) {
+                    int old_hover = menu_hover;
+                    menu_hover = menu_hit_test(test_x, test_y);
+                    if (menu_hover != old_hover)
+                        comp.full_redraw = 1;
+                }
+
+                /* Handle button press */
+                if ((final_buttons & 1) && !(comp.prev_buttons & 1)) {
+                    /* Context menu click */
+                    if (menu_open) {
+                        int item = menu_hit_test(test_x, test_y);
+                        if (item >= 0 && menu_labels[item][0] != '-') {
+                            menu_open = 0;
+                            menu_hover = -1;
+                            comp.full_redraw = 1;
+                            if (item == MENU_ITEM_TERMINAL)
+                                spawn_terminal(&comp, fb_w, fb_h);
+                            /* About and Power Off are stubs */
+                        } else {
+                            /* Click outside menu or on separator — close */
+                            menu_open = 0;
+                            menu_hover = -1;
+                            comp.full_redraw = 1;
+                        }
+                        comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
+                        activity = 1;
+                        goto after_mouse;
+                    }
+
+                    /* Top bar "Aegis" click */
+                    if (topbar_hit_aegis(test_x, test_y, fb_w)) {
+                        menu_open = !menu_open;
+                        menu_hover = -1;
+                        comp.full_redraw = 1;
+                        comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
+                        activity = 1;
+                        goto after_mouse;
+                    }
+
+                    /* Dock click */
+                    if (dock_item >= 0) {
+                        if (dock_item == DOCK_ITEM_TERMINAL)
+                            spawn_terminal(&comp, fb_w, fb_h);
+                        /* Settings and Files are stubs */
+                        comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
+                        activity = 1;
+                        goto after_mouse;
+                    }
+                }
+
                 comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                 activity = 1;
             }
         }
+after_mouse:
 
         /* Poll PTY masters for ALL open terminal windows */
         for (int wi = 0; wi < comp.nwindows; wi++) {
@@ -431,10 +516,33 @@ next_poll:
                 activity = 1;
         }
 
+        /* Clock update — roughly once per second (60 frames) */
+        clock_counter++;
+        if (clock_counter >= 60) {
+            clock_counter = 0;
+            struct timespec ts;
+            if (clock_gettime(CLOCK_REALTIME, &ts) == 0) {
+                struct tm *tm = gmtime(&ts.tv_sec);
+                if (tm) {
+                    char new_clock[8];
+                    snprintf(new_clock, sizeof(new_clock), "%02d:%02d",
+                             tm->tm_hour, tm->tm_min);
+                    if (strcmp(new_clock, s_clock_str) != 0) {
+                        memcpy(s_clock_str, new_clock, sizeof(s_clock_str));
+                        comp.full_redraw = 1;
+                        activity = 1;
+                    }
+                }
+            }
+        }
+
         /* Composite and cursor update */
         if (activity) {
             cursor_hide();
             comp_composite(&comp);
+            /* Draw context menu overlay AFTER composite, on the framebuffer */
+            if (menu_open)
+                menu_draw(&comp.fb);
             cursor_show(comp.cursor_x, comp.cursor_y);
         }
 

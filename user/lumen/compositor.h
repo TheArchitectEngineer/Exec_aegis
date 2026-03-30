@@ -6,8 +6,14 @@
 #include <stdint.h>
 
 #define MAX_WINDOWS     16
-#define TASKBAR_HEIGHT  36
+#define TOPBAR_HEIGHT   28
 #define MAX_DIRTY_RECTS 32
+
+/* Wallpaper */
+typedef struct {
+    uint32_t *pixels;
+    uint32_t w, h;
+} wallpaper_t;
 
 typedef struct {
     surface_t fb;
@@ -29,7 +35,10 @@ typedef struct {
     /* Background rendered flag -- skip gradient after first frame */
     int bg_rendered;
 
-    /* Desktop background callback — called after bg fill, before windows */
+    /* Wallpaper (optional) */
+    wallpaper_t wallpaper;
+
+    /* Desktop background callback -- called after bg fill, before windows */
     void (*on_draw_desktop)(surface_t *back, int w, int h);
 } compositor_t;
 
@@ -42,6 +51,9 @@ void comp_add_dirty(compositor_t *c, glyph_rect_t r);
 int comp_composite(compositor_t *c);
 void comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy);
 void comp_handle_key(compositor_t *c, char key);
-void taskbar_draw(surface_t *s, int screen_w, int screen_h);
+
+/* Top bar */
+void topbar_draw(surface_t *s, int screen_w, const char *clock_str);
+int topbar_hit_aegis(int mx, int my, int screen_w);
 
 #endif

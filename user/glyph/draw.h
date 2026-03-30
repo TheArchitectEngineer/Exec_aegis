@@ -20,6 +20,14 @@ void draw_char(surface_t *s, int x, int y, char ch, uint32_t fg, uint32_t bg);
 void draw_text(surface_t *s, int x, int y, const char *str, uint32_t fg, uint32_t bg);
 void draw_text_t(surface_t *s, int x, int y, const char *str, uint32_t fg);
 void draw_blit(surface_t *dst, int dx, int dy, const uint32_t *src, int sw, int sh);
+void draw_line(surface_t *s, int x0, int y0, int x1, int y1, uint32_t color);
+void draw_circle(surface_t *s, int cx, int cy, int r, uint32_t color);
+void draw_circle_filled(surface_t *s, int cx, int cy, int r, uint32_t color);
+void draw_rounded_rect(surface_t *s, int x, int y, int w, int h, int r, uint32_t color);
+void draw_blit_scaled(surface_t *dst, int dx, int dy, int dw, int dh,
+                      const uint32_t *src, int sw, int sh);
+void draw_text_center(surface_t *s, int x, int y, int w, const char *str,
+                      uint32_t fg, uint32_t bg);
 
 #define C_BG1       0x001B2838
 #define C_BG2       0x000D1B2A
