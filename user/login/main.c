@@ -18,6 +18,8 @@
 #include <sys/types.h>
 #include <sys/syscall.h>
 
+extern char **environ;
+
 #define MAX_ATTEMPTS 3
 #define FAIL_DELAY   3
 
@@ -217,7 +219,7 @@ main(void)
         syscall(361, 14L, 1L);  /* CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ */
 
         char *argv[] = { login_shell, NULL };
-        execve(shell, argv, NULL);
+        execve(shell, argv, environ);
         /* Fallback: if configured shell not found, try /bin/sh */
         {
             char *fallback_argv[] = { "-sh", NULL };
