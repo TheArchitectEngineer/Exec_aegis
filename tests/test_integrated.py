@@ -233,7 +233,7 @@ TESTS = [
      lambda s: s.contains("testfile")),
 
     ("fs: unlink file",
-     "rm /home/testfile && ls /home/testfile",
+     "rm /home/testfile ; ls /home/testfile",
      lambda s: s.contains("No such file")),
 
     ("fs: mkdir + ls",
