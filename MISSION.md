@@ -190,8 +190,15 @@ protocols, syscall semantics. Everything above the kernel is replaceable.
 
 Someone builds a better broker. Someone else builds a better shell for that
 broker. Someone else builds a better compositor that integrates with both.
-The kernel doesn't change. The interfaces don't change. The ecosystem grows
-because every component is a default, not a dependency.
+The interfaces don't change. The ecosystem grows because every component is a
+default, not a dependency.
+
+Even the kernel is a reference implementation. The contract is the syscall ABI
+and the capability semantics. A sufficiently motivated developer could write a
+completely different kernel — microkernel, unikernel, whatever — and run the
+entire Aegis userspace unmodified, as long as the contract holds. The userspace
+doesn't know or care what's below the syscall boundary, just as the kernel
+doesn't know or care what's above it.
 
 This is how a small project becomes a platform.
 
