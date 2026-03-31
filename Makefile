@@ -477,10 +477,11 @@ $(ESP_IMG): $(GRUB_EFI)
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(CAP_LIB)
 
-$(BUILD)/aegis.iso: $(BUILD)/aegis.elf tools/grub.cfg $(ROOTFS) $(ESP_IMG)
+GRUB_CFG ?= tools/grub.cfg
+$(BUILD)/aegis.iso: $(BUILD)/aegis.elf $(GRUB_CFG) $(ROOTFS) $(ESP_IMG)
 	@mkdir -p $(ISO_DIR)/boot/grub
 	cp $(BUILD)/aegis.elf $(ISO_DIR)/boot/aegis.elf
-	cp tools/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
+	cp $(GRUB_CFG) $(ISO_DIR)/boot/grub/grub.cfg
 	cp $(ROOTFS) $(ISO_DIR)/boot/rootfs.img
 	cp $(ESP_IMG) $(ISO_DIR)/boot/esp.img
 	grub-mkrescue -o $@ $(ISO_DIR)
@@ -743,9 +744,9 @@ sym:
 	@addr2line -e $(BUILD)/aegis.elf -f -p $(ADDR)
 
 test:
-	$(MAKE) INIT=shell iso
+	$(MAKE) INIT=shell GRUB_CFG=tools/grub-test.cfg iso
 	@cp $(BUILD)/aegis.iso $(BUILD)/aegis-test.iso
-	$(MAKE) INIT=vigil iso
+	$(MAKE) INIT=vigil GRUB_CFG=tools/grub-test.cfg iso
 	$(MAKE) disk
 	@bash tests/run_tests.sh
 
