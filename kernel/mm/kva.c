@@ -22,41 +22,116 @@
 static uint64_t s_kva_next;
 static spinlock_t kva_lock = SPINLOCK_INIT;
 
+/* ---- VA freelist: recycle freed kva ranges ----
+ * Best-fit search over a fixed-size array.  Freed VA ranges are inserted;
+ * kva_alloc_pages checks the freelist before bumping s_kva_next.
+ * Adjacent entries are coalesced on insert. */
+#define KVA_FREE_MAX 128
+
+typedef struct {
+    uint64_t va;
+    uint64_t npages;
+} kva_free_t;
+
+static kva_free_t s_free[KVA_FREE_MAX];
+static int        s_nfree;
+
 void
 kva_init(void)
 {
     s_kva_next = KVA_BASE;
+    s_nfree = 0;
     printk("[KVA] OK: kernel virtual allocator active\n");
+}
+
+/* Try to allocate from the freelist.  Returns VA or 0 on miss. */
+static uint64_t
+freelist_alloc(uint64_t n)
+{
+    int best = -1;
+    uint64_t best_size = (uint64_t)-1;
+    for (int i = 0; i < s_nfree; i++) {
+        if (s_free[i].npages >= n && s_free[i].npages < best_size) {
+            best = i;
+            best_size = s_free[i].npages;
+            if (best_size == n) break;  /* exact fit */
+        }
+    }
+    if (best < 0) return 0;
+
+    uint64_t va = s_free[best].va;
+    if (s_free[best].npages == n) {
+        /* Exact fit — remove entry */
+        s_free[best] = s_free[--s_nfree];
+    } else {
+        /* Split — shrink entry */
+        s_free[best].va     += n * 4096UL;
+        s_free[best].npages -= n;
+    }
+    return va;
+}
+
+/* Insert a freed range, coalescing with neighbors. */
+static void
+freelist_insert(uint64_t va, uint64_t n)
+{
+    /* Try coalescing with existing entries */
+    for (int i = 0; i < s_nfree; i++) {
+        uint64_t end = s_free[i].va + s_free[i].npages * 4096UL;
+        if (end == va) {
+            /* Merge: free[i] directly precedes this range */
+            s_free[i].npages += n;
+            /* Check if the merged entry now touches another entry */
+            uint64_t new_end = s_free[i].va + s_free[i].npages * 4096UL;
+            for (int j = 0; j < s_nfree; j++) {
+                if (j != i && s_free[j].va == new_end) {
+                    s_free[i].npages += s_free[j].npages;
+                    s_free[j] = s_free[--s_nfree];
+                    break;
+                }
+            }
+            return;
+        }
+        if (va + n * 4096UL == s_free[i].va) {
+            /* Merge: this range directly precedes free[i] */
+            s_free[i].va = va;
+            s_free[i].npages += n;
+            return;
+        }
+    }
+    /* No coalescing — insert new entry */
+    if (s_nfree < KVA_FREE_MAX) {
+        s_free[s_nfree].va     = va;
+        s_free[s_nfree].npages = n;
+        s_nfree++;
+    }
+    /* else: freelist full, VA is leaked. Acceptable at 128 entries. */
 }
 
 void *
 kva_alloc_pages(uint64_t n)
 {
-    if (n == 0) return NULL;   /* caller passed 0 — no pages to allocate */
+    if (n == 0) return NULL;
 
-    /* Reserve VA range under kva_lock, then release before calling into PMM.
-     * Lock ordering: pmm_lock > kva_lock.  Holding kva_lock while calling
-     * pmm_alloc_page() would invert that order and deadlock on SMP. */
+    /* Try freelist first (under kva_lock), fall back to bump. */
     irqflags_t fl = spin_lock_irqsave(&kva_lock);
-    uint64_t base = s_kva_next;
-    s_kva_next += n * 4096UL;
+    uint64_t base = freelist_alloc(n);
+    if (!base) {
+        base = s_kva_next;
+        s_kva_next += n * 4096UL;
+    }
     spin_unlock_irqrestore(&kva_lock, fl);
 
     uint64_t i;
     for (i = 0; i < n; i++) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) {
-            printk("[KVA] FAIL: out of memory\n");
+            printk("[KVA] FAIL: PMM exhausted (kva_next=0x%x, free=%u)\n",
+                   (unsigned)(base >> 12), (unsigned)pmm_free_pages());
             panic_halt("[KVA] FAIL: out of memory");
         }
-        /* IMPORTANT: never pass VMM_FLAG_USER here. kva pages are mapped into
-         * pd_hi which is shared with user PML4s (same physical pd_hi page).
-         * Absent VMM_FLAG_USER, the MMU blocks user-mode access to these PTEs.
-         * Setting VMM_FLAG_USER would expose all kernel objects to ring-3. */
         vmm_map_page(base + i * 4096UL, phys, VMM_FLAG_WRITABLE);
     }
-    /* SAFETY: base is a higher-half VA reserved atomically from s_kva_next;
-     * all n pages at [base, base + n*4096) have been mapped via vmm_map_page. */
     return (void *)base;
 }
 
@@ -65,9 +140,6 @@ kva_map_phys_pages(uint64_t phys_base, uint32_t num_pages)
 {
     if (num_pages == 0) return NULL;
 
-    /* Reserve VA range under kva_lock, then map outside the lock.
-     * vmm_map_page does not acquire pmm_lock so no ordering issue here,
-     * but keeping the critical section minimal is still good practice. */
     irqflags_t fl = spin_lock_irqsave(&kva_lock);
     uint64_t base = s_kva_next;
     s_kva_next += (uint64_t)num_pages * 4096UL;
@@ -99,4 +171,9 @@ kva_free_pages(void *va, uint64_t n)
         vmm_unmap_page(page_va);
         pmm_free_page(phys);
     }
+
+    /* Return VA range to freelist for reuse */
+    irqflags_t fl = spin_lock_irqsave(&kva_lock);
+    freelist_insert(addr, n);
+    spin_unlock_irqrestore(&kva_lock, fl);
 }
