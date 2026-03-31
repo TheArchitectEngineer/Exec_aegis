@@ -28,10 +28,6 @@ static void _mf_strcpy(char *dst, const char *src, uint32_t max)
 
 /* ── VFS ops ───────────────────────────────────────────────────────────── */
 
-/* vmm_window_map/unmap — declared in vmm.c, used to access physical pages */
-extern void *vmm_window_map(uint64_t phys);
-extern void  vmm_window_unmap(void);
-
 static int memfd_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
 {
     uint32_t id = (uint32_t)(uintptr_t)priv;

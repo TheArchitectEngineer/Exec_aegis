@@ -106,6 +106,15 @@ void vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt);
  * is not mapped (caller should skip silently, matching Linux mprotect). */
 int vmm_set_user_prot(uint64_t pml4_phys, uint64_t virt, uint64_t flags);
 
+/* vmm_window_map — map a physical page into the kernel window slot.
+ * Returns a pointer to the mapped VA. Not reentrant — only one mapping
+ * active at a time (protected by vmm_window_lock internally).
+ * Caller must call vmm_window_unmap() when done. */
+void *vmm_window_map(uint64_t phys);
+
+/* vmm_window_unmap — clear the window PTE and flush TLB. */
+void vmm_window_unmap(void);
+
 /* vmm_zero_page — zero the physical page at phys using the mapped-window slot.
  * Required for MAP_ANONYMOUS: musl's heap allocator depends on zeroed pages.
  * Uses the internal vmm_window_map/vmm_window_unmap pair. */

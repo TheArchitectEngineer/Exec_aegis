@@ -50,7 +50,7 @@ static spinlock_t vmm_window_lock = SPINLOCK_INIT;
  * Do NOT call this while a previous vmm_window_map result is still in use
  * unless you are intentionally overwriting the mapping (walk-overwrite pattern).
  */
-static void *
+void *
 vmm_window_map(uint64_t phys)
 {
     *s_window_pte = phys | arch_pte_from_flags(VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
@@ -62,7 +62,7 @@ vmm_window_map(uint64_t phys)
  * vmm_window_unmap — clear the window PTE and flush TLB.
  * Call this after the last use of any vmm_window_map result.
  */
-static void
+void
 vmm_window_unmap(void)
 {
     *s_window_pte = 0;
