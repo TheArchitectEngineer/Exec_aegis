@@ -385,9 +385,11 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh grant builtin; AF_UNIX ring buffer fix | ✅ Done |
 | 46 | **Bastion** — graphical display manager; libauth.a + libcitadel.a extraction; login/lock/unlock; Ctrl+Alt+L | 🔶 Code complete, untested graphical |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
-| 48 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
-| 49 | **Deep security audit** — adversarial review of every attack surface. Syscall fuzzing, capability bypass, TOCTOU races, integer overflows, use-after-free, signal reentrancy, ext2 corruption resilience, VFS traversal, kernel info leaks, SMP atomicity. CVE-grade findings block release. pwn binary expanded. | Not started |
-| 50 | **Release** | Not started |
+| 48 | **Super key + extended keyboard** — PS/2 E0 state machine; Super modifier tracking; ESC-prefix encoding for Super combos (Win+L); USB HID GUI modifier bits; multimedia scancodes (vol/mute) | Not started |
+| 49 | **HDA audio** — Intel HDA controller driver; PCM playback/capture; /dev/audio VFS; mixer (volume/mute); CAP_KIND_AUDIO; system sounds | Not started |
+| 50 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
+| 51 | **Deep security audit** — adversarial review of every attack surface. Syscall fuzzing, capability bypass, TOCTOU races, integer overflows, use-after-free, signal reentrancy, ext2 corruption resilience, VFS traversal, kernel info leaks, SMP atomicity. CVE-grade findings block release. pwn binary expanded. | Not started |
+| 52 | **Release** | Not started |
 | — | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 ---
