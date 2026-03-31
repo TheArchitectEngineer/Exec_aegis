@@ -72,7 +72,7 @@ void tcp_init(void)
 int tcp_send_segment(netdev_t *dev, tcp_conn_t *conn,
                      uint8_t flags, const void *payload, uint16_t len)
 {
-    if (!dev) return -1;
+    /* dev may be NULL for loopback — ip_send handles it */
     uint16_t tcp_len = (uint16_t)(sizeof(tcp_hdr_t) + len);
     if (tcp_len > (uint16_t)sizeof(s_tcp_buf)) return -1;
 
@@ -498,6 +498,12 @@ tcp_connect(uint32_t sock_id, ip4_addr_t dst_ip, uint16_t dst_port,
             _tcp_memset(&s_tcp[i], 0, sizeof(s_tcp[i]));
             s_tcp[i].state       = TCP_SYN_SENT;
             net_get_config(&s_tcp[i].local_ip, (ip4_addr_t *)0, (ip4_addr_t *)0);
+            /* Loopback: use 127.0.0.1 as local IP (net_get_config returns
+             * 0.0.0.0 when no NIC is configured). */
+            if ((ntohl(dst_ip) >> 24) == 127)
+                s_tcp[i].local_ip = dst_ip;  /* 127.0.0.1 */
+            else if (s_tcp[i].local_ip == 0 && dst_ip == s_tcp[i].local_ip)
+                s_tcp[i].local_ip = dst_ip;  /* self-connect */
             s_tcp[i].local_port  = (uint16_t)(49152u + (arch_get_ticks() & 0x3FFFu));
             s_tcp[i].remote_ip   = dst_ip;
             s_tcp[i].remote_port = dst_port;
