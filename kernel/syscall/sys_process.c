@@ -197,6 +197,10 @@ uint64_t
 sys_arch_prctl(uint64_t arg1, uint64_t arg2)
 {
     if (arg1 == ARCH_SET_FS) {
+        /* Reject kernel addresses — user process must not set FS base to
+         * kernel space. Corrupts musl TLS → cascading garbage syscalls. */
+        if (arg2 >= 0xFFFF800000000000ULL)
+            return (uint64_t)-(int64_t)14;  /* EFAULT */
         sched_current()->fs_base = arg2;
         arch_set_fs_base(arg2);
         return 0;
