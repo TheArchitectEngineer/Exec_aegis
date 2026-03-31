@@ -240,6 +240,7 @@ void ip_rx(netdev_t *dev, const void *frame,
     ip4_addr_t dst = hdr->dst;
     int accept = 0;
     if (dst == s_my_ip && s_my_ip != 0)                              accept = 1;
+    if ((ntohl(dst) >> 24) == 127)                                   accept = 1; /* loopback 127.0.0.0/8 */
     if (dst == htonl(0xFFFFFFFFu))                                   accept = 1;
     if (s_my_ip == 0 && dst == htonl(0xFFFFFFFFu))                   accept = 1;
     if (s_my_ip != 0 && s_netmask != 0 &&
