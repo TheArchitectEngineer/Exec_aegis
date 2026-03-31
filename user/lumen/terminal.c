@@ -22,24 +22,111 @@
  * syscall(514, path, argv, envp, stdio_fd, cap_mask) */
 #define SYS_SPAWN 514
 
+#define SCROLLBACK_LINES 500  /* lines of history above visible area */
+
+#define SEL_HIGHLIGHT 0x004488CC  /* selection highlight color */
+#define SEL_ALPHA     80          /* highlight opacity (0-255) */
+
 typedef struct {
     int master_fd;  /* -1 if PTY failed */
     int cols, rows;
-    int cx, cy;
-    char *grid;
+    int cx, cy;     /* cursor position (relative to visible area bottom) */
     int cell_w, cell_h; /* character cell size (TTF or bitmap fallback) */
+    char *grid;     /* ring buffer: total_rows * cols */
+    int total_rows; /* rows + SCROLLBACK_LINES */
+    int scroll_top; /* index of first visible line in ring buffer (bottom view) */
+    int scroll_offset; /* how far user has scrolled back (0 = bottom) */
     /* ANSI escape parser state */
     int esc_state;      /* 0=normal, 1=got ESC, 2=got CSI (ESC[) */
     int esc_params[4];
     int esc_nparam;
+    /* Selection state */
+    int sel_active;     /* 1 if selection in progress */
+    int sel_start_col, sel_start_row;  /* start of selection (visible grid coords) */
+    int sel_end_col, sel_end_row;      /* end of selection (visible grid coords) */
+    int sel_done;       /* 1 if selection completed (mouse released) */
+    /* Padding offsets (for dropdown vs normal) */
+    int pad_x, pad_y;
+    int is_dropdown;
 } term_priv_t;
+
+/* Access a cell in the ring buffer.
+ * vis_row is 0..rows-1 (top of visible area = 0).
+ * scroll_offset shifts the view up into history. */
+static inline char *
+grid_cell(term_priv_t *tp, int vis_row, int col)
+{
+    int ring_row = (tp->scroll_top - tp->scroll_offset + vis_row) % tp->total_rows;
+    if (ring_row < 0)
+        ring_row += tp->total_rows;
+    return &tp->grid[ring_row * tp->cols + col];
+}
+
+/* Access a cell at the cursor's absolute position (ignoring scroll_offset).
+ * Used by the output path which always writes at the bottom. */
+static inline char *
+grid_cell_abs(term_priv_t *tp, int vis_row, int col)
+{
+    int ring_row = (tp->scroll_top + vis_row) % tp->total_rows;
+    if (ring_row < 0)
+        ring_row += tp->total_rows;
+    return &tp->grid[ring_row * tp->cols + col];
+}
 
 static void term_scroll(term_priv_t *tp)
 {
-    memmove(tp->grid, tp->grid + tp->cols,
-            (unsigned)(tp->rows - 1) * (unsigned)tp->cols);
-    memset(tp->grid + (tp->rows - 1) * tp->cols, ' ', (unsigned)tp->cols);
+    /* Advance scroll_top: the old top line scrolls into history,
+     * and the new bottom line is cleared. */
+    tp->scroll_top = (tp->scroll_top + 1) % tp->total_rows;
+    /* Clear the new bottom row (which is now at visible row rows-1) */
+    int new_bottom = (tp->scroll_top + tp->rows - 1) % tp->total_rows;
+    memset(&tp->grid[new_bottom * tp->cols], ' ', (unsigned)tp->cols);
     tp->cy = tp->rows - 1;
+}
+
+/* Get padding offsets for a window (dropdown vs normal) */
+static void
+get_padding(term_priv_t *tp, int *ox, int *oy)
+{
+    *ox = tp->pad_x;
+    *oy = tp->pad_y;
+}
+
+/* Normalize selection so start is before end (row-major) */
+static void
+sel_normalize(term_priv_t *tp, int *sr, int *sc, int *er, int *ec)
+{
+    int s_r = tp->sel_start_row, s_c = tp->sel_start_col;
+    int e_r = tp->sel_end_row, e_c = tp->sel_end_col;
+
+    if (s_r > e_r || (s_r == e_r && s_c > e_c)) {
+        *sr = e_r; *sc = e_c;
+        *er = s_r; *ec = s_c;
+    } else {
+        *sr = s_r; *sc = s_c;
+        *er = e_r; *ec = e_c;
+    }
+}
+
+/* Check if a cell (r, c) is within the selection range */
+static int
+cell_selected(term_priv_t *tp, int r, int c)
+{
+    if (!tp->sel_active)
+        return 0;
+
+    int sr, sc, er, ec;
+    sel_normalize(tp, &sr, &sc, &er, &ec);
+
+    if (r < sr || r > er)
+        return 0;
+    if (r == sr && r == er)
+        return c >= sc && c <= ec;
+    if (r == sr)
+        return c >= sc;
+    if (r == er)
+        return c <= ec;
+    return 1; /* middle row, fully selected */
 }
 
 static void term_render_content(glyph_window_t *win)
@@ -47,8 +134,8 @@ static void term_render_content(glyph_window_t *win)
     term_priv_t *tp = win->priv;
 
     surface_t *s = &win->surface;
-    int ox = GLYPH_BORDER_WIDTH;
-    int oy = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
+    int ox, oy;
+    get_padding(tp, &ox, &oy);
     int cw = tp->cell_w;
     int ch = tp->cell_h;
 
@@ -56,7 +143,14 @@ static void term_render_content(glyph_window_t *win)
 
     for (int r = 0; r < tp->rows; r++) {
         for (int c = 0; c < tp->cols; c++) {
-            char gc = tp->grid[r * tp->cols + c];
+            char gc = *grid_cell(tp, r, c);
+
+            /* Draw selection highlight */
+            if (cell_selected(tp, r, c)) {
+                draw_blend_rect(s, ox + c * cw, oy + r * ch,
+                                cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
+            }
+
             if (gc != ' ') {
                 if (g_font_mono)
                     font_draw_char(s, g_font_mono, 16,
@@ -69,7 +163,8 @@ static void term_render_content(glyph_window_t *win)
         }
     }
 
-    if (tp->master_fd >= 0)
+    /* Draw cursor only when viewing the bottom (no scroll offset) */
+    if (tp->master_fd >= 0 && tp->scroll_offset == 0)
         draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
                        cw, ch, C_TERM_FG);
 }
@@ -91,7 +186,7 @@ static void term_grid_puts(term_priv_t *tp, const char *msg)
             if (tp->cy >= tp->rows)
                 term_scroll(tp);
         } else if (ch >= 32 && ch <= 126) {
-            tp->grid[tp->cy * tp->cols + tp->cx] = (char)ch;
+            *grid_cell_abs(tp, tp->cy, tp->cx) = (char)ch;
             tp->cx++;
             if (tp->cx >= tp->cols) {
                 tp->cx = 0;
@@ -109,27 +204,27 @@ static void term_csi(term_priv_t *tp, int final)
     int n = (tp->esc_nparam > 0) ? tp->esc_params[0] : 0;
 
     switch (final) {
-    case 'A': /* CUU — cursor up */
+    case 'A': /* CUU -- cursor up */
         if (n < 1) n = 1;
         tp->cy -= n;
         if (tp->cy < 0) tp->cy = 0;
         break;
-    case 'B': /* CUD — cursor down */
+    case 'B': /* CUD -- cursor down */
         if (n < 1) n = 1;
         tp->cy += n;
         if (tp->cy >= tp->rows) tp->cy = tp->rows - 1;
         break;
-    case 'C': /* CUF — cursor forward */
+    case 'C': /* CUF -- cursor forward */
         if (n < 1) n = 1;
         tp->cx += n;
         if (tp->cx >= tp->cols) tp->cx = tp->cols - 1;
         break;
-    case 'D': /* CUB — cursor back */
+    case 'D': /* CUB -- cursor back */
         if (n < 1) n = 1;
         tp->cx -= n;
         if (tp->cx < 0) tp->cx = 0;
         break;
-    case 'H': /* CUP — cursor position */
+    case 'H': /* CUP -- cursor position */
     case 'f': {
         int row = (tp->esc_nparam > 0) ? tp->esc_params[0] : 1;
         int col = (tp->esc_nparam > 1) ? tp->esc_params[1] : 1;
@@ -141,33 +236,32 @@ static void term_csi(term_priv_t *tp, int final)
         if (tp->cx >= tp->cols) tp->cx = tp->cols - 1;
         break;
     }
-    case 'J': /* ED — erase in display */
+    case 'J': /* ED -- erase in display */
         if (n == 2) {
-            /* Clear entire screen */
-            memset(tp->grid, ' ', (unsigned)(tp->cols * tp->rows));
+            /* Clear entire visible area */
+            for (int r = 0; r < tp->rows; r++)
+                memset(grid_cell_abs(tp, r, 0), ' ', (unsigned)tp->cols);
             tp->cx = 0;
             tp->cy = 0;
         } else if (n == 0) {
             /* Clear from cursor to end */
-            int pos = tp->cy * tp->cols + tp->cx;
-            int total = tp->cols * tp->rows;
-            if (pos < total)
-                memset(tp->grid + pos, ' ', (unsigned)(total - pos));
+            for (int c = tp->cx; c < tp->cols; c++)
+                *grid_cell_abs(tp, tp->cy, c) = ' ';
+            for (int r = tp->cy + 1; r < tp->rows; r++)
+                memset(grid_cell_abs(tp, r, 0), ' ', (unsigned)tp->cols);
         }
         break;
-    case 'K': /* EL — erase in line */
+    case 'K': /* EL -- erase in line */
         if (n == 0) {
             /* Clear from cursor to end of line */
-            int pos = tp->cy * tp->cols + tp->cx;
-            int end = (tp->cy + 1) * tp->cols;
-            if (pos < end)
-                memset(tp->grid + pos, ' ', (unsigned)(end - pos));
+            for (int c = tp->cx; c < tp->cols; c++)
+                *grid_cell_abs(tp, tp->cy, c) = ' ';
         } else if (n == 2) {
             /* Clear entire line */
-            memset(tp->grid + tp->cy * tp->cols, ' ', (unsigned)tp->cols);
+            memset(grid_cell_abs(tp, tp->cy, 0), ' ', (unsigned)tp->cols);
         }
         break;
-    case 'm': /* SGR — ignore (no color support yet) */
+    case 'm': /* SGR -- ignore (no color support yet) */
         break;
     default:
         break;
@@ -177,6 +271,10 @@ static void term_csi(term_priv_t *tp, int final)
 void terminal_write(glyph_window_t *win, const char *data, int len)
 {
     term_priv_t *tp = win->priv;
+
+    /* Snap to bottom on new output */
+    if (tp->scroll_offset > 0)
+        tp->scroll_offset = 0;
 
     for (int i = 0; i < len; i++) {
         unsigned char ch = (unsigned char)data[i];
@@ -195,7 +293,7 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
             continue;
         }
         if (tp->esc_state == 2) {
-            /* Inside CSI — collect params and final byte */
+            /* Inside CSI -- collect params and final byte */
             if (ch >= '0' && ch <= '9') {
                 if (tp->esc_nparam == 0) tp->esc_nparam = 1;
                 tp->esc_params[tp->esc_nparam - 1] =
@@ -206,7 +304,7 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
                     tp->esc_nparam++;
                 }
             } else if (ch >= 0x40 && ch <= 0x7E) {
-                /* Final byte — execute */
+                /* Final byte -- execute */
                 term_csi(tp, ch);
                 tp->esc_state = 0;
             } else {
@@ -237,7 +335,7 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
                     term_scroll(tp);
             }
         } else if (ch >= 32 && ch <= 126) {
-            tp->grid[tp->cy * tp->cols + tp->cx] = (char)ch;
+            *grid_cell_abs(tp, tp->cy, tp->cx) = (char)ch;
             tp->cx++;
             if (tp->cx >= tp->cols) {
                 tp->cx = 0;
@@ -248,6 +346,188 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
         }
     }
 
+    glyph_window_mark_all_dirty(win);
+}
+
+/* ---- Mouse callbacks for text selection ---- */
+
+static void
+term_mouse_down(glyph_window_t *win, int x, int y)
+{
+    term_priv_t *tp = win->priv;
+    int ox, oy;
+    get_padding(tp, &ox, &oy);
+
+    int col = (x - ox) / tp->cell_w;
+    int row = (y - oy) / tp->cell_h;
+
+    /* Clamp to grid */
+    if (col < 0) col = 0;
+    if (col >= tp->cols) col = tp->cols - 1;
+    if (row < 0) row = 0;
+    if (row >= tp->rows) row = tp->rows - 1;
+
+    tp->sel_active = 1;
+    tp->sel_done = 0;
+    tp->sel_start_col = col;
+    tp->sel_start_row = row;
+    tp->sel_end_col = col;
+    tp->sel_end_row = row;
+
+    glyph_window_mark_all_dirty(win);
+}
+
+static void
+term_mouse_move(glyph_window_t *win, int x, int y)
+{
+    term_priv_t *tp = win->priv;
+    if (!tp->sel_active || tp->sel_done)
+        return;
+
+    int ox, oy;
+    get_padding(tp, &ox, &oy);
+
+    int col = (x - ox) / tp->cell_w;
+    int row = (y - oy) / tp->cell_h;
+
+    if (col < 0) col = 0;
+    if (col >= tp->cols) col = tp->cols - 1;
+    if (row < 0) row = 0;
+    if (row >= tp->rows) row = tp->rows - 1;
+
+    if (col != tp->sel_end_col || row != tp->sel_end_row) {
+        tp->sel_end_col = col;
+        tp->sel_end_row = row;
+        glyph_window_mark_all_dirty(win);
+    }
+}
+
+static void
+term_mouse_up(glyph_window_t *win, int x, int y)
+{
+    term_priv_t *tp = win->priv;
+    if (!tp->sel_active)
+        return;
+
+    int ox, oy;
+    get_padding(tp, &ox, &oy);
+
+    int col = (x - ox) / tp->cell_w;
+    int row = (y - oy) / tp->cell_h;
+
+    if (col < 0) col = 0;
+    if (col >= tp->cols) col = tp->cols - 1;
+    if (row < 0) row = 0;
+    if (row >= tp->rows) row = tp->rows - 1;
+
+    tp->sel_end_col = col;
+    tp->sel_end_row = row;
+
+    /* If start == end, it was a click not a drag -- clear selection */
+    if (tp->sel_start_col == tp->sel_end_col &&
+        tp->sel_start_row == tp->sel_end_row) {
+        tp->sel_active = 0;
+    } else {
+        tp->sel_done = 1;
+    }
+
+    glyph_window_mark_all_dirty(win);
+}
+
+static void
+term_scroll_cb(glyph_window_t *win, int direction)
+{
+    term_priv_t *tp = win->priv;
+    int max_offset = SCROLLBACK_LINES;
+
+    if (direction > 0) {
+        /* Scroll up into history */
+        tp->scroll_offset += 3; /* 3 lines per scroll step */
+        if (tp->scroll_offset > max_offset)
+            tp->scroll_offset = max_offset;
+    } else {
+        /* Scroll down toward present */
+        tp->scroll_offset -= 3;
+        if (tp->scroll_offset < 0)
+            tp->scroll_offset = 0;
+    }
+
+    glyph_window_mark_all_dirty(win);
+}
+
+/* ---- Public selection/clipboard helpers ---- */
+
+int
+terminal_has_selection(glyph_window_t *win)
+{
+    if (!win || !win->priv)
+        return 0;
+    term_priv_t *tp = win->priv;
+    return tp->sel_active && tp->sel_done;
+}
+
+int
+terminal_copy_selection(glyph_window_t *win, char *buf, int max)
+{
+    if (!win || !win->priv || max <= 0)
+        return 0;
+    term_priv_t *tp = win->priv;
+    if (!tp->sel_active)
+        return 0;
+
+    int sr, sc, er, ec;
+    sel_normalize(tp, &sr, &sc, &er, &ec);
+
+    int pos = 0;
+    for (int r = sr; r <= er && pos < max - 1; r++) {
+        int c_start = (r == sr) ? sc : 0;
+        int c_end = (r == er) ? ec : tp->cols - 1;
+
+        /* Find last non-space in this row segment to strip trailing spaces */
+        int last_nonspace = c_start - 1;
+        for (int c = c_end; c >= c_start; c--) {
+            char ch = *grid_cell(tp, r, c);
+            if (ch != ' ') {
+                last_nonspace = c;
+                break;
+            }
+        }
+
+        for (int c = c_start; c <= last_nonspace && pos < max - 1; c++) {
+            buf[pos++] = *grid_cell(tp, r, c);
+        }
+
+        /* Add newline between lines (not after last line) */
+        if (r < er && pos < max - 1)
+            buf[pos++] = '\n';
+    }
+
+    buf[pos] = '\0';
+    return pos;
+}
+
+void
+terminal_clear_selection(glyph_window_t *win)
+{
+    if (!win || !win->priv)
+        return;
+    term_priv_t *tp = win->priv;
+    tp->sel_active = 0;
+    tp->sel_done = 0;
+    glyph_window_mark_all_dirty(win);
+}
+
+void
+terminal_scroll_back(glyph_window_t *win, int lines)
+{
+    if (!win || !win->priv)
+        return;
+    term_priv_t *tp = win->priv;
+    tp->scroll_offset += lines;
+    if (tp->scroll_offset > SCROLLBACK_LINES)
+        tp->scroll_offset = SCROLLBACK_LINES;
+    if (tp->scroll_offset < 0)
+        tp->scroll_offset = 0;
     glyph_window_mark_all_dirty(win);
 }
 
@@ -296,29 +576,35 @@ dropdown_render_content(glyph_window_t *win)
     draw_fill_rect(s, 0, 0, win->surf_w, 2, C_ACCENT);
 
     /* Terminal content starts at (4, 4) with small padding */
-    int pad_x = 4;
-    int pad_y = 4;
+    int ox, oy;
+    get_padding(tp, &ox, &oy);
     int cw = tp->cell_w;
     int ch = tp->cell_h;
 
     for (int r = 0; r < tp->rows; r++) {
         for (int c = 0; c < tp->cols; c++) {
-            char gc = tp->grid[r * tp->cols + c];
+            /* Draw selection highlight */
+            if (cell_selected(tp, r, c)) {
+                draw_blend_rect(s, ox + c * cw, oy + r * ch,
+                                cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
+            }
+
+            char gc = *grid_cell(tp, r, c);
             if (gc != ' ') {
                 if (g_font_mono)
                     font_draw_char(s, g_font_mono, 16,
-                                   pad_x + c * cw, pad_y + r * ch,
+                                   ox + c * cw, oy + r * ch,
                                    gc, C_TERM_FG);
                 else
-                    draw_char(s, pad_x + c * cw, pad_y + r * ch,
+                    draw_char(s, ox + c * cw, oy + r * ch,
                               gc, C_TERM_FG, C_TERM_BG);
             }
         }
     }
 
-    /* Cursor block */
-    if (tp->master_fd >= 0)
-        draw_fill_rect(s, pad_x + tp->cx * cw, pad_y + tp->cy * ch,
+    /* Cursor block (only when viewing bottom) */
+    if (tp->master_fd >= 0 && tp->scroll_offset == 0)
+        draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
                        cw, ch, C_TERM_FG);
 
     /* Round the bottom corners by painting the background color
@@ -417,6 +703,47 @@ fail:
     return -1;
 }
 
+/* Allocate the ring-buffer grid and initialize a term_priv_t */
+static term_priv_t *
+term_priv_alloc(int cols, int rows, int cell_w, int cell_h,
+                int pad_x, int pad_y, int is_dropdown)
+{
+    term_priv_t *tp = calloc(1, sizeof(*tp));
+    if (!tp)
+        return NULL;
+
+    tp->master_fd = -1;
+    tp->cols = cols;
+    tp->rows = rows;
+    tp->cell_w = cell_w;
+    tp->cell_h = cell_h;
+    tp->pad_x = pad_x;
+    tp->pad_y = pad_y;
+    tp->is_dropdown = is_dropdown;
+    tp->total_rows = rows + SCROLLBACK_LINES;
+    tp->scroll_top = 0;
+    tp->scroll_offset = 0;
+
+    tp->grid = calloc((unsigned)(tp->total_rows * cols), 1);
+    if (!tp->grid) {
+        free(tp);
+        return NULL;
+    }
+    memset(tp->grid, ' ', (unsigned)(tp->total_rows * cols));
+
+    return tp;
+}
+
+/* Wire up mouse callbacks on a window */
+static void
+term_wire_mouse(glyph_window_t *win)
+{
+    win->on_mouse_down = term_mouse_down;
+    win->on_mouse_move = term_mouse_move;
+    win->on_mouse_up = term_mouse_up;
+    win->on_scroll = term_scroll_cb;
+}
+
 glyph_window_t *
 terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
 {
@@ -434,28 +761,15 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
     if (cols < 10) cols = 10;
     if (rows < 4) rows = 4;
 
-    /* Allocate terminal private data */
-    term_priv_t *tp = calloc(1, sizeof(*tp));
+    /* Allocate terminal private data with ring buffer */
+    term_priv_t *tp = term_priv_alloc(cols, rows, mono_w, mono_h,
+                                      pad_x, pad_y, 1);
     if (!tp) {
         *master_fd_out = -1;
         return NULL;
     }
-    tp->master_fd = -1;
-    tp->cols = cols;
-    tp->rows = rows;
-    tp->cell_w = mono_w;
-    tp->cell_h = mono_h;
-    tp->grid = calloc((unsigned)(cols * rows), 1);
-    if (!tp->grid) {
-        free(tp);
-        *master_fd_out = -1;
-        return NULL;
-    }
-    memset(tp->grid, ' ', (unsigned)(cols * rows));
 
-    /* Create a glyph window — we will override the chrome with our renderer.
-     * Use client_w/client_h = full dropdown size (the chrome adds border+titlebar
-     * but our on_render overwrites everything). */
+    /* Create a glyph window */
     glyph_window_t *win = glyph_window_create("Dropdown", dd_w, dd_h);
     if (!win) {
         free(tp->grid);
@@ -470,6 +784,7 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
     win->closeable = 0;
     win->frosted = 1;
     win->visible = 0;  /* starts hidden */
+    term_wire_mouse(win);
 
     /* Position: centered horizontally at top of screen */
     win->x = margin;
@@ -507,25 +822,19 @@ glyph_window_t *terminal_create(int cols, int rows, int *master_fd_out)
     win->on_render = term_render_content;
     win->frosted = 1;
 
-    /* Allocate terminal private data */
-    term_priv_t *tp = calloc(1, sizeof(*tp));
+    /* Padding for normal terminal: border + titlebar */
+    int pad_x = GLYPH_BORDER_WIDTH;
+    int pad_y = GLYPH_BORDER_WIDTH + GLYPH_TITLEBAR_HEIGHT;
+
+    /* Allocate terminal private data with ring buffer */
+    term_priv_t *tp = term_priv_alloc(cols, rows, mono_w, mono_h,
+                                      pad_x, pad_y, 0);
     if (!tp) {
         glyph_window_destroy(win);
         return NULL;
     }
-    tp->master_fd = -1;
-    tp->cols = cols;
-    tp->rows = rows;
-    tp->cell_w = mono_w;
-    tp->cell_h = mono_h;
-    tp->grid = calloc((unsigned)(cols * rows), 1);
-    if (!tp->grid) {
-        free(tp);
-        glyph_window_destroy(win);
-        return NULL;
-    }
-    memset(tp->grid, ' ', (unsigned)(cols * rows));
     win->priv = tp;
+    term_wire_mouse(win);
 
     /* Open PTY and spawn shell */
     const char *fail_reason = NULL;

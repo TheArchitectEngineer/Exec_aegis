@@ -37,6 +37,22 @@ restore_terminal(void)
     tcsetattr(0, TCSANOW, &s_orig_termios);
 }
 
+/* ---- Clipboard ---- */
+
+#define CLIPBOARD_MAX 8192
+static char s_clipboard[CLIPBOARD_MAX];
+static int s_clipboard_len = 0;
+
+static void
+clipboard_set(const char *text, int len)
+{
+    if (len > CLIPBOARD_MAX - 1)
+        len = CLIPBOARD_MAX - 1;
+    memcpy(s_clipboard, text, (unsigned)len);
+    s_clipboard[len] = '\0';
+    s_clipboard_len = len;
+}
+
 /* ---- Context menu ---- */
 
 #define MENU_ITEM_ABOUT     0
@@ -401,7 +417,31 @@ main(void)
                     activity = 1;
                     goto next_poll;
                 }
-                /* Not Ctrl+Alt+T -- flush ESC + char to focused PTY */
+
+                /* Alt+C -- copy selection from focused terminal */
+                if (kbd_byte == 'c' && comp.focused &&
+                    terminal_has_selection(comp.focused)) {
+                    char sel_buf[CLIPBOARD_MAX];
+                    int sel_len = terminal_copy_selection(comp.focused,
+                                                         sel_buf, CLIPBOARD_MAX);
+                    if (sel_len > 0) {
+                        clipboard_set(sel_buf, sel_len);
+                        terminal_clear_selection(comp.focused);
+                    }
+                    activity = 1;
+                    goto next_poll;
+                }
+
+                /* Alt+V -- paste clipboard into focused terminal's PTY */
+                if (kbd_byte == 'v' && comp.focused &&
+                    comp.focused->tag > 0 && s_clipboard_len > 0) {
+                    write(comp.focused->tag, s_clipboard,
+                          (unsigned)s_clipboard_len);
+                    activity = 1;
+                    goto next_poll;
+                }
+
+                /* Not a recognized Alt combo -- flush ESC + char to focused PTY */
                 int mfd = (comp.focused && comp.focused->tag > 0)
                           ? comp.focused->tag : -1;
                 if (mfd >= 0) {

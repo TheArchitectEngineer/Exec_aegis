@@ -25,6 +25,7 @@ typedef struct {
     int dragging;
     glyph_window_t *drag_win;
     int drag_dx, drag_dy;
+    glyph_window_t *content_drag_win; /* window receiving mouse drag events */
     int prev_buttons;
 
     /* Dirty rect accumulator */

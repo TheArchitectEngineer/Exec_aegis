@@ -124,6 +124,10 @@ struct glyph_window {
     void (*on_key)(glyph_window_t *self, char key);
     void (*on_close)(glyph_window_t *self);
     void (*on_render)(glyph_window_t *self);  /* custom client area render (after chrome) */
+    void (*on_mouse_down)(glyph_window_t *self, int x, int y);
+    void (*on_mouse_move)(glyph_window_t *self, int x, int y);
+    void (*on_mouse_up)(glyph_window_t *self, int x, int y);
+    void (*on_scroll)(glyph_window_t *self, int direction); /* +1 up, -1 down */
     void *priv;
     int tag;  /* generic integer tag — lumen uses for PTY master fd */
 };

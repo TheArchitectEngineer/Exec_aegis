@@ -154,9 +154,9 @@ comp_add_dirty(compositor_t *c, glyph_rect_t r)
 /* ---- Composite ---- */
 
 static void
-blit_window_to_back(surface_t *back, glyph_window_t *win)
+blit_window_to_back(surface_t *back, glyph_window_t *win, int force_opaque)
 {
-    if (win->frosted) {
+    if (win->frosted && !force_opaque) {
         /* Frosted glass: blur background behind window, apply dark tint,
          * then keyed-blit the window surface (C_TERM_BG pixels become
          * transparent, letting the frosted background show through). */
@@ -237,7 +237,8 @@ comp_composite(compositor_t *c)
                 continue;
             glyph_window_mark_all_dirty(win);
             glyph_window_render(win);
-            blit_window_to_back(&c->back, win);
+            int opaque = (c->dragging && win == c->drag_win);
+            blit_window_to_back(&c->back, win, opaque);
         }
 
         /* Overlay (frosted glass dock etc.) -- after windows, before flip */
@@ -315,7 +316,8 @@ comp_composite(compositor_t *c)
             continue;
 
         glyph_window_render(win);
-        blit_window_to_back(&c->back, win);
+        int opaque = (c->dragging && win == c->drag_win);
+        blit_window_to_back(&c->back, win, opaque);
     }
 
     /* Overlay (frosted glass dock etc.) -- after windows, before flip */
@@ -377,7 +379,28 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         comp_add_dirty(c, new_r);
     }
 
-    /* Drag in progress */
+    /* Content drag in progress (mouse selection in client area) */
+    if (c->content_drag_win && left) {
+        int local_x = c->cursor_x - c->content_drag_win->x;
+        int local_y = c->cursor_y - c->content_drag_win->y;
+        if (c->content_drag_win->on_mouse_move)
+            c->content_drag_win->on_mouse_move(c->content_drag_win, local_x, local_y);
+        c->prev_buttons = buttons;
+        return;
+    }
+
+    /* Content drag released */
+    if (c->content_drag_win && !left) {
+        int local_x = c->cursor_x - c->content_drag_win->x;
+        int local_y = c->cursor_y - c->content_drag_win->y;
+        if (c->content_drag_win->on_mouse_up)
+            c->content_drag_win->on_mouse_up(c->content_drag_win, local_x, local_y);
+        c->content_drag_win = NULL;
+        c->prev_buttons = buttons;
+        return;
+    }
+
+    /* Titlebar drag in progress */
     if (c->dragging && left) {
         if (c->drag_win) {
             glyph_rect_t old_r = win_screen_rect(c->drag_win);
@@ -392,7 +415,7 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         return;
     }
 
-    /* Drag released */
+    /* Titlebar drag released */
     if (c->dragging && !left) {
         c->dragging = 0;
         c->drag_win = NULL;
@@ -446,6 +469,13 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
             /* Dispatch to glyph window (converts to window-local coords) */
             int local_x = c->cursor_x - win->x;
             int local_y = c->cursor_y - win->y;
+
+            /* Content area mouse-down: start content drag for selection */
+            if (win->on_mouse_down) {
+                win->on_mouse_down(win, local_x, local_y);
+                c->content_drag_win = win;
+            }
+
             glyph_window_dispatch_mouse(win, 1, local_x, local_y);
         }
     }
