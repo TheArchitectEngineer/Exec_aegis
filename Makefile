@@ -746,6 +746,7 @@ sym:
 test:
 	$(MAKE) INIT=shell GRUB_CFG=tools/grub-test.cfg iso
 	@cp $(BUILD)/aegis.iso $(BUILD)/aegis-test.iso
+	@rm -f $(BUILD)/aegis.iso
 	$(MAKE) INIT=vigil GRUB_CFG=tools/grub-test.cfg iso
 	$(MAKE) disk
 	@bash tests/run_tests.sh
