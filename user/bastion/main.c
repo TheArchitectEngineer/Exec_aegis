@@ -340,7 +340,8 @@ main(void)
     /* Map framebuffer */
     memset(&s_fb_info, 0, sizeof(s_fb_info));
     if (syscall(SYS_FB_MAP, &s_fb_info) < 0) {
-        dprintf(2, "bastion: sys_fb_map failed\n");
+        dprintf(2, "bastion: sys_fb_map failed, sleeping 30s to avoid respawn storm\n");
+        sleep(30);
         return 1;
     }
     s_fb = (uint32_t *)(uintptr_t)s_fb_info.addr;
