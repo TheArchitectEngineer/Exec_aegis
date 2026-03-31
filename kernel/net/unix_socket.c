@@ -92,17 +92,34 @@ static uint32_t name_lookup(const char *path)
 
 /* ── VFS ops ───────────────────────────────────────────────────────────── */
 
+/* VFS read/write ops receive user-space pointers from sys_read/sys_write.
+ * With SMAP enabled, the kernel cannot access them directly. Bounce
+ * through a stack buffer, same pattern as pipe and console VFS ops. */
+
+extern void copy_from_user(void *dst, const void *src, uint32_t n);
+extern void copy_to_user(void *dst, const void *src, uint32_t n);
+
 static int unix_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
 {
     (void)off;
     uint32_t id = (uint32_t)(uintptr_t)priv;
-    return unix_sock_read(id, buf, (uint32_t)len);
+    uint8_t kbuf[1024];
+    uint32_t want = (uint32_t)len;
+    if (want > 1024) want = 1024;
+    int n = unix_sock_read(id, kbuf, want);
+    if (n > 0)
+        copy_to_user(buf, kbuf, (uint32_t)n);
+    return n;
 }
 
 static int unix_vfs_write(void *priv, const void *buf, uint64_t len)
 {
     uint32_t id = (uint32_t)(uintptr_t)priv;
-    return unix_sock_write(id, buf, (uint32_t)len);
+    uint8_t kbuf[1024];
+    uint32_t want = (uint32_t)len;
+    if (want > 1024) want = 1024;
+    copy_from_user(kbuf, buf, want);
+    return unix_sock_write(id, kbuf, want);
 }
 
 static void unix_vfs_close(void *priv)
