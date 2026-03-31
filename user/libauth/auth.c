@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/syscall.h>
@@ -34,9 +35,21 @@ capd_request(unsigned int kind)
     return -1;
 connected:;
     write(sock, &kind, sizeof(kind));
+    /* Read response with manual timeout — poll in non-blocking mode.
+     * AF_UNIX reads via sys_read don't support SO_RCVTIMEO, so we
+     * set O_NONBLOCK and retry with usleep to avoid blocking forever
+     * if capd closes without sending a response. */
+    fcntl(sock, F_SETFL, O_NONBLOCK);
     int result = -1;
-    read(sock, &result, sizeof(result));
+    ssize_t n = -1;
+    for (int wait = 0; wait < 20; wait++) {  /* 20 × 100ms = 2s timeout */
+        n = read(sock, &result, sizeof(result));
+        if (n > 0) break;
+        if (n == 0) break;  /* EOF — capd closed */
+        usleep(100000);
+    }
     close(sock);
+    if (n != (ssize_t)sizeof(result)) return -1;
     return result >= 0 ? 0 : -1;
 }
 
