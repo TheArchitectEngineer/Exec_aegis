@@ -383,7 +383,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 43a | **Deep architecture audit** — file-by-file review of kernel + userspace. Prioritized fix list. Multiple parallel agents. | ✅ Done |
 | 44 | **IPC** — AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS fd passing; memfd_create + MAP_SHARED; SO_PEERCRED; CAP_KIND_IPC. Unlocks external Glyph apps and capd. | ✅ Done |
 | 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh grant builtin; AF_UNIX ring buffer fix | ✅ Done |
-| 46 | **Bastion** — graphical display manager (login screen); replaces text login | Not started |
+| 46 | **Bastion** — graphical display manager; libauth.a + libcitadel.a extraction; login/lock/unlock; Ctrl+Alt+L | 🔶 Code complete, untested graphical |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
 | 48 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
 | 49 | **Deep security audit** — adversarial review of every attack surface. Syscall fuzzing, capability bypass, TOCTOU races, integer overflows, use-after-free, signal reentrancy, ext2 corruption resilience, VFS traversal, kernel info leaks, SMP atomicity. CVE-grade findings block release. pwn binary expanded. | Not started |
