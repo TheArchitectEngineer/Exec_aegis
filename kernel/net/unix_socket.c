@@ -96,8 +96,7 @@ static uint32_t name_lookup(const char *path)
  * With SMAP enabled, the kernel cannot access them directly. Bounce
  * through a stack buffer, same pattern as pipe and console VFS ops. */
 
-extern void copy_from_user(void *dst, const void *src, uint32_t n);
-extern void copy_to_user(void *dst, const void *src, uint32_t n);
+#include "../mm/uaccess.h"
 
 static int unix_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)
 {
