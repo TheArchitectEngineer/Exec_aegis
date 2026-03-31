@@ -110,12 +110,12 @@ void ip_loopback_poll(void)
 int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
             const void *payload, uint16_t len)
 {
-    if (!dev)        return -1;
     if (len > 1480)  return -1; /* EMSGSIZE — no fragmentation in v1 */
     irqflags_t ip_fl = spin_lock_irqsave(&ip_lock);
 
     /* Loopback: if destination is ourselves or 127.0.0.0/8, queue the
-     * packet for deferred delivery instead of sending it to the NIC. */
+     * packet for deferred delivery instead of sending it to the NIC.
+     * Loopback works without a NIC (dev may be NULL). */
     if ((s_my_ip != 0 && dst_ip == s_my_ip) ||
         (ntohl(dst_ip) >> 24) == 127) {
         if (s_lo_head - s_lo_tail >= LO_RING_SIZE) {
@@ -142,6 +142,12 @@ int ip_send(netdev_t *dev, ip4_addr_t dst_ip, uint8_t proto,
         s_lo_head++;
         spin_unlock_irqrestore(&ip_lock, ip_fl);
         return 0;
+    }
+
+    /* Non-loopback path requires a real NIC. */
+    if (!dev) {
+        spin_unlock_irqrestore(&ip_lock, ip_fl);
+        return -1;
     }
 
     /* Build 20-byte IPv4 header in shared buffer under ip_lock. */
