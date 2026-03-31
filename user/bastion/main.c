@@ -314,6 +314,22 @@ do_auth(void)
 int
 main(void)
 {
+    /* Exit immediately if booted in text mode — Bastion is graphical only.
+     * This is a safety check in case Vigil's mode filter doesn't catch it. */
+    {
+        int cfd = open("/proc/cmdline", O_RDONLY);
+        if (cfd >= 0) {
+            char cmd[128];
+            int cn = (int)read(cfd, cmd, sizeof(cmd) - 1);
+            close(cfd);
+            if (cn > 0) {
+                cmd[cn] = '\0';
+                if (strstr(cmd, "boot=text"))
+                    return 0;
+            }
+        }
+    }
+
     /* Request capabilities from capd */
     auth_request_caps();
 
