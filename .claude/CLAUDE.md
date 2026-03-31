@@ -457,30 +457,45 @@ Aegis has its own native GUI stack — no X11, no Wayland, no bloat. The framebu
 | **Lumen** | Display server + compositor | Wayland compositor | Owns the framebuffer. Composites client windows. Dispatches keyboard/mouse events to the focused window. Renders the cursor. Single process, no network transparency. |
 | **Glyph** | Widget toolkit library | GTK/Qt | `libglyph.so` — shared library that apps link against. Provides buttons, labels, text input, window chrome, layout. Apps `#include <glyph.h>`. Dynamically linked. |
 | **Citadel** | Desktop shell | GNOME Shell / KDE Plasma | Taskbar, application launcher, desktop icons, clock, system tray. First real Glyph application. |
-| **Bastion** | Display manager | GDM / SDDM | Graphical login screen. Replaces text-mode login. Future work. |
+| **Bastion** | Display manager | GDM / SDDM | Graphical login screen + lock screen. Owns the graphical session lifecycle. Authenticates via `libauth.a`. Spawns Lumen after successful login. |
 
-### Architecture (v0.1)
+### Architecture
 
-In v0.1, Lumen + Citadel run as a single process that owns the framebuffer. Glyph is a shared library. The window manager is built into Lumen (no separate WM process).
+**v0.2 (Phase 46):** Bastion owns the graphical session. Vigil starts Bastion
+(not Lumen). Bastion authenticates, then spawns Lumen as a child process.
+Citadel is `libcitadel.a` linked into Lumen. Auth is `libauth.a` shared
+between `/bin/login` (text) and `/bin/bastion` (graphical).
 
 ```
 ┌─────────────────────────────────────────────┐
 │                 Framebuffer                  │
 │            (mapped via sys_fb_map)           │
 ├─────────────────────────────────────────────┤
-│              Lumen (compositor)              │
-│  - owns FB mapping                          │
-│  - keyboard/mouse event dispatch            │
-│  - window management (built-in v0.1)        │
-│  - cursor rendering                         │
-├──────────┬──────────┬───────────────────────┤
-│ Citadel  │ App 1    │ App 2    ...          │
-│ (shell)  │          │                       │
-├──────────┴──────────┴───────────────────────┤
-│           libglyph.so (widgets)             │
-│  buttons, labels, text, windows, layout     │
+│  Bastion (display manager)                  │
+│  - greeter: login form via Glyph            │
+│  - lock screen: same form, user pre-filled  │
+│  - spawns Lumen after auth                  │
+│  - waitpid → re-show greeter on logout      │
+├─────────────────────────────────────────────┤
+│  Lumen (compositor) — child of Bastion      │
+│  - owns FB during session                   │
+│  - links libcitadel.a (dock, taskbar, etc.) │
+│  - links libglyph.a (widgets)               │
+│  - Win+L → SIGUSR1 to Bastion → lock        │
+├──────────┬──────────────────────────────────┤
+│ Terminal │ Terminal  ...  (PTY children)     │
+├──────────┴──────────────────────────────────┤
+│  libglyph.a (widgets)  libcitadel.a (shell) │
+│  libauth.a (shared with /bin/login)         │
 └─────────────────────────────────────────────┘
 ```
+
+**Target architecture (future):** Lumen becomes `liblumen.a` — a compositing
+library. Bastion links `liblumen.a` + `libglyph.a` + `libcitadel.a` +
+`libauth.a`. One binary owns the entire graphical session: authentication,
+compositing, desktop shell, and lock screen. No framebuffer handoff between
+processes. This eliminates the sys_spawn boundary and the SIGUSR1/2 lock
+protocol.
 
 ### Font
 
