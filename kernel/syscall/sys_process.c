@@ -255,7 +255,7 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
         return (uint64_t)(int64_t)-11;  /* -EAGAIN */
 
     /* 1. Allocate child PCB. */
-    aegis_process_t *child = kva_alloc_pages(1);
+    aegis_process_t *child = kva_alloc_pages(2);
     if (!child)
         return (uint64_t)-(int64_t)12;  /* -ENOMEM */
 
@@ -269,7 +269,7 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     } else {
         child->fd_table = fd_table_copy(parent->fd_table);
         if (!child->fd_table) {
-            kva_free_pages(child, 1);
+            kva_free_pages(child, 2);
             return (uint64_t)-(int64_t)12;  /* -ENOMEM */
         }
     }
@@ -336,7 +336,7 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
     /* 6. Allocate child kernel stack (4 pages / 16 KB). */
     uint8_t *kstack = kva_alloc_pages(4);
     if (!kstack) {
-        kva_free_pages(child, 1);
+        kva_free_pages(child, 2);
         return (uint64_t)-(int64_t)12;  /* -ENOMEM */
     }
 
@@ -481,14 +481,14 @@ sys_fork(syscall_frame_t *frame)
         return (uint64_t)(int64_t)-11;  /* -EAGAIN */
 
     /* 1. Allocate child PCB */
-    aegis_process_t *child = kva_alloc_pages(1);
+    aegis_process_t *child = kva_alloc_pages(2);
     if (!child)
         return (uint64_t)-(int64_t)12;   /* -ENOMEM */
 
     /* 2. Copy parent fd table (allocates new table, bumps driver refs) */
     child->fd_table = fd_table_copy(parent->fd_table);
     if (!child->fd_table) {
-        kva_free_pages(child, 1);
+        kva_free_pages(child, 2);
         return (uint64_t)-(int64_t)12;   /* -ENOMEM */
     }
 
@@ -548,7 +548,7 @@ sys_fork(syscall_frame_t *frame)
         /* C3: free fd_table + VMA allocated above */
         kva_free_pages(child->fd_table, 1);
         vma_clear(child);
-        kva_free_pages(child, 1);
+        kva_free_pages(child, 2);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
 
@@ -557,7 +557,7 @@ sys_fork(syscall_frame_t *frame)
         vmm_free_user_pml4(child->pml4_phys);
         kva_free_pages(child->fd_table, 1);
         vma_clear(child);
-        kva_free_pages(child, 1);
+        kva_free_pages(child, 2);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
 
@@ -569,7 +569,7 @@ sys_fork(syscall_frame_t *frame)
         vmm_free_user_pml4(child->pml4_phys);
         kva_free_pages(child->fd_table, 1);
         vma_clear(child);
-        kva_free_pages(child, 1);
+        kva_free_pages(child, 2);
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
 
@@ -759,7 +759,7 @@ retry:;
                 kva_free_pages(child->task.stack_base, child->task.stack_pages);
                 vmm_free_user_pml4(child->pml4_phys);
                 vma_free(child);
-                kva_free_pages(child, 1);
+                kva_free_pages(child, 2);
 
                 /* Clear waiting_for on the caller — no longer blocked. */
                 sched_current()->waiting_for = 0;
@@ -1601,12 +1601,12 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
     }
 
     /* 4. Allocate child PCB */
-    aegis_process_t *child = kva_alloc_pages(1);
+    aegis_process_t *child = kva_alloc_pages(2);
     if (!child) { result = (uint64_t)-(int64_t)12; goto fail_early; }
 
     /* 5. Create fresh PML4 for child */
     child->pml4_phys = vmm_create_user_pml4();
-    if (!child->pml4_phys) { kva_free_pages(child, 1); result = (uint64_t)-(int64_t)12; goto fail_early; }
+    if (!child->pml4_phys) { kva_free_pages(child, 2); result = (uint64_t)-(int64_t)12; goto fail_early; }
 
     /* 6. Load ELF into child's PML4 */
     elf_load_result_t er;
@@ -1616,7 +1616,7 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
 
     if (elf_load(child->pml4_phys, elf_data, (size_t)elf_size, 0, &er) != 0) {
         vmm_free_user_pml4(child->pml4_phys);
-        kva_free_pages(child, 1);
+        kva_free_pages(child, 2);
         result = (uint64_t)-(int64_t)8;  /* ENOEXEC */
         goto fail_early;
     }
@@ -1971,7 +1971,7 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
 
 fail_child:
     vmm_free_user_pml4(child->pml4_phys);
-    kva_free_pages(child, 1);
+    kva_free_pages(child, 2);
     if (!result) result = (uint64_t)-(int64_t)12;  /* ENOMEM */
 
 fail_early:

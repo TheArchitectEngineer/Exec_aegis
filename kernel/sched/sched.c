@@ -142,7 +142,8 @@ sched_exit(void)
     percpu_t *pc = percpu_self();
     if (pc->prev_dying_tcb) {
         kva_free_pages(pc->prev_dying_stack, pc->prev_dying_stack_pages);
-        kva_free_pages(pc->prev_dying_tcb, 1);
+        kva_free_pages(pc->prev_dying_tcb,
+                       ((aegis_task_t *)pc->prev_dying_tcb)->is_user ? 2 : 1);
         pc->prev_dying_tcb = NULL;
     }
 
