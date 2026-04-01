@@ -293,14 +293,14 @@ A subsystem is ✅ only when `make test` passes with it included.
 | USB HID mouse (Phase 36) | ✅ | /dev/mouse VFS; boot protocol + PS/2 mouse; xHCI device type detection; hotplug; installer crypt(); **ThinkPad Zen 2 bare-metal PASS** |
 | Lumen compositor (Phase 37) | ✅ | Backbuffer composite; z-order windows; save-under cursor; PTY terminal; taskbar; polling event loop; **ThinkPad Zen 2 bare-metal PASS** (slow rendering — optimization needed) |
 | SMP (Phase 38) | ✅ | LAPIC+IOAPIC; ~30 spinlocks; SWAPGS+per-CPU GS.base; AP trampoline+SIPI; LAPIC timer; per-CPU GDT/TSS; TLB shootdown; boot oracle PASS; **ThinkPad X13 Zen 2 bare-metal PASS** |
-| Glyph + Lumen optimization (Phase 39) | ✅ | libglyph.a widget toolkit; dirty-rect compositor; scheduler busy-wait fixes; MMIO skip in fork; batch yield; **make test 25/25 PASS** |
+| Glyph + Lumen optimization (Phase 39) | ✅ | libglyph.a widget toolkit; dirty-rect compositor; scheduler busy-wait fixes; MMIO skip in fork; batch yield; PTY hang fixed; **make test 25/25 PASS** |
 | Citadel + sys_spawn (Phase 40) | ✅ | sys_spawn (514) no-fork process creation; lumen terminal via spawn; desktop icons; /bin/sh; fb_lock re-enabled; **ThinkPad Zen 2 bare-metal PASS** (gradual lag + freeze after ~60s — optimization needed) |
 | Bug fixes (Phase 40b) | ✅ | ARP deadlock from ISR (test_socket root cause since Phase 26); proc_spawn PT_INTERP (q35 RIP=0x0); socket lost-wakeup race; test_socket DHCP wait; **make test + test_socket PASS** |
 | Symlinks + chmod/chown (Phase 41) | ✅ | ext2 symlinks (fast+slow); ext2_open_ex path walk; chmod/chown/lchown; DAC enforcement; ln/chmod/chown/readlink tools; **boot oracle + test_symlink PASS** |
 | stsh — Styx shell (Phase 42) | ✅ | CAP_DELEGATE(13)+CAP_QUERY(14); sys_cap_query(362); sys_spawn cap_mask(5th param); line editing; history(no-persist privileged); tab completion; caps/sandbox builtins; env vars; paste detection; login fallback. **make test 25/25 PASS; ThinkPad Zen 2 bare-metal PASS** |
 | Quiet boot + lumen fixes (Phase 42b) | ✅ | printk_quiet; console direct output; DHCP via stderr; sys_setfg scoped to controlling TTY; tty_read SIG_IGN bypass; lumen SIGTTIN ignore; dual-ISO test harness; login backspace; **ThinkPad Zen 2 bare-metal PASS** |
 | IPC (Phase 44) | ✅ | AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS; SO_PEERCRED; memfd_create+ftruncate; MAP_SHARED; CAP_KIND_IPC(15); ipc_test 5/5; **make test 26/26 PASS** |
-| capd + sys_cap_grant (Phase 45) | 🔶 | sys_cap_grant(363); capd daemon (AF_UNIX binary protocol); /etc/aegis/capd.d/ policy files; vigil caps→capd migration; stsh grant builtin; AF_UNIX ring buffer use-after-free fix; **make test 26/27 PASS** — `ls /` OOM from kva VA exhaustion (deferred, not Phase 45 regression) |
+| capd + sys_cap_grant (Phase 45) | ✅ | sys_cap_grant(363); capd daemon; /etc/aegis/capd.d/ policy files; stsh grant builtin; AF_UNIX ring buffer fix; **make test 26/27 PASS** — `ls /` OOM pre-existing |
 
 ### Known deviations
 
@@ -375,7 +375,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 36 | **USB HID mouse** — boot protocol + PS/2 mouse; /dev/mouse VFS; installer crypt() | ✅ Done |
 | 37 | **Lumen** — display compositor; backbuffer composite, z-order windows, PTY terminal, save-under cursor, taskbar | ✅ Done |
 | 38 | **SMP** — LAPIC+IOAPIC, ~30 spinlocks, SWAPGS, per-CPU GS.base, AP trampoline, LAPIC timer, TLB shootdown | ✅ Done |
-| 39 | **Glyph** — widget toolkit (libglyph.a); dirty-rect compositor; PTY terminal fix | 🔶 PTY hang |
+| 39 | **Glyph** — widget toolkit (libglyph.a); dirty-rect compositor; PTY terminal fix | ✅ Done |
 | 40 | **Citadel** — sys_spawn syscall; lumen terminal via spawn (no fork); desktop icons; /bin/sh shell | ✅ Done |
 | 41 | **Symlinks + chmod/chown** — ext2 symlinks; POSIX DAC permission enforcement; chmod/chown/lchown syscalls | ✅ Done |
 | 42 | **stsh** — the Styx shell. Capability-aware control plane. `caps`/`sandbox` builtins; `CAP_KIND_CAP_DELEGATE` + `CAP_KIND_CAP_QUERY` syscalls; line editing; history; tab completion; paste detection. Login chain grants delegate/query caps; exec baseline does not. | ✅ Done |
@@ -383,7 +383,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 43a | **Deep architecture audit** — file-by-file review of kernel + userspace. Prioritized fix list. Multiple parallel agents. | ✅ Done |
 | 44 | **IPC** — AF_UNIX SOCK_STREAM; sendmsg/recvmsg SCM_RIGHTS fd passing; memfd_create + MAP_SHARED; SO_PEERCRED; CAP_KIND_IPC. Unlocks external Glyph apps and capd. | ✅ Done |
 | 45 | **capd + capability helpers** — `sys_cap_grant` (runtime delegation); `capd` daemon (declarative policy files, Unix socket, audit log); stsh grant builtin; AF_UNIX ring buffer fix | ✅ Done |
-| 46 | **Bastion** — graphical display manager; libauth.a + libcitadel.a extraction; login/lock/unlock; Ctrl+Alt+L | 🔶 Code complete, untested graphical |
+| 46 | **Bastion** — graphical display manager; libauth.a + libcitadel.a extraction; login/lock/unlock; Ctrl+Alt+L | ✅ Done |
+| 46b | **GUI polish** — dark mode, frosted glass, TTF fonts, About Aegis, crossfade transitions, sys_reboot, CAP_KIND_POWER, sys_spawn envp, boot splash alignment, PCB 2-page fix | ✅ Done |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
 | 48 | **Super key + extended keyboard** — PS/2 E0 state machine; Super modifier tracking; ESC-prefix encoding for Super combos (Win+L); USB HID GUI modifier bits; multimedia scancodes (vol/mute) | Not started |
 | 49 | **HDA audio** — Intel HDA controller driver; PCM playback/capture; /dev/audio VFS; mixer (volume/mute); CAP_KIND_AUDIO; system sounds | Not started |

@@ -79,8 +79,9 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     kva_init();             /* kernel virtual allocator — [KVA] OK           */
     arch_set_master_pml4(vmm_get_master_pml4()); /* store master PML4 for ISR/SYSCALL */
     fb_init();              /* linear framebuffer — [FB] OK or silent        */
-    if (!arch_early_key_held())
-        fb_boot_splash();   /* show Aegis logo (skipped if key held)         */
+    /* Boot splash disabled — GRUB wallpaper already shows centered logo,
+     * and fb_boot_splash's s_fb_locked=1 prevented Bastion from rendering
+     * unless a key was held during boot (which skipped the splash). */
     cap_init();             /* capability stub — [CAP] OK                    */
     smp_percpu_init_bsp();  /* per-CPU data — [SMP] OK                       */
     idt_init();             /* 48 interrupt gates — [IDT] OK                 */
