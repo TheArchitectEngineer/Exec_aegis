@@ -56,23 +56,23 @@ kernel_main(uint32_t mb_magic, void *mb_info)
 
     arch_init();            /* serial_init + vga_init                        */
     arch_pat_init();        /* PAT MSR: PA1=WC for framebuffer mapping       */
-    arch_mm_init(mb_info);  /* parse multiboot2 memory map                   */
+    arch_mm_init(mb_info);  /* parse multiboot2 memory map + cmdline         */
+    /* Parse quiet flag immediately after cmdline is available — before any
+     * subsystem init lines can write to VGA/FB.
+     * This prevents the brief flash of kernel boot messages on the
+     * graphical framebuffer during graphical boot. */
     {
         const char *cmdline = arch_get_cmdline();
+        const char *q = cmdline;
+        while (*q) {
+            if (q[0]=='q' && q[1]=='u' && q[2]=='i' && q[3]=='e' && q[4]=='t')
+                { printk_set_quiet(1); break; }
+            q++;
+        }
         if (cmdline[0])
             printk("[CMDLINE] OK: %s\n", cmdline);
         else
             printk("[CMDLINE] OK: (none)\n");
-        /* boot=quiet: suppress kernel printk on VGA/FB, serial only.
-         * Console device (user output) bypasses this. */
-        {
-            const char *q = cmdline;
-            while (*q) {
-                if (q[0]=='q' && q[1]=='u' && q[2]=='i' && q[3]=='e' && q[4]=='t')
-                    { printk_set_quiet(1); break; }
-                q++;
-            }
-        }
     }
     pmm_init();             /* bitmap allocator — [PMM] OK                   */
     vmm_init();             /* page tables, higher-half map — [VMM] OK       */

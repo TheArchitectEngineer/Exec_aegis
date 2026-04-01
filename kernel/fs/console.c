@@ -29,18 +29,20 @@ console_write_fn(void *priv, const void *buf, uint64_t len)
             n = to_end;
     }
     copy_from_user(kbuf, buf, n);
-    /* Write char-by-char to serial + VGA + FB.  User process output
-     * (login, shell, commands) must always be visible on screen.
-     * Only kernel printk respects printk_quiet — not the console device. */
+    /* Write char-by-char to serial + screen.
+     * In quiet+graphical mode, suppress VGA/FB to prevent boot log flash
+     * on the framebuffer before Bastion/Lumen take over.
+     * Text mode (no quiet) always shows output on screen. */
+    int quiet = printk_get_quiet();
     uint64_t i;
     for (i = 0; i < n; i++) {
         char tmp[2];
         tmp[0] = kbuf[i];
         tmp[1] = '\0';
         serial_write_string(tmp);
-        if (vga_available)
+        if (!quiet && vga_available)
             vga_write_string(tmp);
-        if (fb_available)
+        if (!quiet && fb_available)
             fb_putchar(kbuf[i]);
     }
     return (int)n;
