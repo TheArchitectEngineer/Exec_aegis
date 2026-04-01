@@ -114,6 +114,8 @@ load_logo(void)
 static uint32_t *s_claude_px;
 static int s_claude_w, s_claude_h;
 
+static int s_screen_w, s_screen_h;  /* actual display resolution */
+
 static void
 load_claude_logo(void)
 {
@@ -191,20 +193,20 @@ about_render(glyph_window_t *win)
     /* Version */
     if (g_font_ui) {
         const char *ver = "Version 1.0.0  \"Ambient Argus\"";
-        int tw = font_text_width(g_font_ui, 13, ver);
-        font_draw_text(s, g_font_ui, 13, cx + (cw - tw) / 2, y, ver, 0x00B0B0C0);
+        int tw = font_text_width(g_font_ui, 16, ver);
+        font_draw_text(s, g_font_ui, 16, cx + (cw - tw) / 2, y, ver, 0x00B0B0C0);
     } else {
         draw_text_t(s, cx + 20, y, "Version 1.0.0", 0x00B0B0C0);
     }
-    y += 20;
+    y += 24;
 
     /* Tagline */
     if (g_font_ui) {
         const char *tag = "Capability-based POSIX-compatible kernel";
-        int tw = font_text_width(g_font_ui, 12, tag);
-        font_draw_text(s, g_font_ui, 12, cx + (cw - tw) / 2, y, tag, 0x00808898);
+        int tw = font_text_width(g_font_ui, 14, tag);
+        font_draw_text(s, g_font_ui, 14, cx + (cw - tw) / 2, y, tag, 0x00808898);
     }
-    y += 28;
+    y += 30;
 
     /* Separator */
     draw_blend_rect(s, cx + 30, y, cw - 60, 1, 0x00FFFFFF, 20);
@@ -218,18 +220,18 @@ about_render(glyph_window_t *win)
     char info[128];
     snprintf(info, sizeof(info), "CPU: %s", cpu_str);
     if (g_font_ui)
-        font_draw_text(s, g_font_ui, 12, cx + 24, y, info, C_TEXT);
-    y += 18;
+        font_draw_text(s, g_font_ui, 14, cx + 24, y, info, C_TEXT);
+    y += 22;
 
     snprintf(info, sizeof(info), "Memory: %s", mem_str);
     if (g_font_ui)
-        font_draw_text(s, g_font_ui, 12, cx + 24, y, info, C_TEXT);
-    y += 18;
+        font_draw_text(s, g_font_ui, 14, cx + 24, y, info, C_TEXT);
+    y += 22;
 
-    snprintf(info, sizeof(info), "Display: %dx%d", win->client_w + 40, win->client_h + 200);
+    snprintf(info, sizeof(info), "Display: %dx%d", s_screen_w, s_screen_h);
     if (g_font_ui)
-        font_draw_text(s, g_font_ui, 12, cx + 24, y, info, C_TEXT);
-    y += 28;
+        font_draw_text(s, g_font_ui, 14, cx + 24, y, info, C_TEXT);
+    y += 30;
 
     /* Separator */
     draw_blend_rect(s, cx + 30, y, cw - 60, 1, 0x00FFFFFF, 20);
@@ -237,12 +239,12 @@ about_render(glyph_window_t *win)
 
     /* Credits */
     if (g_font_ui) {
-        font_draw_text(s, g_font_ui, 12, cx + 24, y,
+        font_draw_text(s, g_font_ui, 14, cx + 24, y,
                        "Created by Dylan Hart", 0x00C0C0D0);
-        y += 16;
-        font_draw_text(s, g_font_ui, 11, cx + 24, y,
+        y += 20;
+        font_draw_text(s, g_font_ui, 13, cx + 24, y,
                        "github.com/exec", 0x00808898);
-        y += 24;
+        y += 28;
     } else {
         draw_text_t(s, cx + 24, y, "Created by Dylan Hart", 0x00C0C0D0);
         y += 20;
@@ -250,56 +252,60 @@ about_render(glyph_window_t *win)
         y += 24;
     }
 
-    /* Claude logo + attribution */
-    if (s_claude_px && s_claude_w > 0) {
-        /* Scale to 24px height */
+    /* Claude logo + attribution — pinned to bottom of window */
+    {
         int target_h = 24;
-        int target_w = s_claude_w * target_h / s_claude_h;
-        if (target_w <= 0) target_w = 24;
-        int lx = cx + 24;
-        for (int row = 0; row < target_h; row++) {
-            int sr = row * s_claude_h / target_h;
-            if (sr >= s_claude_h) break;
-            for (int col = 0; col < target_w; col++) {
-                int sc = col * s_claude_w / target_w;
-                if (sc >= s_claude_w) break;
-                uint32_t px = s_claude_px[sr * s_claude_w + sc];
-                uint32_t a = (px >> 24) & 0xFF;
-                if (a > 0) {
-                    int dx = lx + col;
-                    int dy = y + row;
-                    if (dx >= 0 && dx < s->w && dy >= 0 && dy < s->h) {
-                        if (a == 0xFF) {
-                            s->buf[dy * s->pitch + dx] = px & 0x00FFFFFF;
-                        } else {
-                            uint32_t bg = s->buf[dy * s->pitch + dx];
-                            uint32_t inv = 255 - a;
-                            uint32_t r2 = (((px >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * inv) / 255;
-                            uint32_t g2 = (((px >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * inv) / 255;
-                            uint32_t b2 = ((px & 0xFF) * a + (bg & 0xFF) * inv) / 255;
-                            s->buf[dy * s->pitch + dx] = (r2 << 16) | (g2 << 8) | b2;
+        int by = cy + win->client_h - target_h - 12;  /* 12px from bottom */
+
+        if (s_claude_px && s_claude_w > 0) {
+            int target_w = s_claude_w * target_h / s_claude_h;
+            if (target_w <= 0) target_w = 24;
+
+            /* Center the logo+text as a unit */
+            int text_w = g_font_ui ? font_text_width(g_font_ui, 13, "Built with Claude Code") : 180;
+            int total_unit = target_w + 8 + text_w;
+            int lx = cx + (cw - total_unit) / 2;
+
+            for (int row = 0; row < target_h; row++) {
+                int sr = row * s_claude_h / target_h;
+                if (sr >= s_claude_h) break;
+                for (int col = 0; col < target_w; col++) {
+                    int sc = col * s_claude_w / target_w;
+                    if (sc >= s_claude_w) break;
+                    uint32_t px = s_claude_px[sr * s_claude_w + sc];
+                    uint32_t a = (px >> 24) & 0xFF;
+                    if (a > 0) {
+                        int dx = lx + col;
+                        int dy = by + row;
+                        if (dx >= 0 && dx < s->w && dy >= 0 && dy < s->h) {
+                            if (a == 0xFF) {
+                                s->buf[dy * s->pitch + dx] = px & 0x00FFFFFF;
+                            } else {
+                                uint32_t bg_px = s->buf[dy * s->pitch + dx];
+                                uint32_t inv = 255 - a;
+                                uint32_t r2 = (((px >> 16) & 0xFF) * a + ((bg_px >> 16) & 0xFF) * inv) / 255;
+                                uint32_t g2 = (((px >> 8) & 0xFF) * a + ((bg_px >> 8) & 0xFF) * inv) / 255;
+                                uint32_t b2 = ((px & 0xFF) * a + (bg_px & 0xFF) * inv) / 255;
+                                s->buf[dy * s->pitch + dx] = (r2 << 16) | (g2 << 8) | b2;
+                            }
                         }
                     }
                 }
             }
-        }
-        /* Text next to logo */
-        if (g_font_ui) {
-            int tx = lx + target_w + 8;
-            int ty = y + (target_h - font_height(g_font_ui, 11)) / 2;
-            font_draw_text(s, g_font_ui, 11, tx, ty,
-                           "Built with Claude Code", 0x00808898);
-        }
-        y += target_h + 8;
-    } else {
-        /* No Claude logo available — text only */
-        if (g_font_ui) {
-            font_draw_text(s, g_font_ui, 11, cx + 24, y,
-                           "Built with Claude Code", 0x00808898);
+            if (g_font_ui) {
+                int tx = lx + target_w + 8;
+                int ty = by + (target_h - font_height(g_font_ui, 13)) / 2;
+                font_draw_text(s, g_font_ui, 13, tx, ty,
+                               "Built with Claude Code", 0x00808898);
+            }
         } else {
-            draw_text_t(s, cx + 24, y, "Built with Claude Code", 0x00808898);
+            if (g_font_ui) {
+                const char *cc = "Built with Claude Code";
+                int tw = font_text_width(g_font_ui, 13, cc);
+                font_draw_text(s, g_font_ui, 13, cx + (cw - tw) / 2, by,
+                               cc, 0x00808898);
+            }
         }
-        y += 20;
     }
 }
 
@@ -308,7 +314,8 @@ about_render(glyph_window_t *win)
 glyph_window_t *
 about_create(int screen_w, int screen_h)
 {
-    (void)screen_h;
+    s_screen_w = screen_w;
+    s_screen_h = screen_h;
 
     /* Load logos on first call */
     if (!s_logo_px)
@@ -316,7 +323,7 @@ about_create(int screen_w, int screen_h)
     if (!s_claude_px)
         load_claude_logo();
 
-    glyph_window_t *win = glyph_window_create("About Aegis", 340, 340);
+    glyph_window_t *win = glyph_window_create("About Aegis", 380, 400);
     if (!win) return NULL;
 
     win->on_render = about_render;
