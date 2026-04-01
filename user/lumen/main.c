@@ -352,9 +352,9 @@ main(void)
 
     /* Crossfade from saved Bastion frame → composited desktop (in backbuf) */
     if (saved_frame) {
-        struct timespec ts = { 0, 25000000 }; /* 25ms per step */
-        for (int step = 0; step < 20; step++) {
-            int alpha = 255 - (step * 255 / 19);
+        struct timespec ts = { 0, 17000000 }; /* 17ms per step — 250ms total */
+        for (int step = 0; step < 15; step++) {
+            int alpha = 255 - (step * 255 / 14);
             int inv = 255 - alpha;
             for (size_t i = 0; i < npx; i++) {
                 uint32_t old = saved_frame[i];
