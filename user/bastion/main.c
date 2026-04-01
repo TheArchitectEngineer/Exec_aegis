@@ -142,12 +142,40 @@ draw_text_simple(int x, int y, const char *text, uint32_t color)
     draw_text_t(&s, x, y, text, color);
 }
 
+/* ---- Crossfade helper ------------------------------------------------ */
+
+static uint32_t *s_saved_frame;  /* snapshot of FB before first draw */
+
+static void
+crossfade(int steps, int delay_ms)
+{
+    if (!s_saved_frame) return;
+    size_t npx = (size_t)s_pitch_px * s_fb_h;
+    struct timespec ts = { 0, delay_ms * 1000000L };
+
+    for (int step = 0; step < steps; step++) {
+        int alpha = 255 - (step * 255 / (steps - 1));  /* 255 → 0 */
+        int inv = 255 - alpha;
+        for (size_t i = 0; i < npx; i++) {
+            uint32_t old = s_saved_frame[i];
+            uint32_t new_px = s_backbuf[i];
+            uint32_t r = (((old >> 16) & 0xFF) * alpha + ((new_px >> 16) & 0xFF) * inv) / 255;
+            uint32_t g = (((old >> 8) & 0xFF) * alpha + ((new_px >> 8) & 0xFF) * inv) / 255;
+            uint32_t b = ((old & 0xFF) * alpha + (new_px & 0xFF) * inv) / 255;
+            s_fb[i] = (r << 16) | (g << 8) | b;
+        }
+        nanosleep(&ts, NULL);
+    }
+    free(s_saved_frame);
+    s_saved_frame = NULL;
+}
+
 /* ---- Login form ------------------------------------------------------ */
 
-#define FORM_W      360
+#define FIELD_W     240
 #define FIELD_H     32
-#define FIELD_GAP   12
-#define BTN_H       36
+#define FIELD_GAP   10
+#define BTN_H       34
 
 static char s_user_buf[64];
 static char s_pass_buf[128];
@@ -159,63 +187,71 @@ static int  s_is_lock; /* 1 = lock screen mode */
 static void
 draw_form(void)
 {
-    fill_bg();
+    /* Charcoal background — matches GRUB splash feel */
+    for (int y = 0; y < s_fb_h; y++)
+        for (int x = 0; x < s_fb_w; x++)
+            s_backbuf[y * s_pitch_px + x] = 0x00202030;
 
     int cx = s_fb_w / 2;
-    int form_x = cx - FORM_W / 2;
+    surface_t surf = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
 
-    /* Logo or fallback text */
-    int logo_y = s_fb_h / 4 - (s_logo_h > 0 ? s_logo_h / 4 : 20);
+    /* Centered logo — vertically at ~40% of screen */
+    int logo_dh = s_logo_h > 0 ? s_logo_h / 4 : 20;
+    int logo_y = s_fb_h * 2 / 5 - logo_dh / 2;
     if (s_logo_pixels) {
         draw_logo(cx, logo_y);
     } else {
         draw_text_simple(cx - 5 * 8 / 2, logo_y, "AEGIS", 0x00FFFFFF);
     }
 
-    int form_y = s_fb_h / 2 - 60;
-    surface_t surf = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
+    /* Fields below logo — horizontal layout: [username] [password] [button] */
+    int total_w = FIELD_W + FIELD_GAP + FIELD_W + FIELD_GAP + 100;
+    int fx = cx - total_w / 2;
+    int fy = logo_y + logo_dh + 40;
 
-    /* Status text for lock mode */
+    /* Lock mode indicator */
     if (s_is_lock) {
-        draw_text_simple(cx - 3 * 8, form_y - 30, "Locked", 0x00FF8888);
+        int lock_tw = 6 * 8;
+        draw_text_simple(cx - lock_tw / 2, fy - 22, "Locked", 0x00FF8888);
     }
 
-    /* Username label + field */
-    draw_text_simple(form_x, form_y, "Username", 0x00808090);
-    form_y += 18;
-    draw_fill_rect(&surf, form_x, form_y, FORM_W, FIELD_H, 0x002A2A3E);
+    /* Username field */
+    draw_fill_rect(&surf, fx, fy, FIELD_W, FIELD_H, 0x002A2A3E);
     if (s_focus == 0)
-        draw_rect(&surf, form_x, form_y, FORM_W, FIELD_H, 0x004488CC);
-    draw_text_simple(form_x + 8, form_y + 8, s_user_buf, 0x00FFFFFF);
-    form_y += FIELD_H + FIELD_GAP;
+        draw_rect(&surf, fx, fy, FIELD_W, FIELD_H, 0x004488CC);
+    if (s_user_len > 0)
+        draw_text_simple(fx + 8, fy + 8, s_user_buf, 0x00FFFFFF);
+    else if (s_focus != 0)
+        draw_text_simple(fx + 8, fy + 8, "username", 0x00505060);
+    int ux = fx + FIELD_W + FIELD_GAP;
 
-    /* Password label + field */
-    draw_text_simple(form_x, form_y, "Password", 0x00808090);
-    form_y += 18;
-    draw_fill_rect(&surf, form_x, form_y, FORM_W, FIELD_H, 0x002A2A3E);
+    /* Password field */
+    draw_fill_rect(&surf, ux, fy, FIELD_W, FIELD_H, 0x002A2A3E);
     if (s_focus == 1)
-        draw_rect(&surf, form_x, form_y, FORM_W, FIELD_H, 0x004488CC);
-    /* Show asterisks */
-    {
+        draw_rect(&surf, ux, fy, FIELD_W, FIELD_H, 0x004488CC);
+    if (s_pass_len > 0) {
         char stars[128];
         int i;
         for (i = 0; i < s_pass_len && i < 126; i++) stars[i] = '*';
         stars[i] = '\0';
-        draw_text_simple(form_x + 8, form_y + 8, stars, 0x00FFFFFF);
+        draw_text_simple(ux + 8, fy + 8, stars, 0x00FFFFFF);
+    } else if (s_focus != 1) {
+        draw_text_simple(ux + 8, fy + 8, "password", 0x00505060);
     }
-    form_y += FIELD_H + FIELD_GAP;
+    int bx = ux + FIELD_W + FIELD_GAP;
 
-    /* Button */
-    uint32_t btn_color = (s_focus == 2) ? 0x005577DD : 0x004466BB;
-    draw_fill_rect(&surf, form_x, form_y, FORM_W, BTN_H, btn_color);
+    /* Login/Unlock button */
+    uint32_t btn_color = (s_focus == 2) ? 0x005577DD : 0x003A4A6A;
+    draw_fill_rect(&surf, bx, fy, 100, FIELD_H, btn_color);
     const char *btn_text = s_is_lock ? "Unlock" : "Login";
     int btn_tw = (int)strlen(btn_text) * 8;
-    draw_text_simple(form_x + FORM_W / 2 - btn_tw / 2, form_y + 10, btn_text, 0x00FFFFFF);
-    form_y += BTN_H + FIELD_GAP;
+    draw_text_simple(bx + 50 - btn_tw / 2, fy + 8, btn_text, 0x00FFFFFF);
 
-    /* Error message */
-    if (s_error[0])
-        draw_text_simple(form_x, form_y, s_error, 0x00FF4444);
+    /* Error message centered below */
+    if (s_error[0]) {
+        int err_tw = (int)strlen(s_error) * 8;
+        draw_text_simple(cx - err_tw / 2, fy + FIELD_H + 16, s_error, 0x00FF4444);
+    }
 
     blit_to_fb();
 }
@@ -373,6 +409,15 @@ main(void)
     /* Load logo */
     load_logo();
 
+    /* Snapshot current FB (GRUB splash or Bastion's previous frame)
+     * for crossfade into the login form. */
+    {
+        size_t fb_bytes = (size_t)s_pitch_px * s_fb_h * 4;
+        s_saved_frame = malloc(fb_bytes);
+        if (s_saved_frame)
+            memcpy(s_saved_frame, s_fb, fb_bytes);
+    }
+
     /* Raw keyboard mode */
     struct termios t_orig;
     tcgetattr(0, &t_orig);
@@ -399,6 +444,14 @@ greeter:
     s_error[0] = '\0';
     s_focus = 0;
     s_locked = 0;
+
+    /* Crossfade from previous screen (GRUB splash or Lumen) to login form */
+    if (s_saved_frame) {
+        draw_form();  /* renders login form to backbuf (blit_to_fb already called) */
+        /* Undo the blit — we want to crossfade instead */
+        memcpy(s_fb, s_saved_frame, (size_t)s_pitch_px * s_fb_h * 4);
+        crossfade(20, 25);  /* 20 steps × 25ms = 500ms fade */
+    }
 
     for (;;) {
         draw_form();

@@ -330,10 +330,46 @@ main(void)
     comp.on_draw_desktop = desktop_draw_cb;
     comp.on_draw_overlay = overlay_draw_cb;
 
+    /* Snapshot current FB (Bastion's login form) for crossfade */
+    size_t fb_bytes = (size_t)pitch_px * fb_h * 4;
+    uint32_t *saved_frame = malloc(fb_bytes);
+    if (saved_frame)
+        memcpy(saved_frame, fb, fb_bytes);
+
     /* Initial full composite — clean desktop, no windows */
     comp.full_redraw = 1;
     cursor_hide();
     comp_composite(&comp);
+
+    /* Crossfade from Bastion login → desktop */
+    if (saved_frame) {
+        /* comp_composite wrote the desktop to FB via backbuf→FB memcpy.
+         * Restore Bastion's frame to FB, then crossfade. */
+        uint32_t *desktop = malloc(fb_bytes);
+        if (desktop) {
+            memcpy(desktop, fb, fb_bytes);       /* save desktop */
+            memcpy(fb, saved_frame, fb_bytes);    /* restore Bastion frame */
+            struct timespec ts = { 0, 25000000 }; /* 25ms per step */
+            for (int step = 0; step < 20; step++) {
+                int alpha = 255 - (step * 255 / 19);
+                int inv = 255 - alpha;
+                size_t npx = (size_t)pitch_px * fb_h;
+                for (size_t i = 0; i < npx; i++) {
+                    uint32_t old = saved_frame[i];
+                    uint32_t new_px = desktop[i];
+                    uint32_t r = (((old >> 16) & 0xFF) * alpha + ((new_px >> 16) & 0xFF) * inv) / 255;
+                    uint32_t g = (((old >> 8) & 0xFF) * alpha + ((new_px >> 8) & 0xFF) * inv) / 255;
+                    uint32_t b = ((old & 0xFF) * alpha + (new_px & 0xFF) * inv) / 255;
+                    fb[i] = (r << 16) | (g << 8) | b;
+                }
+                nanosleep(&ts, NULL);
+            }
+            free(desktop);
+        }
+        free(saved_frame);
+        saved_frame = NULL;
+    }
+
     cursor_show(comp.cursor_x, comp.cursor_y);
 
     /* Dropdown terminal -- created at startup, starts hidden */
