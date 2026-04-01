@@ -460,18 +460,24 @@ acpi_power_button_init(void)
     if (!s_acpi_pm_ok || s_pm1a_evt == 0)
         return;
 
-    /* Transition from legacy to ACPI mode BEFORE enabling SCI events.
-     * This must happen after IOAPIC is configured (so the SCI IRQ is
-     * routable) but before we unmask the power button event. */
+    /* Transition from legacy to ACPI mode if SCI_EN is not already set.
+     * On UEFI systems SCI_EN is always 1 (firmware boots in ACPI mode),
+     * so this is a no-op on UEFI. Only runs on legacy BIOS boot. */
     if (s_smi_cmd != 0 && s_acpi_enable != 0 && s_pm1a_cnt != 0) {
         uint16_t pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
-        if (!(pm1_cnt & 1)) {  /* SCI_EN not set → still in legacy mode */
+        if (!(pm1_cnt & 1)) {  /* SCI_EN not set → legacy mode */
+            printk("[ACPI] transitioning to ACPI mode (SMI_CMD=0x%x, val=0x%x)\n",
+                   (unsigned)s_smi_cmd, (unsigned)s_acpi_enable);
             outb_port((uint16_t)s_smi_cmd, s_acpi_enable);
             for (int i = 0; i < 3000; i++) {
                 pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
                 if (pm1_cnt & 1) break;
-                (void)inb_port(0x80);  /* ~1us delay */
+                (void)inb_port(0x80);
             }
+            if (pm1_cnt & 1)
+                printk("[ACPI] ACPI mode enabled (SCI_EN set)\n");
+            else
+                printk("[ACPI] WARN: ACPI mode transition failed\n");
         }
     }
 
