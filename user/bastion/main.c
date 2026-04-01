@@ -195,8 +195,10 @@ draw_form(void)
     int cx = s_fb_w / 2;
     surface_t surf = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
 
-    /* Logo centered — middle of logo at middle of screen */
-    int logo_dh = s_logo_h > 0 ? s_logo_h / 4 : 20;
+    /* Logo centered — middle of logo at middle of screen.
+     * draw_logo renders at 50% scale (dh = s_logo_h/2), so use that
+     * for centering, not s_logo_h/4. */
+    int logo_dh = s_logo_h > 0 ? s_logo_h / 2 : 20;
     int logo_y = s_fb_h / 2 - logo_dh / 2;
     if (s_logo_pixels) {
         draw_logo(cx, logo_y);

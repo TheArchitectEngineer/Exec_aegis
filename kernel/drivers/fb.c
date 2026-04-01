@@ -909,14 +909,17 @@ fb_boot_splash_end(void)
 {
     if (!fb_available) return;
 
-    /* Clear the splash and unlock for normal text output */
-    {
+    /* Don't clear the splash — let Bastion paint over it seamlessly.
+     * The splash stays visible until Bastion's first draw_form() call.
+     * Just unlock so text mode (non-graphical boot) can write to FB. */
+    if (!printk_get_quiet()) {
+        /* Text mode: clear splash for normal console output */
         uint32_t total = s_fb_height * s_pitch_px;
         uint32_t i;
         for (i = 0; i < total; i++)
             s_fb_va[i] = 0;
+        s_col = 0;
+        s_row = 0;
     }
-    s_col = 0;
-    s_row = 0;
     s_fb_locked = 0;
 }
