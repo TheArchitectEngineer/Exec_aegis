@@ -409,31 +409,15 @@ main(void)
     /* Load logo */
     load_logo();
 
-    /* Snapshot current FB for crossfade into the login form.
-     * On first boot, kernel logs may have flashed on screen — fill with
-     * charcoal so the fade starts from a clean background.
-     * On lock→greeter return, FB has Lumen's last frame (good to fade from). */
+    /* Paint FB charcoal immediately to hide kernel log flash */
     {
-        size_t fb_bytes = (size_t)s_pitch_px * s_fb_h * 4;
         size_t npx = (size_t)s_pitch_px * s_fb_h;
-        s_saved_frame = malloc(fb_bytes);
-        if (s_saved_frame) {
-            /* Check if FB looks like kernel text mode (mostly black) */
-            int dark_count = 0;
-            for (int i = 0; i < 100 && i < (int)npx; i++)
-                if ((s_fb[i] & 0x00F0F0F0) == 0) dark_count++;
-            if (dark_count > 80) {
-                /* FB is mostly black (kernel logs) — use solid charcoal */
-                for (size_t i = 0; i < npx; i++)
-                    s_saved_frame[i] = 0x00202030;
-            } else {
-                memcpy(s_saved_frame, s_fb, fb_bytes);
-            }
-            /* Also paint the FB charcoal immediately to hide any flash */
-            for (size_t i = 0; i < npx; i++)
-                s_fb[i] = 0x00202030;
-        }
+        for (size_t i = 0; i < npx; i++)
+            s_fb[i] = 0x00202030;
     }
+    /* No crossfade on first boot — just draw directly. The charcoal FB
+     * matches the login background so it looks seamless.
+     * s_saved_frame is only used for lock→greeter transitions. */
 
     /* Raw keyboard mode */
     struct termios t_orig;
@@ -461,14 +445,6 @@ greeter:
     s_error[0] = '\0';
     s_focus = 0;
     s_locked = 0;
-
-    /* Crossfade from previous screen (GRUB splash or Lumen) to login form */
-    if (s_saved_frame) {
-        draw_form();  /* renders login form to backbuf (blit_to_fb already called) */
-        /* Undo the blit — we want to crossfade instead */
-        memcpy(s_fb, s_saved_frame, (size_t)s_pitch_px * s_fb_h * 4);
-        crossfade(20, 25);  /* 20 steps × 25ms = 500ms fade */
-    }
 
     for (;;) {
         draw_form();
