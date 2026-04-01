@@ -530,6 +530,16 @@ rootfs: $(ROOTFS)
 disk: $(DISK)
 
 # ── Wallpaper conversion (PNG → raw BGRA) ──
+LOGO_SRC ?= tools/aegis-logo.png
+$(BUILD)/logo.raw:
+	@mkdir -p $(BUILD)
+	@if [ -f $(LOGO_SRC) ] && command -v python3 >/dev/null 2>&1; then \
+	    python3 tools/convert-logo.py $(LOGO_SRC) $@; \
+	else \
+	    echo "Note: logo source not found — skipping"; \
+	    touch $@; \
+	fi
+
 WALLPAPER_SRC ?= assets/wallpaper.png
 $(BUILD)/wallpaper.raw:
 	@mkdir -p $(BUILD)
@@ -544,7 +554,7 @@ $(BUILD)/wallpaper.raw:
 # ALWAYS rebuild rootfs — stale rootfs.img inside the ISO caused the
 # 2026-03-28 debugging catastrophe. Deleting it first ensures every
 # user binary is freshly written even on incremental builds.
-$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw
+$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/logo.raw
 	@rm -f $(ROOTFS)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
@@ -649,10 +659,15 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'write build/curl/curl /bin/curl\nwrite tools/cacert.pem /etc/ssl/certs/ca-certificates.crt\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	# Desktop wallpaper (converted from PNG at build time)
-	@if [ -f $(BUILD)/wallpaper.raw ]; then \
+	# Desktop wallpaper + logo (converted from PNG at build time)
+	@if [ -f $(BUILD)/wallpaper.raw ] || [ -f $(BUILD)/logo.raw ]; then \
 	    printf 'mkdir /usr\nmkdir /usr/share\n' | /sbin/debugfs -w $(ROOTFS); \
+	fi
+	@if [ -f $(BUILD)/wallpaper.raw ] && [ -s $(BUILD)/wallpaper.raw ]; then \
 	    printf 'write $(BUILD)/wallpaper.raw /usr/share/wallpaper.raw\n' | /sbin/debugfs -w $(ROOTFS); \
+	fi
+	@if [ -f $(BUILD)/logo.raw ] && [ -s $(BUILD)/logo.raw ]; then \
+	    printf 'write $(BUILD)/logo.raw /usr/share/logo.raw\n' | /sbin/debugfs -w $(ROOTFS); \
 	fi
 	# TTF fonts for Lumen compositor (optional — UI falls back to bitmap font)
 	@if [ -f assets/Inter-Regular.ttf ] || [ -f assets/JetBrainsMono-Regular.ttf ]; then \
