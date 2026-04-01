@@ -108,4 +108,7 @@ void acpi_sci_handler(void);
 /* acpi_get_sci_irq — return SCI IRQ number (from FADT), 0 if unknown. */
 uint16_t acpi_get_sci_irq(void);
 
+/* acpi_do_poweroff — sync ext2 and enter ACPI S5 (power off). */
+void acpi_do_poweroff(void);
+
 #endif /* ACPI_H */

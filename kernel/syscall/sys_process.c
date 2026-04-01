@@ -3,6 +3,7 @@
 #include "futex.h"
 #include "vma.h"
 #include "tty.h"
+#include "acpi.h"
 
 #define MAX_PROCESSES 64
 static uint32_t s_fork_count = 1;  /* starts at 1 for init */
@@ -1412,7 +1413,7 @@ sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
         return (uint64_t)-(int64_t)ENOCAP;
     uint32_t kind   = (uint32_t)kind_arg;
     uint32_t rights = (uint32_t)rights_arg;
-    if (kind == CAP_KIND_NULL || kind >= 16u)
+    if (kind == CAP_KIND_NULL || kind >= CAP_TABLE_SIZE)
         return (uint64_t)-(int64_t)22; /* EINVAL */
     int r = cap_grant(proc->exec_caps, CAP_TABLE_SIZE, kind, rights);
     if (r < 0) return (uint64_t)-(int64_t)12; /* ENOMEM/table full */
@@ -1895,7 +1896,7 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
             for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
                 if (mask[ci].kind == CAP_KIND_NULL)
                     continue;
-                if (mask[ci].kind >= 16u) {
+                if (mask[ci].kind >= CAP_TABLE_SIZE) {
                     kva_free_pages(kstack, 4);
                     result = (uint64_t)-(int64_t)22;  /* EINVAL */
                     goto fail_child;
@@ -2023,4 +2024,35 @@ sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen)
     copy_to_user((void *)buf_uptr, target->caps, copy_bytes);
 
     return nslots;
+}
+
+/*
+ * sys_reboot — syscall 169
+ *
+ * cmd=0: ACPI S5 power off
+ * cmd=1: keyboard controller reset (reboot)
+ *
+ * Requires CAP_KIND_POWER — explicitly granted via capd.
+ */
+uint64_t
+sys_reboot(uint64_t cmd)
+{
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                  CAP_KIND_POWER, CAP_RIGHTS_READ) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
+
+    if (cmd == 0) {
+        /* Power off via ACPI */
+        acpi_do_poweroff();
+        /* Should not return */
+        for (;;) __asm__ volatile("cli; hlt");
+    } else if (cmd == 1) {
+        /* Reboot via keyboard controller reset (8042 pulse) */
+        ext2_sync();
+        printk("[AEGIS] Rebooting...\n");
+        __asm__ volatile ("outb %0, %1" : : "a"((uint8_t)0xFE), "Nd"((uint16_t)0x64));
+        for (;;) __asm__ volatile("cli; hlt");
+    }
+    return (uint64_t)-(int64_t)22;  /* EINVAL */
 }

@@ -279,6 +279,8 @@ font_init(void)
     /* Try loading UI font (Inter) */
     g_font_ui = font_load("/usr/share/fonts/Inter-Regular.ttf");
     if (g_font_ui) {
+        font_bake(g_font_ui, 11);
+        font_bake(g_font_ui, 12);
         font_bake(g_font_ui, 13);
         font_bake(g_font_ui, 14);
         font_bake(g_font_ui, 16);

@@ -31,6 +31,7 @@ static const char *cap_names[] = {
     "CAP_DELEGATE",    /* 13 */
     "CAP_QUERY",       /* 14 */
     "IPC",             /* 15 */
+    "POWER",           /* 16 */
 };
 #define NUM_CAP_NAMES 16
 

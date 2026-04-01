@@ -42,6 +42,12 @@ static uint16_t s_slp_typa    = 0;     /* SLP_TYPa value for S5 (from DSDT) */
 static uint16_t s_slp_typb    = 0;     /* SLP_TYPb value for S5 */
 static int      s_acpi_pm_ok  = 0;     /* 1 if power management is ready */
 
+/* Forward declarations for port I/O (defined below with power button code) */
+static inline void     outw_port(uint16_t port, uint16_t val);
+static inline uint16_t inw_port(uint16_t port);
+static inline void     outb_port(uint16_t port, uint8_t val);
+static inline uint8_t  inb_port(uint16_t port);
+
 /* -----------------------------------------------------------------------
  * Single-page KVA window for temporary ACPI table access.
  *
@@ -186,10 +192,29 @@ parse_fadt(uint64_t hdr_phys)
 
     /* FADT fields (32-bit I/O port addresses) */
     s_sci_int     = (uint16_t)phys_read32(hdr_phys + 46);
+    uint32_t smi_cmd      = phys_read32(hdr_phys + 48);
+    uint8_t  acpi_enable  = phys_read8(hdr_phys + 52);
     s_pm1a_evt    = phys_read32(hdr_phys + 56);
     s_pm1b_cnt    = phys_read32(hdr_phys + 68);  /* 0 if absent */
     s_pm1a_cnt    = phys_read32(hdr_phys + 64);
     s_pm1_evt_len = phys_read8(hdr_phys + 88);
+
+    /* Transition from legacy to ACPI mode if not already in ACPI mode.
+     * This tells the firmware/EC that a real OS is running, so the power
+     * button generates an SCI instead of immediately cutting power. */
+    if (smi_cmd != 0 && acpi_enable != 0 && s_pm1a_cnt != 0) {
+        uint16_t pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
+        if (!(pm1_cnt & 1)) {  /* SCI_EN not set → still in legacy mode */
+            outb_port((uint16_t)smi_cmd, acpi_enable);
+            /* Wait for SCI_EN to be set (firmware processes the SMI) */
+            for (int i = 0; i < 1000; i++) {
+                pm1_cnt = inw_port((uint16_t)s_pm1a_cnt);
+                if (pm1_cnt & 1) break;
+                /* Small delay — read I/O port as a ~1us stall */
+                (void)inb_port(0x80);
+            }
+        }
+    }
 
     /* DSDT pointer */
     uint64_t dsdt_phys = 0;
@@ -418,6 +443,18 @@ void acpi_init(void)
 
 /* ── ACPI power button ─────────────────────────────────────────────── */
 
+static inline void outb_port(uint16_t port, uint8_t val)
+{
+    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+static inline uint8_t inb_port(uint16_t port)
+{
+    uint8_t val;
+    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
 static inline void outw_port(uint16_t port, uint16_t val)
 {
     __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
@@ -454,6 +491,28 @@ acpi_power_button_init(void)
            (unsigned)s_sci_int, (unsigned)s_pm1a_evt);
 }
 
+/* Initiate ACPI S5 power off from any context (userspace syscall or SCI). */
+void
+acpi_do_poweroff(void)
+{
+    if (!s_acpi_pm_ok)
+        return;
+
+    printk("[ACPI] initiating S5 power off\n");
+    ext2_sync();
+    printk("[AEGIS] System halted.\n");
+
+    uint16_t cnt = (uint16_t)s_pm1a_cnt;
+    uint16_t val = (s_slp_typa << 10) | (1 << 13);
+    outw_port(cnt, val);
+    if (s_pm1b_cnt != 0) {
+        uint16_t val_b = (s_slp_typb << 10) | (1 << 13);
+        outw_port((uint16_t)s_pm1b_cnt, val_b);
+    }
+    for (;;)
+        __asm__ volatile ("cli; hlt");
+}
+
 void
 acpi_sci_handler(void)
 {
@@ -468,25 +527,8 @@ acpi_sci_handler(void)
     if ((sts & 0x0100) && (en & 0x0100)) {
         /* Power button pressed — initiate shutdown */
         outw_port(evt_base, 0x0100);  /* clear PWRBTN_STS */
-
-        printk("[ACPI] power button pressed — shutting down\n");
-        ext2_sync();
-        printk("[AEGIS] System halted.\n");
-
-        /* Write SLP_TYPa | SLP_EN to PM1a_CNT to enter S5 (power off) */
-        uint16_t cnt = (uint16_t)s_pm1a_cnt;
-        uint16_t val = (s_slp_typa << 10) | (1 << 13);  /* SLP_TYPa | SLP_EN */
-        outw_port(cnt, val);
-
-        /* If PM1b_CNT exists, write there too */
-        if (s_pm1b_cnt != 0) {
-            uint16_t val_b = (s_slp_typb << 10) | (1 << 13);
-            outw_port((uint16_t)s_pm1b_cnt, val_b);
-        }
-
-        /* If we're still alive, halt */
-        for (;;)
-            __asm__ volatile ("cli; hlt");
+        printk("[ACPI] power button pressed\n");
+        acpi_do_poweroff();
     }
     /* Not a power button event — spurious or other ACPI event, ignore */
 }

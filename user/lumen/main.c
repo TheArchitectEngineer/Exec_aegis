@@ -65,12 +65,15 @@ clipboard_set(const char *text, int len)
 #define MENU_ITEM_SETTINGS  1
 #define MENU_ITEM_LOCK      2
 #define MENU_ITEM_SEPARATOR 3
-#define MENU_ITEM_POWEROFF  4
-#define MENU_ITEMS          5
+#define MENU_ITEM_REBOOT    4
+#define MENU_ITEM_POWEROFF  5
+#define MENU_ITEMS          6
 
 static const char *menu_labels[] = {
-    "About Aegis", "Settings...", "Lock Screen", "---", "Power Off"
+    "About Aegis", "Settings...", "Lock Screen", "---", "Restart", "Power Off"
 };
+
+#define SYS_REBOOT 169
 
 static int menu_open;
 static int menu_hover = -1;
@@ -557,13 +560,10 @@ next_poll:
                             } else if (item == MENU_ITEM_LOCK) {
                                 s_input_frozen = 1;
                                 kill(getppid(), SIGUSR1);
+                            } else if (item == MENU_ITEM_REBOOT) {
+                                syscall(SYS_REBOOT, 1L);  /* reboot */
                             } else if (item == MENU_ITEM_POWEROFF) {
-                                /* ACPI power off — write to /proc/power */
-                                int pfd = open("/proc/power", O_WRONLY);
-                                if (pfd >= 0) {
-                                    write(pfd, "off", 3);
-                                    close(pfd);
-                                }
+                                syscall(SYS_REBOOT, 0L);  /* ACPI S5 power off */
                             }
                             /* Settings is a stub for now */
                         } else {

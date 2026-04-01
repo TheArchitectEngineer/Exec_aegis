@@ -194,6 +194,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 363: return sys_cap_grant_runtime(arg1, arg2, arg3);
     case  77: return sys_ftruncate(arg1, arg2);
     case 319: return sys_memfd_create(arg1, arg2);
+    case 169: return sys_reboot(arg1);
     default:
         return (uint64_t)-(int64_t)38;   /* ENOSYS */
     }

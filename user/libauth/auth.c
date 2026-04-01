@@ -161,9 +161,10 @@ auth_set_identity(int uid, int gid)
 void
 auth_grant_shell_caps(void)
 {
-    syscall(361, 5L, 1L);   /* CAP_KIND_CAP_GRANT — so shell/compositor can delegate further */
-    syscall(361, 13L, 1L);  /* CAP_KIND_CAP_DELEGATE, CAP_RIGHTS_READ */
-    syscall(361, 14L, 1L);  /* CAP_KIND_CAP_QUERY, CAP_RIGHTS_READ */
+    syscall(361, 5L, 1L);   /* CAP_KIND_CAP_GRANT */
+    syscall(361, 13L, 1L);  /* CAP_KIND_CAP_DELEGATE */
+    syscall(361, 14L, 1L);  /* CAP_KIND_CAP_QUERY */
+    syscall(361, 16L, 1L);  /* CAP_KIND_POWER */
 }
 
 void
@@ -174,4 +175,5 @@ auth_request_caps(void)
     capd_request(13);  /* CAP_KIND_CAP_DELEGATE */
     capd_request(14);  /* CAP_KIND_CAP_QUERY */
     capd_request(6);   /* CAP_KIND_SETUID */
+    capd_request(16);  /* CAP_KIND_POWER */
 }

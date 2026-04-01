@@ -47,6 +47,7 @@ static const struct { const char *name; int kind; } cap_table[] = {
     { "CAP_DELEGATE",  13 },
     { "CAP_QUERY",     14 },
     { "IPC",           15 },
+    { "POWER",         16 },
     { NULL, 0 }
 };
 

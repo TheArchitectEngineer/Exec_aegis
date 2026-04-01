@@ -659,7 +659,7 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/
 	    | /sbin/debugfs -w $(ROOTFS)
 	printf 'allow AUTH CAP_GRANT CAP_DELEGATE CAP_QUERY SETUID\n' > /tmp/aegis-capd-login
 	printf 'allow NET_ADMIN\n' > /tmp/aegis-capd-dhcp
-	printf 'allow AUTH CAP_GRANT CAP_DELEGATE CAP_QUERY SETUID\n' > /tmp/aegis-capd-bastion
+	printf 'allow AUTH CAP_GRANT CAP_DELEGATE CAP_QUERY SETUID POWER\n' > /tmp/aegis-capd-bastion
 	printf 'allow NET_ADMIN\n' > /tmp/aegis-capd-capd_test
 	printf 'write /tmp/aegis-capd-login /etc/aegis/capd.d/login.policy\nwrite /tmp/aegis-capd-dhcp /etc/aegis/capd.d/dhcp.policy\nwrite /tmp/aegis-capd-bastion /etc/aegis/capd.d/bastion.policy\nwrite /tmp/aegis-capd-capd_test /etc/aegis/capd.d/capd_test.policy\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
