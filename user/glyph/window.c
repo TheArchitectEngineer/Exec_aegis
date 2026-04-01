@@ -241,21 +241,7 @@ glyph_window_render(glyph_window_t *win)
         glyph_widget_draw_tree(win->root, &win->surface, ox, oy);
     }
 
-    /* Draw focus ring on focused widget */
-    if (win->focused && win->focused->visible) {
-        glyph_widget_t *f = win->focused;
-        /* Compute absolute position within surface */
-        int fx = client_ox(), fy = client_oy();
-        glyph_widget_t *p = f;
-        while (p) {
-            fx += p->x;
-            fy += p->y;
-            p = p->parent;
-        }
-        /* 2px blue focus ring */
-        draw_rect(&win->surface, fx - 2, fy - 2, f->w + 4, f->h + 4, C_ACCENT);
-        draw_rect(&win->surface, fx - 1, fy - 1, f->w + 2, f->h + 2, C_ACCENT);
-    }
+    /* Focus ring omitted — widgets blend seamlessly with frosted glass */
 
     win->has_dirty = 0;
     win->dirty_rect.w = 0;

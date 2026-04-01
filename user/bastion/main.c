@@ -108,13 +108,18 @@ static void
 draw_logo(int cx, int y)
 {
     if (!s_logo_pixels) return;
-    int x0 = cx - s_logo_w / 2;
-    for (int ly = 0; ly < s_logo_h; ly++) {
-        int dy = y + ly;
+    /* Draw at 50% scale */
+    int dw = s_logo_w / 2;
+    int dh = s_logo_h / 2;
+    int x0 = cx - dw / 2;
+    for (int dy_off = 0; dy_off < dh; dy_off++) {
+        int dy = y + dy_off;
         if (dy < 0 || dy >= s_fb_h) continue;
-        for (int lx = 0; lx < s_logo_w; lx++) {
-            int dx = x0 + lx;
+        int ly = dy_off * 2;  /* nearest-neighbor sample */
+        for (int dx_off = 0; dx_off < dw; dx_off++) {
+            int dx = x0 + dx_off;
             if (dx < 0 || dx >= s_fb_w) continue;
+            int lx = dx_off * 2;
             uint32_t px = s_logo_pixels[ly * s_logo_w + lx];
             uint32_t a = (px >> 24) & 0xFF;
             if (a == 0xFF) {
@@ -160,7 +165,7 @@ draw_form(void)
     int form_x = cx - FORM_W / 2;
 
     /* Logo or fallback text */
-    int logo_y = s_fb_h / 4 - (s_logo_h > 0 ? s_logo_h / 2 : 20);
+    int logo_y = s_fb_h / 4 - (s_logo_h > 0 ? s_logo_h / 4 : 20);
     if (s_logo_pixels) {
         draw_logo(cx, logo_y);
     } else {

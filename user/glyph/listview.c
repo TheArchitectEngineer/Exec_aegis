@@ -20,6 +20,8 @@ listview_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
     /* List area (excluding scrollbar) */
     int list_w = self->w - LV_SB_W;
 
+    /* Clear to key color (prevent blend accumulation on scroll redraw) */
+    draw_fill_rect(surf, ox, oy, list_w, self->h, C_SHADOW);
     /* Subtle blend background */
     draw_blend_rect(surf, ox, oy, list_w, self->h, 0x00000010, 60);
     draw_blend_rect(surf, ox, oy, list_w, 1, 0x00000000, 40);

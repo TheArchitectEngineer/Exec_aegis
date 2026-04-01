@@ -28,6 +28,11 @@ typedef struct {
     glyph_window_t *content_drag_win; /* window receiving mouse drag events */
     int prev_buttons;
 
+    /* Desktop selection box (click+drag on empty desktop) */
+    int selecting;
+    int sel_x0, sel_y0;  /* anchor point */
+    int sel_x1, sel_y1;  /* current drag point */
+
     /* Dirty rect accumulator */
     glyph_rect_t dirty_rects[MAX_DIRTY_RECTS];
     int ndirty;

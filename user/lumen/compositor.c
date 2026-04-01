@@ -152,6 +152,26 @@ comp_add_dirty(compositor_t *c, glyph_rect_t r)
     }
 }
 
+/* ---- Desktop selection box ---- */
+
+static void
+draw_selection_box(surface_t *s, compositor_t *c)
+{
+    if (!c->selecting) return;
+    int x0 = c->sel_x0 < c->sel_x1 ? c->sel_x0 : c->sel_x1;
+    int y0 = c->sel_y0 < c->sel_y1 ? c->sel_y0 : c->sel_y1;
+    int w = abs(c->sel_x1 - c->sel_x0);
+    int h = abs(c->sel_y1 - c->sel_y0);
+    if (w < 2 || h < 2) return;
+    /* Translucent blue fill */
+    draw_blend_rect(s, x0, y0, w, h, 0x003060A0, 40);
+    /* Border — slightly more opaque */
+    draw_blend_rect(s, x0, y0, w, 1, 0x004488CC, 120);
+    draw_blend_rect(s, x0, y0 + h - 1, w, 1, 0x004488CC, 120);
+    draw_blend_rect(s, x0, y0, 1, h, 0x004488CC, 120);
+    draw_blend_rect(s, x0 + w - 1, y0, 1, h, 0x004488CC, 120);
+}
+
 /* ---- Composite ---- */
 
 static void
@@ -309,9 +329,11 @@ comp_composite(compositor_t *c)
                 continue;
             glyph_window_mark_all_dirty(win);
             glyph_window_render(win);
-            int opaque = (c->dragging && win == c->drag_win);
-            blit_window_to_back(&c->back, win, opaque);
+            blit_window_to_back(&c->back, win, 0);
         }
+
+        /* Desktop selection box */
+        draw_selection_box(&c->back, c);
 
         /* Overlay (frosted glass dock etc.) -- after windows, before flip */
         if (c->on_draw_overlay)
@@ -452,6 +474,42 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         comp_add_dirty(c, new_r);
     }
 
+    /* Desktop selection in progress */
+    if (c->selecting && left) {
+        glyph_rect_t old_sel = {
+            c->sel_x0 < c->sel_x1 ? c->sel_x0 : c->sel_x1,
+            c->sel_y0 < c->sel_y1 ? c->sel_y0 : c->sel_y1,
+            abs(c->sel_x1 - c->sel_x0) + 1,
+            abs(c->sel_y1 - c->sel_y0) + 1
+        };
+        c->sel_x1 = c->cursor_x;
+        c->sel_y1 = c->cursor_y;
+        glyph_rect_t new_sel = {
+            c->sel_x0 < c->sel_x1 ? c->sel_x0 : c->sel_x1,
+            c->sel_y0 < c->sel_y1 ? c->sel_y0 : c->sel_y1,
+            abs(c->sel_x1 - c->sel_x0) + 1,
+            abs(c->sel_y1 - c->sel_y0) + 1
+        };
+        comp_add_dirty(c, old_sel);
+        comp_add_dirty(c, new_sel);
+        c->prev_buttons = buttons;
+        return;
+    }
+
+    /* Desktop selection released */
+    if (c->selecting && !left) {
+        glyph_rect_t sel_r = {
+            c->sel_x0 < c->sel_x1 ? c->sel_x0 : c->sel_x1,
+            c->sel_y0 < c->sel_y1 ? c->sel_y0 : c->sel_y1,
+            abs(c->sel_x1 - c->sel_x0) + 1,
+            abs(c->sel_y1 - c->sel_y0) + 1
+        };
+        comp_add_dirty(c, sel_r);
+        c->selecting = 0;
+        c->prev_buttons = buttons;
+        return;
+    }
+
     /* Content drag in progress (mouse selection in client area) */
     if (c->content_drag_win && left) {
         int local_x = c->cursor_x - c->content_drag_win->x;
@@ -543,13 +601,21 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
             int local_x = c->cursor_x - win->x;
             int local_y = c->cursor_y - win->y;
 
-            /* Content area mouse-down: start content drag for selection */
-            if (win->on_mouse_down) {
+            /* Content area mouse-down: start content drag for text selection.
+             * Only for terminal windows (have on_mouse_down), not widget windows. */
+            if (win->on_mouse_down && win->priv) {
                 win->on_mouse_down(win, local_x, local_y);
                 c->content_drag_win = win;
             }
 
             glyph_window_dispatch_mouse(win, 1, local_x, local_y);
+        } else {
+            /* Click on empty desktop — start selection box */
+            c->selecting = 1;
+            c->sel_x0 = c->cursor_x;
+            c->sel_y0 = c->cursor_y;
+            c->sel_x1 = c->cursor_x;
+            c->sel_y1 = c->cursor_y;
         }
     }
 
