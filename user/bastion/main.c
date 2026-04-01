@@ -22,6 +22,8 @@
 #include <glyph.h>
 #include "auth.h"
 
+extern char **environ;
+
 #define SYS_FB_MAP  513
 #define SYS_SPAWN   514
 
@@ -266,15 +268,21 @@ sigusr1_handler(int sig)
 static pid_t
 spawn_lumen(void)
 {
-    char *argv[] = { "lumen", NULL };
-    char home_env[128], user_env[128];
-    snprintf(home_env, sizeof(home_env), "HOME=/root");
-    snprintf(user_env, sizeof(user_env), "USER=%s", s_username);
-    char *envp[] = { "PATH=/bin", home_env, user_env, "TERM=dumb", NULL };
-
-    long pid = syscall(SYS_SPAWN, (long)"/bin/lumen", (long)argv,
-                       (long)envp, (long)-1, 0L);
-    return (pid_t)pid;
+    /* Use fork+execve instead of sys_spawn.  Lumen works from CLI
+     * (fork+execve) but freezes from sys_spawn — likely a kernel bug
+     * in sys_spawn's session/TTY setup.  fork+execve is the workaround. */
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child: exec lumen */
+        setenv("PATH", "/bin", 1);
+        setenv("HOME", "/root", 1);
+        setenv("USER", s_username, 1);
+        setenv("TERM", "dumb", 1);
+        char *argv[] = { "lumen", NULL };
+        execve("/bin/lumen", argv, environ);
+        _exit(127);
+    }
+    return pid;
 }
 
 /* ---- Authentication flow --------------------------------------------- */
