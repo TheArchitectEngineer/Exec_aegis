@@ -18,6 +18,7 @@
 #include <theme.h>
 #include "terminal.h"
 #include "widget_test.h"
+#include "about.h"
 
 typedef struct {
     uint64_t addr;
@@ -61,13 +62,14 @@ clipboard_set(const char *text, int len)
 /* ---- Context menu ---- */
 
 #define MENU_ITEM_ABOUT     0
-#define MENU_ITEM_TERMINAL  1
-#define MENU_ITEM_SEPARATOR 2
-#define MENU_ITEM_POWEROFF  3
-#define MENU_ITEMS          4
+#define MENU_ITEM_SETTINGS  1
+#define MENU_ITEM_LOCK      2
+#define MENU_ITEM_SEPARATOR 3
+#define MENU_ITEM_POWEROFF  4
+#define MENU_ITEMS          5
 
 static const char *menu_labels[] = {
-    "About Aegis", "Terminal", "---", "Power Off"
+    "About Aegis", "Settings...", "Lock Screen", "---", "Power Off"
 };
 
 static int menu_open;
@@ -543,9 +545,27 @@ next_poll:
                             menu_open = 0;
                             menu_hover = -1;
                             comp.full_redraw = 1;
-                            if (item == MENU_ITEM_TERMINAL)
-                                spawn_terminal(&comp, fb_w, fb_h);
-                            /* About and Power Off are stubs */
+                            if (item == MENU_ITEM_ABOUT) {
+                                glyph_window_t *aw = about_create(fb_w, fb_h);
+                                if (aw) {
+                                    comp_add_window(&comp, aw);
+                                    comp_raise_window(&comp, aw);
+                                    comp.focused = aw;
+                                    aw->focused_window = 1;
+                                    glyph_window_mark_all_dirty(aw);
+                                }
+                            } else if (item == MENU_ITEM_LOCK) {
+                                s_input_frozen = 1;
+                                kill(getppid(), SIGUSR1);
+                            } else if (item == MENU_ITEM_POWEROFF) {
+                                /* ACPI power off — write to /proc/power */
+                                int pfd = open("/proc/power", O_WRONLY);
+                                if (pfd >= 0) {
+                                    write(pfd, "off", 3);
+                                    close(pfd);
+                                }
+                            }
+                            /* Settings is a stub for now */
                         } else {
                             /* Click outside menu or on separator — close */
                             menu_open = 0;

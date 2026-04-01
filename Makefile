@@ -540,6 +540,16 @@ $(BUILD)/logo.raw:
 	    touch $@; \
 	fi
 
+CLAUDE_LOGO_SRC ?= assets/claude-white.png
+$(BUILD)/claude.raw:
+	@mkdir -p $(BUILD)
+	@if [ -f $(CLAUDE_LOGO_SRC) ] && [ -f tools/convert-logo.py ] && command -v python3 >/dev/null 2>&1; then \
+	    python3 tools/convert-logo.py $(CLAUDE_LOGO_SRC) $@; \
+	else \
+	    echo "Note: Claude logo not found — skipping"; \
+	    touch $@; \
+	fi
+
 WALLPAPER_SRC ?= assets/wallpaper.png
 $(BUILD)/wallpaper.raw:
 	@mkdir -p $(BUILD)
@@ -554,7 +564,7 @@ $(BUILD)/wallpaper.raw:
 # ALWAYS rebuild rootfs — stale rootfs.img inside the ISO caused the
 # 2026-03-28 debugging catastrophe. Deleting it first ensures every
 # user binary is freshly written even on incremental builds.
-$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/logo.raw
+$(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/logo.raw $(BUILD)/claude.raw
 	@rm -f $(ROOTFS)
 	@mkdir -p $(BUILD)
 	dd if=/dev/zero of=$(ROOTFS) bs=512 count=$(P1_SECTORS) 2>/dev/null
@@ -668,6 +678,9 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/
 	fi
 	@if [ -f $(BUILD)/logo.raw ] && [ -s $(BUILD)/logo.raw ]; then \
 	    printf 'write $(BUILD)/logo.raw /usr/share/logo.raw\n' | /sbin/debugfs -w $(ROOTFS); \
+	fi
+	@if [ -f $(BUILD)/claude.raw ] && [ -s $(BUILD)/claude.raw ]; then \
+	    printf 'write $(BUILD)/claude.raw /usr/share/claude.raw\n' | /sbin/debugfs -w $(ROOTFS); \
 	fi
 	# TTF fonts for Lumen compositor (optional — UI falls back to bitmap font)
 	@if [ -f assets/Inter-Regular.ttf ] || [ -f assets/JetBrainsMono-Regular.ttf ]; then \
