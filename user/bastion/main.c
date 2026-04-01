@@ -195,9 +195,9 @@ draw_form(void)
     int cx = s_fb_w / 2;
     surface_t surf = { .buf = s_backbuf, .w = s_fb_w, .h = s_fb_h, .pitch = s_pitch_px };
 
-    /* Centered logo — match GRUB splash position (dead center vertically) */
+    /* Centered logo — nudged slightly above dead center to match GRUB splash */
     int logo_dh = s_logo_h > 0 ? s_logo_h / 4 : 20;
-    int logo_y = s_fb_h / 2 - logo_dh / 2;
+    int logo_y = s_fb_h / 2 - logo_dh / 2 - 5;
     if (s_logo_pixels) {
         draw_logo(cx, logo_y);
     } else {
