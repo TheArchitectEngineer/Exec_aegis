@@ -64,6 +64,11 @@ glyph_widget_add_child(glyph_widget_t *parent, glyph_widget_t *child)
     child->parent = parent;
     child->window = parent->window;
     parent->children[parent->nchildren++] = child;
+
+    /* Auto-layout box containers when children are added */
+    if (parent->type == GLYPH_WIDGET_HBOX || parent->type == GLYPH_WIDGET_VBOX)
+        glyph_box_layout((glyph_box_t *)parent);
+
     glyph_widget_mark_dirty(parent);
 }
 

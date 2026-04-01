@@ -3,25 +3,26 @@
 #include <stdlib.h>
 
 #define PROG_HEIGHT  20
-#define PROG_BG      0x00E0E0E0
-#define PROG_FG      0x003070A0
-#define PROG_BORDER  0x00808090
+#define PROG_BG      C_INPUT_BG
+#define PROG_FG      C_ACCENT
+#define PROG_BORDER  C_INPUT_BD
 
 static void
 progress_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
 {
     glyph_progress_t *bar = (glyph_progress_t *)self;
 
-    /* Background */
-    draw_fill_rect(surf, ox, oy, self->w, self->h, PROG_BG);
+    /* Subtle blend background */
+    draw_blend_rect(surf, ox, oy, self->w, self->h, 0x00000010, 60);
 
-    /* Filled portion */
+    /* Filled portion — accent color blend */
     int fill_w = (self->w - 2) * bar->value / 100;
     if (fill_w > 0)
-        draw_fill_rect(surf, ox + 1, oy + 1, fill_w, self->h - 2, PROG_FG);
+        draw_blend_rect(surf, ox + 1, oy + 1, fill_w, self->h - 2, PROG_FG, 200);
 
-    /* Border */
-    draw_rect(surf, ox, oy, self->w, self->h, PROG_BORDER);
+    /* Top/bottom inset border */
+    draw_blend_rect(surf, ox, oy, self->w, 1, 0x00000000, 40);
+    draw_blend_rect(surf, ox, oy + self->h - 1, self->w, 1, 0x00FFFFFF, 15);
 }
 
 glyph_progress_t *

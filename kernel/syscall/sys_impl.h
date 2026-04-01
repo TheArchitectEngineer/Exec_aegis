@@ -88,19 +88,22 @@ typedef struct {
 #define USER_STACK_NPAGES     4ULL
 #define USER_STACK_BASE_EXEC  (USER_STACK_TOP_EXEC - USER_STACK_NPAGES * 4096ULL)
 
-/* execve_argbuf_t — argv working storage allocated from kva.
+/* execve_argbuf_t — argv+envp working storage allocated from kva.
  *
  * argv_bufs[64][256] alone is 16 KB — larger than a child process's
  * 4-page kernel stack.  Allocating from kva avoids the overflow.
- * Size: 64*256 + 65*8 + 64*8 = 17416 bytes → 5 kva pages.
+ * Size: 64*256 + 65*8 + 64*8 + 32*256 + 33*8 + 32*8 = 25912 bytes → 7 kva pages.
  */
 typedef struct {
     char     argv_bufs[64][256];
     char    *argv_ptrs[65];
     uint64_t str_ptrs[64];
+    char     env_bufs[32][256];
+    char    *env_ptrs[33];
+    uint64_t env_str_ptrs[32];
 } execve_argbuf_t;
 
-#define EXECVE_ARGBUF_PAGES 5   /* ceil(17416 / 4096) */
+#define EXECVE_ARGBUF_PAGES 7   /* ceil(25912 / 4096) */
 
 /* ── Path helpers (sys_file.c) ──────────────────────────────────────────── */
 int copy_path_from_user(char *kpath, uint64_t user_ptr, uint32_t bufsz);

@@ -3,13 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define LV_ROW_H    FONT_H
+#define LV_ROW_H    glyph_text_height()
 #define LV_PAD      2
-#define LV_BG       0x00FFFFFF
-#define LV_FG       0x00202030
-#define LV_SEL_BG   0x003070A0
+#define LV_BG       C_INPUT_BG
+#define LV_FG       C_TEXT
+#define LV_SEL_BG   C_SEL_BG
 #define LV_SEL_FG   0x00FFFFFF
-#define LV_BORDER   0x00808090
+#define LV_BORDER   C_INPUT_BD
 #define LV_SB_W     16
 
 static void
@@ -20,9 +20,10 @@ listview_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
     /* List area (excluding scrollbar) */
     int list_w = self->w - LV_SB_W;
 
-    /* Background */
-    draw_fill_rect(surf, ox, oy, list_w, self->h, LV_BG);
-    draw_rect(surf, ox, oy, list_w, self->h, LV_BORDER);
+    /* Subtle blend background */
+    draw_blend_rect(surf, ox, oy, list_w, self->h, 0x00000010, 60);
+    draw_blend_rect(surf, ox, oy, list_w, 1, 0x00000000, 40);
+    draw_blend_rect(surf, ox, oy + self->h - 1, list_w, 1, 0x00FFFFFF, 15);
 
     /* Rows */
     for (int i = 0; i < lv->visible_rows; i++) {
@@ -34,13 +35,12 @@ listview_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
         int selected = (item_idx == lv->selected);
 
         if (selected)
-            draw_fill_rect(surf, ox + 1, ry, list_w - 2, LV_ROW_H,
-                           LV_SEL_BG);
+            draw_blend_rect(surf, ox + 1, ry, list_w - 2, LV_ROW_H,
+                            0x00C0C0E0, 25);
 
         uint32_t fg = selected ? LV_SEL_FG : LV_FG;
-        uint32_t bg = selected ? LV_SEL_BG : LV_BG;
         if (lv->items[item_idx])
-            draw_text(surf, ox + LV_PAD + 2, ry, lv->items[item_idx], fg, bg);
+            draw_text_ui(surf, ox + LV_PAD + 2, ry, lv->items[item_idx], fg);
     }
 }
 

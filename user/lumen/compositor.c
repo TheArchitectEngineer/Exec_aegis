@@ -3,6 +3,7 @@
 #include "dock.h"
 #include "cursor.h"
 #include <glyph.h>
+#include <font.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -156,15 +157,86 @@ comp_add_dirty(compositor_t *c, glyph_rect_t r)
 static void
 blit_window_to_back(surface_t *back, glyph_window_t *win, int force_opaque)
 {
-    if (win->frosted && !force_opaque) {
-        /* Frosted glass: blur background behind window, apply dark tint,
-         * then keyed-blit the window surface (C_TERM_BG pixels become
-         * transparent, letting the frosted background show through). */
-        draw_box_blur(back, win->x, win->y, win->surf_w, win->surf_h, 8);
+    if (win->frosted && win->chromeless && !force_opaque) {
+        /* Chromeless frosted window (dropdown terminal): blur+tint+keyed blit */
+        draw_box_blur(back, win->x, win->y, win->surf_w, win->surf_h, 10);
         draw_blend_rect(back, win->x, win->y, win->surf_w, win->surf_h,
                         C_TERM_BG, 128);
         draw_blit_keyed(back, win->x, win->y, win->surface.buf,
                         win->surf_w, win->surf_h, C_TERM_BG);
+    } else if (win->frosted && !force_opaque) {
+        int bd = GLYPH_BORDER_WIDTH;
+        int tb = GLYPH_TITLEBAR_HEIGHT;
+        int total_w = win->client_w + 2 * bd;
+        int total_h = win->client_h + tb + 2 * bd;
+
+        /* 1. Blur the entire window footprint */
+        draw_box_blur(back, win->x, win->y, total_w, total_h, 10);
+
+        /* 2. Dark tint on titlebar region */
+        draw_blend_rect(back, win->x, win->y, total_w, tb + bd,
+                        0x00101020, 160);
+
+        /* 3. Tint on client region — dark for terminals, light for widgets */
+        if (win->priv) {
+            /* Terminal: dark frosted glass matching terminal bg */
+            draw_blend_rect(back, win->x + bd, win->y + tb + bd,
+                            win->client_w, win->client_h,
+                            0x000A0A14, 160);
+        } else {
+            /* Widget window: dark translucent glass (not white) */
+            draw_blend_rect(back, win->x + bd, win->y + tb + bd,
+                            win->client_w, win->client_h,
+                            0x00181828, 150);
+        }
+
+        /* 4. Subtle border around entire window */
+        draw_blend_rect(back, win->x, win->y, total_w, 1, 0x00FFFFFF, 30);
+        draw_blend_rect(back, win->x, win->y + total_h - 1, total_w, 1, 0x00000000, 40);
+        draw_blend_rect(back, win->x, win->y, 1, total_h, 0x00FFFFFF, 20);
+        draw_blend_rect(back, win->x + total_w - 1, win->y, 1, total_h, 0x00000000, 30);
+
+        /* 5. Title text — drawn directly on frosted backbuffer (no halo) */
+        int title_cy = win->y + (tb + bd) / 2;
+        if (g_font_ui) {
+            int tw = font_text_width(g_font_ui, 13, win->title);
+            int tx = win->x + (total_w - tw) / 2;
+            int ty = title_cy - font_height(g_font_ui, 13) / 2;
+            font_draw_text(back, g_font_ui, 13, tx, ty, win->title, 0x00FFFFFF);
+        } else {
+            int len = 0;
+            const char *p = win->title;
+            while (*p++) len++;
+            int tx = win->x + (total_w - len * FONT_W) / 2;
+            draw_text_t(back, tx, win->y + bd + 5, win->title, 0x00FFFFFF);
+        }
+
+        /* 6. Traffic-light circles — drawn directly on backbuffer */
+        int btn_cy = title_cy;
+        int btn_x = win->x + bd + 8 + 7;
+        draw_circle_filled(back, btn_x, btn_cy, 7, 0x00FF5F57);
+        draw_circle_filled(back, btn_x + 22, btn_cy, 7, 0x00FEBC2E);
+        draw_circle_filled(back, btn_x + 44, btn_cy, 7, 0x0028C840);
+
+        /* 7. Blit client area content from window surface (opaque overlay) */
+        {
+            int cx = bd;                    /* client x in window surface */
+            int cy = bd + tb;               /* client y in window surface */
+            int dx = win->x + cx;           /* dest x on backbuffer */
+            int dy = win->y + cy;           /* dest y on backbuffer */
+            for (int row = 0; row < win->client_h; row++) {
+                if (dy + row < 0 || dy + row >= back->h) continue;
+                for (int col = 0; col < win->client_w; col++) {
+                    if (dx + col < 0 || dx + col >= back->w) continue;
+                    uint32_t px = win->surface.buf[(cy + row) * win->surface.pitch + (cx + col)];
+                    /* Skip key-colored pixels (transparent).
+                     * Terminal windows use C_TERM_BG, widget windows use C_SHADOW. */
+                    uint32_t key = win->priv ? C_TERM_BG : C_SHADOW;
+                    if (px != key)
+                        back->buf[(dy + row) * back->pitch + (dx + col)] = px;
+                }
+            }
+        }
     } else {
         /* Normal opaque blit */
         draw_blit(back, win->x, win->y, win->surface.buf,
@@ -337,10 +409,11 @@ comp_composite(compositor_t *c)
 static int
 hit_close_button(glyph_window_t *win, int mx, int my)
 {
-    int btn_x = win->x + GLYPH_BORDER_WIDTH + 8;
-    int btn_y = win->y + GLYPH_BORDER_WIDTH + 7;
-    return mx >= btn_x && mx < btn_x + 14 &&
-           my >= btn_y && my < btn_y + 14;
+    /* Circle center: same as render_chrome btn_x + BTN_RADIUS */
+    int cx = win->x + GLYPH_BORDER_WIDTH + 8 + 7;
+    int cy = win->y + (GLYPH_TITLEBAR_HEIGHT + GLYPH_BORDER_WIDTH) / 2;
+    int dx = mx - cx, dy = my - cy;
+    return dx * dx + dy * dy <= 10 * 10;
 }
 
 /* Hit-test the titlebar area of a glyph window */

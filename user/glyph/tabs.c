@@ -3,33 +3,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAB_H        (FONT_H + 8)
 #define TAB_PAD      12
-#define TAB_BG       0x00E0E0E0
-#define TAB_ACTIVE   0x00FFFFFF
-#define TAB_FG       0x00202030
-#define TAB_BORDER   0x00C0C0C0
+
+static int tab_header_h(void) { return glyph_text_height() + 8; }
+
+#define TAB_BG       0x001C2430
+#define TAB_ACTIVE   C_WIN_BG
+#define TAB_FG       C_TEXT
+#define TAB_BORDER   0x00303848
 
 static int
 tab_label_x(glyph_tabs_t *tabs, int i)
 {
     int x = 0;
-    for (int j = 0; j < i; j++) {
-        int len = 0;
-        const char *p = tabs->labels[j];
-        while (*p++) len++;
-        x += len * FONT_W + 2 * TAB_PAD;
-    }
+    for (int j = 0; j < i; j++)
+        x += glyph_text_width(tabs->labels[j]) + 2 * TAB_PAD;
     return x;
 }
 
 static int
 tab_label_w(glyph_tabs_t *tabs, int i)
 {
-    int len = 0;
-    const char *p = tabs->labels[i];
-    while (*p++) len++;
-    return len * FONT_W + 2 * TAB_PAD;
+    return glyph_text_width(tabs->labels[i]) + 2 * TAB_PAD;
 }
 
 static void
@@ -37,32 +32,23 @@ tabs_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
 {
     glyph_tabs_t *tabs = (glyph_tabs_t *)self;
 
-    /* Tab header background */
-    draw_fill_rect(surf, ox, oy, self->w, TAB_H, TAB_BG);
+    /* Tab header — subtle blend, not solid fill */
+    draw_blend_rect(surf, ox, oy, self->w, tab_header_h(), 0x00C0C0E0, 10);
 
     /* Draw tab labels */
     for (int i = 0; i < tabs->ntabs; i++) {
         int lx = ox + tab_label_x(tabs, i);
         int lw = tab_label_w(tabs, i);
 
-        if (i == tabs->active) {
-            draw_fill_rect(surf, lx, oy, lw, TAB_H, TAB_ACTIVE);
-            draw_rect(surf, lx, oy, lw, TAB_H, TAB_BORDER);
-            /* Erase bottom border to connect with content */
-            for (int px = lx + 1; px < lx + lw - 1; px++)
-                draw_px(surf, px, oy + TAB_H - 1, TAB_ACTIVE);
-        }
+        if (i == tabs->active)
+            draw_blend_rect(surf, lx, oy, lw, tab_header_h(), 0x00C0C0E0, 25);
 
-        draw_text_t(surf, lx + TAB_PAD, oy + 4, tabs->labels[i], TAB_FG);
+        uint32_t fg = (i == tabs->active) ? 0x00FFFFFF : TAB_FG;
+        draw_text_ui(surf, lx + TAB_PAD, oy + 4, tabs->labels[i], fg);
     }
 
-    /* Bottom border */
-    for (int px = 0; px < self->w; px++)
-        draw_px(surf, ox + px, oy + TAB_H - 1, TAB_BORDER);
-
-    /* Content area background */
-    draw_fill_rect(surf, ox, oy + TAB_H, self->w, self->h - TAB_H, TAB_ACTIVE);
-    draw_rect(surf, ox, oy + TAB_H - 1, self->w, self->h - TAB_H + 1, TAB_BORDER);
+    /* Subtle separator */
+    draw_blend_rect(surf, ox, oy + tab_header_h() - 1, self->w, 1, 0x00FFFFFF, 15);
 
     /* Only the active panel's children are drawn by the tree walker.
      * We need to make inactive panels invisible. */
@@ -76,7 +62,7 @@ tabs_on_mouse(glyph_widget_t *self, int btn, int local_x, int local_y)
     glyph_tabs_t *tabs = (glyph_tabs_t *)self;
 
     /* Click in tab header area */
-    if (local_y < TAB_H) {
+    if (local_y < tab_header_h()) {
         for (int i = 0; i < tabs->ntabs; i++) {
             int lx = tab_label_x(tabs, i);
             int lw = tab_label_w(tabs, i);
@@ -136,12 +122,34 @@ glyph_tabs_add(glyph_tabs_t *tabs, const char *label, glyph_widget_t *panel)
     tabs->panels[tabs->ntabs] = panel;
     if (panel) {
         panel->x = 0;
-        panel->y = TAB_H;
+        panel->y = tab_header_h();
         /* Make inactive panels invisible */
         panel->visible = (tabs->ntabs == tabs->active) ? 1 : 0;
         glyph_widget_add_child(&tabs->base, panel);
     }
 
     tabs->ntabs++;
+
+    /* Recompute base widget dimensions from accumulated tab headers + panels.
+     * Width = max of total tab header width and widest panel.
+     * Height = tab_header_h() header + tallest panel. */
+    int total_tab_w = 0;
+    int max_panel_w = 0;
+    int max_panel_h = 0;
+    for (int i = 0; i < tabs->ntabs; i++) {
+        total_tab_w += tab_label_w(tabs, i);
+        if (tabs->panels[i]) {
+            if (tabs->panels[i]->w > max_panel_w)
+                max_panel_w = tabs->panels[i]->w;
+            if (tabs->panels[i]->h > max_panel_h)
+                max_panel_h = tabs->panels[i]->h;
+        }
+    }
+    int w = total_tab_w > max_panel_w ? total_tab_w : max_panel_w;
+    tabs->base.w = w;
+    tabs->base.h = tab_header_h() + max_panel_h;
+    tabs->base.pref_w = tabs->base.w;
+    tabs->base.pref_h = tabs->base.h;
+
     glyph_widget_mark_dirty(&tabs->base);
 }

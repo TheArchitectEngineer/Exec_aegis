@@ -3,16 +3,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MB_HEIGHT    (FONT_H + 4)
+#define MB_HEIGHT    (glyph_text_height() + 4)
 #define MB_PAD       8
-#define MB_BG        0x00F0F0F0
-#define MB_FG        0x00202030
-#define MB_OPEN_BG   0x00FFFFFF
-#define MB_HOVER_BG  0x003070A0
+#define MB_BG        0x001C2430
+#define MB_FG        C_TEXT
+#define MB_OPEN_BG   C_WIN_BG
+#define MB_HOVER_BG  C_SEL_BG
 #define MB_HOVER_FG  0x00FFFFFF
-#define MB_BORDER    0x00C0C0C0
-#define MB_DD_BG     0x00FFFFFF
-#define MB_DD_BORDER 0x00808090
+#define MB_BORDER    0x00303848
+#define MB_DD_BG     C_WIN_BG
+#define MB_DD_BORDER C_INPUT_BD
 
 /* Compute x position of menu label i */
 static int
@@ -23,7 +23,7 @@ menu_label_x(glyph_menubar_t *mb, int i)
         int len = 0;
         const char *p = mb->menus[j].label;
         while (*p++) len++;
-        x += len * FONT_W + 2 * MB_PAD;
+        x += glyph_text_width(mb->menus[j].label) + 2 * MB_PAD;
     }
     return x;
 }
@@ -31,10 +31,7 @@ menu_label_x(glyph_menubar_t *mb, int i)
 static int
 menu_label_w(glyph_menubar_t *mb, int i)
 {
-    int len = 0;
-    const char *p = mb->menus[i].label;
-    while (*p++) len++;
-    return len * FONT_W + 2 * MB_PAD;
+    return glyph_text_width(mb->menus[i].label) + 2 * MB_PAD;
 }
 
 static void
@@ -57,7 +54,7 @@ menubar_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
             draw_fill_rect(surf, lx, oy, lw, MB_HEIGHT - 1, MB_OPEN_BG);
         }
 
-        draw_text_t(surf, lx + MB_PAD, oy + 2, mb->menus[i].label, MB_FG);
+        draw_text_ui(surf, lx + MB_PAD, oy + 2, mb->menus[i].label, MB_FG);
     }
 
     /* Dropdown for open menu */
@@ -69,16 +66,13 @@ menubar_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
         /* Find widest item */
         int max_w = 0;
         for (int i = 0; i < menu->count; i++) {
-            int len = 0;
-            const char *p = menu->items[i];
-            while (*p++) len++;
-            int w = len * FONT_W + 2 * MB_PAD;
+            int w = glyph_text_width(menu->items[i]) + 2 * MB_PAD;
             if (w > max_w) max_w = w;
         }
         if (max_w < menu_label_w(mb, mb->open_idx))
             max_w = menu_label_w(mb, mb->open_idx);
 
-        int dd_h = menu->count * FONT_H + 4;
+        int dd_h = menu->count * glyph_text_height() + 4;
 
         /* Dropdown background */
         draw_fill_rect(surf, dd_x, dd_y, max_w, dd_h, MB_DD_BG);
@@ -86,7 +80,7 @@ menubar_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
 
         /* Items */
         for (int i = 0; i < menu->count; i++) {
-            draw_text_t(surf, dd_x + MB_PAD, dd_y + 2 + i * FONT_H,
+            draw_text_ui(surf, dd_x + MB_PAD, dd_y + 2 + i * glyph_text_height(),
                         menu->items[i], MB_FG);
         }
     }
@@ -120,7 +114,7 @@ menubar_on_mouse(glyph_widget_t *self, int btn, int local_x, int local_y)
     if (mb->open_idx >= 0 && mb->open_idx < mb->nmenu) {
         glyph_menu_def_t *menu = &mb->menus[mb->open_idx];
         int dd_y = MB_HEIGHT;
-        int item_idx = (local_y - dd_y - 2) / FONT_H;
+        int item_idx = (local_y - dd_y - 2) / glyph_text_height();
         if (item_idx >= 0 && item_idx < menu->count) {
             int saved_menu = mb->open_idx;
             mb->open_idx = -1;

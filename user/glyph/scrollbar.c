@@ -3,10 +3,10 @@
 #include <stdlib.h>
 
 #define SB_WIDTH     16
-#define SB_BG        0x00E0E0E0
-#define SB_THUMB     0x00808090
-#define SB_THUMB_HI  0x00606070
-#define SB_BORDER    0x00A0A0A0
+#define SB_BG        C_INPUT_BG
+#define SB_THUMB     0x00404858
+#define SB_THUMB_HI  0x00506070
+#define SB_BORDER    C_INPUT_BD
 
 static int
 sb_thumb_h(glyph_scrollbar_t *sb)
@@ -35,9 +35,8 @@ scrollbar_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
 {
     glyph_scrollbar_t *sb = (glyph_scrollbar_t *)self;
 
-    /* Track background */
-    draw_fill_rect(surf, ox, oy, self->w, self->h, SB_BG);
-    draw_rect(surf, ox, oy, self->w, self->h, SB_BORDER);
+    /* Track background — subtle blend */
+    draw_blend_rect(surf, ox, oy, self->w, self->h, 0x00000010, 40);
 
     /* Thumb */
     int th = sb_thumb_h(sb);

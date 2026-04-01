@@ -5,37 +5,43 @@
 
 #define TF_PAD_X 4
 #define TF_PAD_Y 2
-#define TF_BG       0x00FFFFFF
-#define TF_FG       0x00202030
-#define TF_BORDER   0x00808090
-#define TF_CURSOR   0x00000000
+#define TF_BG       C_INPUT_BG
+#define TF_FG       C_TEXT
+#define TF_BORDER   C_INPUT_BD
+#define TF_CURSOR   C_ACCENT
 
 static void
 textfield_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
 {
     glyph_textfield_t *tf = (glyph_textfield_t *)self;
 
-    /* Background */
-    draw_fill_rect(surf, ox, oy, self->w, self->h, TF_BG);
+    /* Subtle blend background */
+    draw_blend_rect(surf, ox, oy, self->w, self->h, 0x00000010, 80);
 
     /* Border */
-    draw_rect(surf, ox, oy, self->w, self->h, TF_BORDER);
+    draw_blend_rect(surf, ox, oy, self->w, 1, 0x00000000, 40);
+    draw_blend_rect(surf, ox, oy + self->h - 1, self->w, 1, 0x00FFFFFF, 15);
+    draw_blend_rect(surf, ox, oy, 1, self->h, 0x00000000, 30);
+    draw_blend_rect(surf, ox + self->w - 1, oy, 1, self->h, 0x00FFFFFF, 10);
 
     /* Text */
+    int cw = glyph_char_width();
+    int ch = glyph_text_height();
     int tx = ox + TF_PAD_X;
     int ty = oy + TF_PAD_Y;
     for (int i = 0; i < tf->len; i++) {
-        if (tx + FONT_W > ox + self->w - TF_PAD_X)
+        if (tx + cw > ox + self->w - TF_PAD_X)
             break;
-        draw_char(surf, tx, ty, tf->buf[i], TF_FG, TF_BG);
-        tx += FONT_W;
+        char tmp[2] = { tf->buf[i], '\0' };
+        draw_text_ui(surf, tx, ty, tmp, TF_FG);
+        tx += cw;
     }
 
     /* Cursor line */
-    int cx = ox + TF_PAD_X + tf->cursor_pos * FONT_W;
-    if (cx < ox + self->w - TF_PAD_X) {
-        for (int r = 0; r < FONT_H; r++)
-            draw_px(surf, cx, oy + TF_PAD_Y + r, TF_CURSOR);
+    int cx_pos = ox + TF_PAD_X + tf->cursor_pos * cw;
+    if (cx_pos < ox + self->w - TF_PAD_X) {
+        for (int r = 0; r < ch; r++)
+            draw_px(surf, cx_pos, oy + TF_PAD_Y + r, TF_CURSOR);
     }
 }
 
@@ -89,7 +95,7 @@ textfield_on_mouse(glyph_widget_t *self, int btn, int local_x, int local_y)
     glyph_textfield_t *tf = (glyph_textfield_t *)self;
 
     /* Click positions cursor */
-    int char_pos = (local_x - TF_PAD_X) / FONT_W;
+    int char_pos = (local_x - TF_PAD_X) / glyph_char_width();
     if (char_pos < 0) char_pos = 0;
     if (char_pos > tf->len) char_pos = tf->len;
     if (char_pos != tf->cursor_pos) {
@@ -113,8 +119,8 @@ glyph_textfield_create(int width_chars, void (*on_change)(glyph_widget_t *, cons
     tf->on_change = on_change;
     tf->width_chars = width_chars;
 
-    tf->base.pref_w = width_chars * FONT_W + 2 * TF_PAD_X;
-    tf->base.pref_h = FONT_H + 2 * TF_PAD_Y;
+    tf->base.pref_w = width_chars * glyph_char_width() + 2 * TF_PAD_X;
+    tf->base.pref_h = glyph_text_height() + 2 * TF_PAD_Y;
     tf->base.w = tf->base.pref_w;
     tf->base.h = tf->base.pref_h;
 

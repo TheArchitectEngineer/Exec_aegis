@@ -1485,7 +1485,6 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
           uint64_t envp_uptr, uint64_t stdio_fd_arg,
           uint64_t cap_mask_uptr)
 {
-    (void)envp_uptr;
 
     aegis_process_t *parent = (aegis_process_t *)sched_current();
     if (!sched_current()->is_user)
@@ -1547,6 +1546,35 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
         }
         abuf->argv_ptrs[argc] = (char *)0;
     }
+
+    /* 2b. Copy envp from user (<=32 entries, each <=255 bytes) */
+    int envc = 0;
+    if (envp_uptr != 0) {
+        uint64_t ptr_addr = envp_uptr;
+        while (envc < 32) {
+            if (!user_ptr_valid(ptr_addr, 8))
+                { result = (uint64_t)-(int64_t)14; goto fail_early; }
+            uint64_t str_ptr;
+            copy_from_user(&str_ptr, (const void *)(uintptr_t)ptr_addr, 8);
+            if (!str_ptr) break;
+            {
+                uint64_t i;
+                for (i = 0; i < 255; i++) {
+                    if (!user_ptr_valid(str_ptr + i, 1))
+                        { result = (uint64_t)-(int64_t)14; goto fail_early; }
+                    char c;
+                    copy_from_user(&c, (const void *)(uintptr_t)(str_ptr + i), 1);
+                    abuf->env_bufs[envc][i] = c;
+                    if (c == '\0') break;
+                }
+            }
+            abuf->env_bufs[envc][255] = '\0';
+            abuf->env_ptrs[envc] = abuf->env_bufs[envc];
+            envc++;
+            ptr_addr += 8;
+        }
+    }
+    abuf->env_ptrs[envc] = (char *)0;
 
     /* 3. Look up binary: initrd first, then VFS (ext2). */
     const uint8_t *elf_data;
@@ -1651,7 +1679,21 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
     /* 8. Build ABI initial stack (same layout as execve) */
     uint64_t sp_va = USER_STACK_TOP_EXEC;
 
-    /* 8a. Write argv strings */
+    /* 8a. Write env strings (pushed first so argv strings are at lower addr) */
+    {
+        int i;
+        for (i = envc - 1; i >= 0; i--) {
+            uint64_t slen = 0;
+            while (abuf->env_ptrs[i][slen]) slen++;
+            slen++;
+            sp_va -= slen;
+            vmm_write_user_bytes(child->pml4_phys, sp_va,
+                                 abuf->env_ptrs[i], slen);
+            abuf->env_str_ptrs[i] = sp_va;
+        }
+    }
+
+    /* 8b. Write argv strings */
     {
         int i;
         for (i = argc - 1; i >= 0; i--) {
@@ -1676,10 +1718,10 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
 
     sp_va &= ~7ULL;
 
-    /* Pointer table: argc + argv + NULL + envp NULL + auxv */
+    /* Pointer table: argc + argv + NULL + envp + NULL + auxv */
     {
         uint64_t auxv_qwords = has_interp ? 16 : 12;
-        uint64_t table_qwords = (uint64_t)argc + 3 + auxv_qwords;
+        uint64_t table_qwords = (uint64_t)argc + 2 + (uint64_t)envc + 1 + auxv_qwords;
         uint64_t table_bytes  = table_qwords * 8ULL;
 
         sp_va -= table_bytes;
@@ -1696,6 +1738,15 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
             }
         }
         vmm_write_user_u64(child->pml4_phys, wp, 0ULL); wp += 8; /* argv NULL */
+
+        /* envp pointers */
+        {
+            int i;
+            for (i = 0; i < envc; i++) {
+                vmm_write_user_u64(child->pml4_phys, wp, abuf->env_str_ptrs[i]);
+                wp += 8;
+            }
+        }
         vmm_write_user_u64(child->pml4_phys, wp, 0ULL); wp += 8; /* envp NULL */
 
         /* auxv: AT_PHDR(3), AT_PHNUM(5), AT_PAGESZ(6), AT_ENTRY(9), AT_RANDOM(25) */

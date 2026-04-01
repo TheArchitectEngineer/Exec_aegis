@@ -4,9 +4,48 @@
  * pixel writes. Font rendering uses the Terminus 10x20 bitmap font.
  */
 #include "draw.h"
+#include "font.h"
 #include "terminus20.h"
 #include <stdlib.h>
 #include <string.h>
+
+/* ---- TTF-aware text measurement helpers ---- */
+
+/* UI font size used by Glyph widgets */
+#define UI_FONT_SIZE 14
+
+int glyph_text_width(const char *text)
+{
+    if (g_font_ui)
+        return font_text_width(g_font_ui, UI_FONT_SIZE, text);
+    int len = 0;
+    while (text[len]) len++;
+    return len * FONT_W;
+}
+
+int glyph_text_height(void)
+{
+    if (g_font_ui)
+        return font_height(g_font_ui, UI_FONT_SIZE);
+    return FONT_H;
+}
+
+int glyph_char_width(void)
+{
+    if (g_font_ui)
+        return font_text_width(g_font_ui, UI_FONT_SIZE, "M");
+    return FONT_W;
+}
+
+/* Draw text using TTF if available, bitmap fallback. Transparent bg. */
+void
+draw_text_ui(surface_t *s, int x, int y, const char *str, uint32_t fg)
+{
+    if (g_font_ui)
+        font_draw_text(s, g_font_ui, UI_FONT_SIZE, x, y, str, fg);
+    else
+        draw_text_t(s, x, y, str, fg);
+}
 
 void draw_px(surface_t *s, int x, int y, uint32_t c)
 {

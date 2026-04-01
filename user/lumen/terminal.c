@@ -572,9 +572,6 @@ dropdown_render_content(glyph_window_t *win)
     /* Fill entire surface with terminal background */
     draw_fill_rect(s, 0, 0, win->surf_w, win->surf_h, C_TERM_BG);
 
-    /* Draw a subtle accent line at the very top */
-    draw_fill_rect(s, 0, 0, win->surf_w, 2, C_ACCENT);
-
     /* Terminal content starts at (4, 4) with small padding */
     int ox, oy;
     get_padding(tp, &ox, &oy);
@@ -619,11 +616,20 @@ dropdown_render_content(glyph_window_t *win)
 }
 
 /* Spawn the shell process for a terminal (shared between normal + dropdown) */
+#define SYS_CAP_GRANT_EXEC 361
+#define CAP_KIND_CAP_DELEGATE 13
+#define CAP_KIND_CAP_QUERY    14
+#define CAP_RIGHTS_READ       1
+
 static int
 spawn_shell(int slave_fd)
 {
     char *argv[] = {"-stsh", NULL};  /* leading '-' = login shell */
-    char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=dumb", NULL};
+    char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=dumb", "USER=root", NULL};
+
+    /* Pre-register caps so the spawned shell inherits them via exec_caps */
+    syscall(SYS_CAP_GRANT_EXEC, (long)CAP_KIND_CAP_DELEGATE, (long)CAP_RIGHTS_READ);
+    syscall(SYS_CAP_GRANT_EXEC, (long)CAP_KIND_CAP_QUERY, (long)CAP_RIGHTS_READ);
 
     long pid = syscall(SYS_SPAWN, "/bin/stsh", argv, envp, slave_fd, 0);
     return (int)pid;
@@ -783,12 +789,13 @@ terminal_create_dropdown(int screen_w, int screen_h, int *master_fd_out)
     win->priv = tp;
     win->closeable = 0;
     win->frosted = 1;
+    win->chromeless = 1;  /* no titlebar — pure terminal surface */
     win->visible = 0;  /* starts hidden */
     term_wire_mouse(win);
 
-    /* Position: centered horizontally at top of screen */
+    /* Position: centered horizontally, below the taskbar (28px) */
     win->x = margin;
-    win->y = 0;
+    win->y = 28;
 
     /* Open PTY and spawn shell */
     const char *fail_reason = NULL;

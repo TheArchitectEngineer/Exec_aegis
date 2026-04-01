@@ -70,7 +70,7 @@ load_logo(void)
     if (read(fd, hdr, 8) != 8) { close(fd); return; }
     s_logo_w = (int)hdr[0];
     s_logo_h = (int)hdr[1];
-    if (s_logo_w <= 0 || s_logo_h <= 0 || s_logo_w > 800 || s_logo_h > 400) {
+    if (s_logo_w <= 0 || s_logo_h <= 0 || s_logo_w > 1200 || s_logo_h > 600) {
         close(fd); s_logo_w = s_logo_h = 0; return;
     }
     size_t sz = (size_t)(s_logo_w * s_logo_h) * 4;
@@ -273,7 +273,9 @@ spawn_lumen(void)
      * in sys_spawn's session/TTY setup.  fork+execve is the workaround. */
     pid_t pid = fork();
     if (pid == 0) {
-        /* Child: exec lumen */
+        /* Child: grant caps AFTER fork (exec_caps not inherited by fork),
+         * then exec lumen. */
+        auth_grant_shell_caps();
         setenv("PATH", "/bin", 1);
         setenv("HOME", "/root", 1);
         setenv("USER", s_username, 1);

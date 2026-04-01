@@ -5,10 +5,10 @@
 
 #define CB_SIZE     16
 #define CB_SPACING  6
-#define CB_BG       0x00FFFFFF
-#define CB_BORDER   0x00808090
-#define CB_CHECK    0x003070A0
-#define CB_FG       0x00202030
+#define CB_BG       C_INPUT_BG
+#define CB_BORDER   C_INPUT_BD
+#define CB_CHECK    C_ACCENT
+#define CB_FG       C_TEXT
 
 static void
 checkbox_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
@@ -18,8 +18,9 @@ checkbox_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
     /* Box */
     int bx = ox;
     int by = oy + (self->h - CB_SIZE) / 2;
-    draw_fill_rect(surf, bx, by, CB_SIZE, CB_SIZE, CB_BG);
-    draw_rect(surf, bx, by, CB_SIZE, CB_SIZE, CB_BORDER);
+    draw_blend_rect(surf, bx, by, CB_SIZE, CB_SIZE, 0x00000010, 80);
+    draw_blend_rect(surf, bx, by, CB_SIZE, 1, 0x00000000, 40);
+    draw_blend_rect(surf, bx, by + CB_SIZE - 1, CB_SIZE, 1, 0x00FFFFFF, 15);
 
     /* Checkmark */
     if (cb->checked) {
@@ -34,8 +35,8 @@ checkbox_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
 
     /* Label text */
     int tx = ox + CB_SIZE + CB_SPACING;
-    int ty = oy + (self->h - FONT_H) / 2;
-    draw_text_t(surf, tx, ty, cb->label, CB_FG);
+    int ty = oy + (self->h - glyph_text_height()) / 2;
+    draw_text_ui(surf, tx, ty, cb->label, CB_FG);
 }
 
 static void
@@ -73,11 +74,12 @@ glyph_checkbox_create(const char *label, void (*on_change)(glyph_widget_t *, int
             len++;
         }
         cb->label[len] = '\0';
-        cb->base.pref_w = CB_SIZE + CB_SPACING + len * FONT_W;
+        cb->base.pref_w = CB_SIZE + CB_SPACING + glyph_text_width(label);
     } else {
         cb->base.pref_w = CB_SIZE;
     }
-    cb->base.pref_h = FONT_H > CB_SIZE ? FONT_H : CB_SIZE;
+    int th = glyph_text_height();
+    cb->base.pref_h = th > CB_SIZE ? th : CB_SIZE;
     cb->base.w = cb->base.pref_w;
     cb->base.h = cb->base.pref_h;
 

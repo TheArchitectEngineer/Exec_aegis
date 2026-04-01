@@ -387,9 +387,12 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph; partition management UI; progress display | Not started |
 | 48 | **Super key + extended keyboard** — PS/2 E0 state machine; Super modifier tracking; ESC-prefix encoding for Super combos (Win+L); USB HID GUI modifier bits; multimedia scancodes (vol/mute) | Not started |
 | 49 | **HDA audio** — Intel HDA controller driver; PCM playback/capture; /dev/audio VFS; mixer (volume/mute); CAP_KIND_AUDIO; system sounds | Not started |
-| 50 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
-| 51 | **Deep security audit** — adversarial review of every attack surface. Syscall fuzzing, capability bypass, TOCTOU races, integer overflows, use-after-free, signal reentrancy, ext2 corruption resilience, VFS traversal, kernel info leaks, SMP atomicity. CVE-grade findings block release. pwn binary expanded. | Not started |
-| 52 | **Release** | Not started |
+| 50 | **TCP polish** — send segmentation (break large writes into MSS-sized segments); per-connection TX buffer; receiver-side flow control; fix shared s_tcp_buf. Required for SSH. | Not started |
+| 51 | **TinySSH + sftp-server** — port TinySSH (<10K LOC, NaCl crypto, no dynamic alloc, key-only auth); minimal sftp-server for SCP/SFTP; capability-sandboxed sessions; CAP_KIND_NET_LISTEN | Not started |
+| 52 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
+| 53 | **virtio-blk driver** — PCI virtio block device (1af4:1001); blkdev_t integration; needed for cloud VMs (no NVMe emulation) | Not started |
+| 54 | **Deep security audit** — adversarial review of every attack surface. Syscall fuzzing, capability bypass, TOCTOU races, integer overflows, use-after-free, signal reentrancy, ext2 corruption resilience, VFS traversal, kernel info leaks, SMP atomicity. CVE-grade findings block release. pwn binary expanded. | Not started |
+| 55 | **Release** | Not started |
 | — | RTL8125 2.5GbE driver (PCI 10ec:8125) — post-release, requires WiFi confirmed working | Not started |
 
 ---

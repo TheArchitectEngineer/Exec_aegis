@@ -6,13 +6,13 @@
 #define BTN_PAD_X 12
 #define BTN_PAD_Y 4
 
-#define BTN_BG_NORMAL   0x003070A0
-#define BTN_BG_HOVER    0x003880B0
-#define BTN_BG_PRESSED  0x00205878
-#define BTN_BG_DISABLED 0x00606060
-#define BTN_BORDER      0x002060A0
-#define BTN_FG           0x00FFFFFF
-#define BTN_FG_DISABLED  0x00A0A0A0
+#define BTN_BG_NORMAL   0x002A3850
+#define BTN_BG_HOVER    0x00344868
+#define BTN_BG_PRESSED  0x00203040
+#define BTN_BG_DISABLED 0x00282830
+#define BTN_BORDER      0x00405068
+#define BTN_FG           0x00E8E8F0
+#define BTN_FG_DISABLED  0x00606068
 
 static void
 button_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
@@ -39,22 +39,24 @@ button_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
         break;
     }
 
-    /* Fill */
-    draw_fill_rect(surf, ox, oy, self->w, self->h, bg);
+    /* Subtle blend background */
+    draw_blend_rect(surf, ox, oy, self->w, self->h, bg, 180);
 
     /* Border */
-    draw_rect(surf, ox, oy, self->w, self->h, BTN_BORDER);
+    draw_blend_rect(surf, ox, oy, self->w, 1, 0x00FFFFFF, 20);
+    draw_blend_rect(surf, ox, oy + self->h - 1, self->w, 1, 0x00000000, 30);
+    draw_blend_rect(surf, ox, oy, 1, self->h, 0x00FFFFFF, 15);
+    draw_blend_rect(surf, ox + self->w - 1, oy, 1, self->h, 0x00000000, 20);
 
     /* Pressed: offset text by 1px for sunken effect */
     int text_off = (btn->state == GLYPH_BTN_PRESSED) ? 1 : 0;
 
     /* Center text */
-    int text_len = 0;
-    const char *p = btn->text;
-    while (*p++) text_len++;
-    int tx = ox + (self->w - text_len * FONT_W) / 2 + text_off;
-    int ty = oy + (self->h - FONT_H) / 2 + text_off;
-    draw_text_t(surf, tx, ty, btn->text, fg);
+    int tw = glyph_text_width(btn->text);
+    int th = glyph_text_height();
+    int tx = ox + (self->w - tw) / 2 + text_off;
+    int ty = oy + (self->h - th) / 2 + text_off;
+    draw_text_ui(surf, tx, ty, btn->text, fg);
 }
 
 static void
@@ -94,11 +96,11 @@ glyph_button_create(const char *text, void (*on_click)(glyph_widget_t *))
             len++;
         }
         btn->text[len] = '\0';
-        btn->base.pref_w = len * FONT_W + 2 * BTN_PAD_X;
-        btn->base.pref_h = FONT_H + 2 * BTN_PAD_Y;
+        btn->base.pref_w = glyph_text_width(text) + 2 * BTN_PAD_X;
+        btn->base.pref_h = glyph_text_height() + 2 * BTN_PAD_Y;
     } else {
         btn->base.pref_w = 2 * BTN_PAD_X;
-        btn->base.pref_h = FONT_H + 2 * BTN_PAD_Y;
+        btn->base.pref_h = glyph_text_height() + 2 * BTN_PAD_Y;
     }
     btn->base.w = btn->base.pref_w;
     btn->base.h = btn->base.pref_h;
@@ -119,7 +121,7 @@ glyph_button_set_text(glyph_button_t *btn, const char *text)
         }
     }
     btn->text[len] = '\0';
-    btn->base.pref_w = len * FONT_W + 2 * BTN_PAD_X;
+    btn->base.pref_w = glyph_text_width(btn->text) + 2 * BTN_PAD_X;
     btn->base.w = btn->base.pref_w;
     glyph_widget_mark_dirty(&btn->base);
 }

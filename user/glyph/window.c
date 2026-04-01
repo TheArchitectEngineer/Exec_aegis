@@ -13,22 +13,21 @@
 #define CLOSE_BTN_Y  (BD_W + 7)
 #define CLOSE_BTN_SZ 14
 
-/* Chrome colors -- same as old compositor */
-#define C_CHROME_SHADOW  0x00080810
-#define C_CHROME_BORDER  0x00404060
-#define C_CHROME_TITLE1  0x003468A0
-#define C_CHROME_TITLE2  0x00205078
-#define C_CHROME_UTITLE1 0x00606070
-#define C_CHROME_UTITLE2 0x00404050
-#define C_CHROME_TITLE_T 0x00FFFFFF
-#define C_CHROME_CLIENT  0x00FFFFFF
-#define C_CHROME_RED     0x00E04040
-#define C_CHROME_YELLOW  0x00E0C040
-#define C_CHROME_GREEN   0x0040B040
+/* Chrome colors -- frosted glass aesthetic */
+#define C_CHROME_SHADOW  C_SHADOW
+#define C_CHROME_BORDER  0x00505070
+#define C_CHROME_TITLE   0x00222236
+#define C_CHROME_UTITLE  0x00383848
+#define C_CHROME_TITLE_T 0x00E8E8F0
+#define C_CHROME_CLIENT  0x00F4F4F8
+#define C_CHROME_RED     0x00FF5F57
+#define C_CHROME_YELLOW  0x00FEBC2E
+#define C_CHROME_GREEN   0x0028C840
 
 /* Traffic-light button spacing */
 #define BTN_RADIUS  7
 #define BTN_SPACING 22
+#define CORNER_R    10
 
 /* Client area origin within the surface */
 static int
@@ -75,6 +74,7 @@ glyph_window_create(const char *title, int client_w, int client_h)
 
     win->visible = 1;
     win->closeable = 1;
+    win->frosted = 1;
     win->has_dirty = 1;
     win->dirty_rect.x = 0;
     win->dirty_rect.y = 0;
@@ -95,6 +95,38 @@ glyph_window_destroy(glyph_window_t *win)
     free(win);
 }
 
+/* Check if pixel (px,py) is outside a rounded rectangle with corner radius r */
+static int
+outside_rounded(int px, int py, int w, int h, int r)
+{
+    int cx, cy;
+    /* Top-left */
+    if (px < r && py < r) {
+        cx = r; cy = r;
+        int dx = cx - px, dy = cy - py;
+        return dx * dx + dy * dy > r * r;
+    }
+    /* Top-right */
+    if (px >= w - r && py < r) {
+        cx = w - r - 1; cy = r;
+        int dx = px - cx, dy = cy - py;
+        return dx * dx + dy * dy > r * r;
+    }
+    /* Bottom-left */
+    if (px < r && py >= h - r) {
+        cx = r; cy = h - r - 1;
+        int dx = cx - px, dy = py - cy;
+        return dx * dx + dy * dy > r * r;
+    }
+    /* Bottom-right */
+    if (px >= w - r && py >= h - r) {
+        cx = w - r - 1; cy = h - r - 1;
+        int dx = px - cx, dy = py - cy;
+        return dx * dx + dy * dy > r * r;
+    }
+    return 0;
+}
+
 static void
 render_chrome(glyph_window_t *win)
 {
@@ -102,57 +134,90 @@ render_chrome(glyph_window_t *win)
     int total_w = win->client_w + 2 * BD_W;
     int total_h = win->client_h + TB_H + 2 * BD_W;
     int cx = client_ox();
-    int cy = client_oy();
+    (void)client_oy();
     int focused = win->focused_window;
 
-    /* Shadow — drawn to the right and below the window frame */
-    draw_fill_rect(s, SH_OFF, SH_OFF, total_w, total_h, C_CHROME_SHADOW);
+    /* Clear entire surface to key color (C_SHADOW) for frosted transparency */
+    draw_fill_rect(s, 0, 0, win->surf_w, win->surf_h, C_CHROME_SHADOW);
 
-    /* Border — only the border strips, NOT the client area.
-     * Top border (above titlebar) */
-    draw_fill_rect(s, 0, 0, total_w, BD_W, C_CHROME_BORDER);
-    /* Left border */
-    draw_fill_rect(s, 0, BD_W, BD_W, TB_H + win->client_h + BD_W, C_CHROME_BORDER);
-    /* Right border */
-    draw_fill_rect(s, BD_W + win->client_w, BD_W, BD_W, TB_H + win->client_h + BD_W, C_CHROME_BORDER);
-    /* Bottom border */
-    draw_fill_rect(s, 0, BD_W + TB_H + win->client_h, total_w, BD_W, C_CHROME_BORDER);
+    /* Draw the rounded window body.
+     * Frosted windows: titlebar uses key color (C_SHADOW) so compositor's
+     * blur+tint shows through. Non-frosted: solid titlebar. */
+    uint32_t title_bg = win->frosted ? C_CHROME_SHADOW
+                        : (focused ? C_CHROME_TITLE : C_CHROME_UTITLE);
 
-    /* Titlebar gradient */
-    uint32_t t1 = focused ? C_CHROME_TITLE1 : C_CHROME_UTITLE1;
-    uint32_t t2 = focused ? C_CHROME_TITLE2 : C_CHROME_UTITLE2;
-    draw_gradient_v(s, cx, BD_W, win->client_w, TB_H, t1, t2);
-
-    /* Title text */
-    if (g_font_ui) {
-        int ty = BD_W + (TB_H - font_height(g_font_ui, 13)) / 2;
-        font_draw_text(s, g_font_ui, 13, cx + 50, ty, win->title,
-                       C_CHROME_TITLE_T);
-    } else {
-        draw_text_t(s, cx + 50, BD_W + 5, win->title, C_CHROME_TITLE_T);
+    /* Titlebar area (rounded top corners) */
+    for (int py = 0; py < TB_H + BD_W; py++) {
+        for (int px = 0; px < total_w; px++) {
+            if (!outside_rounded(px, py, total_w, total_h, CORNER_R))
+                draw_px(s, px, py, title_bg);
+        }
     }
 
-    /* Traffic-light buttons */
-    int btn_y = CLOSE_BTN_Y;
-    int btn_x = cx + CLOSE_BTN_X;
+    /* Client area (rounded bottom corners).
+     * Frosted widget windows: use key color (C_SHADOW) so empty areas are
+     * transparent in the compositor's keyed blit, showing frost through.
+     * Terminal windows: use C_TERM_BG (also transparent via terminal keyed path).
+     * Non-frosted: solid white client. */
+    uint32_t client_bg = win->frosted ? C_CHROME_SHADOW
+                         : C_CHROME_CLIENT;
+    if (win->priv)
+        client_bg = C_TERM_BG;
 
-    /* Close (red) */
-    draw_fill_rect(s, btn_x, btn_y, BTN_RADIUS * 2, BTN_RADIUS * 2, C_CHROME_RED);
+    for (int py = TB_H + BD_W; py < total_h; py++) {
+        for (int px = 0; px < total_w; px++) {
+            if (!outside_rounded(px, py, total_w, total_h, CORNER_R))
+                draw_px(s, px, py, client_bg);
+        }
+    }
+
+    /* Subtle border outline along the rounded rect (skip for frosted —
+     * the frost tint provides enough definition) */
+    if (!win->frosted) {
+        for (int py = 0; py < total_h; py++) {
+            for (int px = 0; px < total_w; px++) {
+                if (outside_rounded(px, py, total_w, total_h, CORNER_R))
+                    continue;
+                if (px == 0 || py == 0 || px == total_w - 1 || py == total_h - 1 ||
+                    outside_rounded(px - 1, py, total_w, total_h, CORNER_R) ||
+                    outside_rounded(px + 1, py, total_w, total_h, CORNER_R) ||
+                    outside_rounded(px, py - 1, total_w, total_h, CORNER_R) ||
+                    outside_rounded(px, py + 1, total_w, total_h, CORNER_R))
+                    draw_px(s, px, py, C_CHROME_BORDER);
+            }
+        }
+    }
+
+    /* Divider line between titlebar and client */
+    for (int px = 1; px < total_w - 1; px++)
+        draw_px(s, px, TB_H + BD_W - 1, C_CHROME_BORDER);
+
+    /* Title text — centered */
+    if (g_font_ui) {
+        int tw = font_text_width(g_font_ui, 13, win->title);
+        int tx = (total_w - tw) / 2;
+        int ty = (TB_H + BD_W - font_height(g_font_ui, 13)) / 2;
+        font_draw_text(s, g_font_ui, 13, tx, ty, win->title,
+                       C_CHROME_TITLE_T);
+    } else {
+        int len = 0;
+        const char *p = win->title;
+        while (*p++) len++;
+        int tx = (total_w - len * FONT_W) / 2;
+        draw_text_t(s, tx, BD_W + 5, win->title, C_CHROME_TITLE_T);
+    }
+
+    /* Traffic-light circles */
+    int btn_cy = (TB_H + BD_W) / 2;
+    int btn_x = cx + CLOSE_BTN_X + BTN_RADIUS;
+
+    draw_circle_filled(s, btn_x, btn_cy, BTN_RADIUS, C_CHROME_RED);
+    draw_circle_filled(s, btn_x + BTN_SPACING, btn_cy, BTN_RADIUS, C_CHROME_YELLOW);
+    draw_circle_filled(s, btn_x + BTN_SPACING * 2, btn_cy, BTN_RADIUS, C_CHROME_GREEN);
+
+    /* X on close button when focused */
     if (focused)
-        draw_text_t(s, btn_x + 3, btn_y - 2, "x", 0x00FFFFFF);
-
-    /* Minimize (yellow) */
-    draw_fill_rect(s, btn_x + BTN_SPACING, btn_y,
-                   BTN_RADIUS * 2, BTN_RADIUS * 2, C_CHROME_YELLOW);
-
-    /* Maximize (green) */
-    draw_fill_rect(s, btn_x + BTN_SPACING * 2, btn_y,
-                   BTN_RADIUS * 2, BTN_RADIUS * 2, C_CHROME_GREEN);
-
-    /* Client area background — only for widget-tree windows.
-     * Windows with priv (terminal, info) render their own client content. */
-    if (!win->priv)
-        draw_fill_rect(s, cx, cy, win->client_w, win->client_h, C_CHROME_CLIENT);
+        draw_text_t(s, btn_x - 3, btn_cy - FONT_H / 2, "x", 0x00401010);
 }
 
 void
