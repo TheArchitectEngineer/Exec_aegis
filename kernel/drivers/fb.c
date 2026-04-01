@@ -902,28 +902,14 @@ fb_boot_splash(void)
     _blit_logo_rgba(logo_boot_data, LOGO_BOOT_W, LOGO_BOOT_H,
                     lx, ly, SPLASH_BG);
 
-    /* Suppress printk FB output so the splash stays visible through
-     * all [SUBSYSTEM] OK lines (they go to serial only).
-     * fb_boot_splash_end() unlocks when the kernel is ready. */
-    s_fb_locked = 1;
+    /* No lock — printk_quiet already suppresses FB output in graphical
+     * mode. The splash persists until Bastion paints over it. */
 }
 
 void
 fb_boot_splash_end(void)
 {
-    if (!fb_available) return;
-
-    /* Don't clear the splash — let Bastion paint over it seamlessly.
-     * The splash stays visible until Bastion's first draw_form() call.
-     * Just unlock so text mode (non-graphical boot) can write to FB. */
-    if (!printk_get_quiet()) {
-        /* Text mode: clear splash for normal console output */
-        uint32_t total = s_fb_height * s_pitch_px;
-        uint32_t i;
-        for (i = 0; i < total; i++)
-            s_fb_va[i] = 0;
-        s_col = 0;
-        s_row = 0;
-    }
-    s_fb_locked = 0;
+    /* No-op — splash draws without locking, printk_quiet handles
+     * FB output suppression. Nothing to unlock or clear. */
+    (void)0;
 }
