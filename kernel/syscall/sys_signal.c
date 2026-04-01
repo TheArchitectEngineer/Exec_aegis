@@ -101,13 +101,10 @@ sys_rt_sigprocmask(uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4)
  * Called by musl's __restore_rt after a signal handler returns.
  * frame->user_rsp points at the rt_sigframe_t.pretcode slot.
  *
- * Reads rt_sigframe_t from user stack, patches frame->rip/rflags/user_rsp/r8/r9/r10
- * to restore the interrupted context, restores signal_mask from uc_sigmask,
- * and returns SIGRETURN_MAGIC to tell syscall_entry.asm to skip signal delivery.
- *
- * Limitation: only rip/rflags/rsp/r8/r9/r10 are restored through the
- * frame mechanism. rbx/rbp/r12-r15/rax/rcx/rdx/rsi/rdi survive through the C
- * call chain per SysV ABI (callee-saved or not used by the handler).
+ * Reads rt_sigframe_t from user stack, restores the full register context
+ * (rip, rflags, rsp, r8-r15, rbx, rbp) into the syscall_frame_t, restores
+ * signal_mask from uc_sigmask, and returns SIGRETURN_MAGIC to tell
+ * syscall_entry.asm to skip signal delivery.
  */
 uint64_t
 sys_rt_sigreturn(syscall_frame_t *frame)
@@ -140,6 +137,14 @@ sys_rt_sigreturn(syscall_frame_t *frame)
     frame->r8       = (uint64_t)sf.gregs[REG_R8];
     frame->r9       = (uint64_t)sf.gregs[REG_R9];
     frame->r10      = (uint64_t)sf.gregs[REG_R10];
+    /* Restore callee-saved registers (C5 audit fix).  These are popped by
+     * syscall_entry.asm after the frame body (r10/r9/r8). */
+    frame->rbx      = (uint64_t)sf.gregs[REG_RBX];
+    frame->rbp      = (uint64_t)sf.gregs[REG_RBP];
+    frame->r12      = (uint64_t)sf.gregs[REG_R12];
+    frame->r13      = (uint64_t)sf.gregs[REG_R13];
+    frame->r14      = (uint64_t)sf.gregs[REG_R14];
+    frame->r15      = (uint64_t)sf.gregs[REG_R15];
 
     /* SECURITY (X1): Validate restored RIP is canonical and in user space.
      * On Intel, SYSRET with a non-canonical RCX causes #GP in ring 0 — this

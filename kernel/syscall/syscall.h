@@ -16,14 +16,26 @@ typedef struct syscall_frame {
     uint64_t spsr;        /* spsr_el1 */
 } syscall_frame_t;
 #else
-/* x86-64: pushed by syscall_entry.asm (SYSCALL/SYSRET path). */
+/* x86-64: pushed by syscall_entry.asm (SYSCALL/SYSRET path).
+ *
+ * The frame includes callee-saved registers (rbx, rbp, r12-r15) so that
+ * signal_deliver_sysret can save the full user register state into the
+ * signal frame and sys_rt_sigreturn can restore it.  Without these,
+ * sigreturn after a SYSRET-path signal delivery would zero the callee-saved
+ * registers (C5 audit finding). */
 typedef struct syscall_frame {
     uint64_t r10;       /* offset +0:  saved user r10 (Linux arg4) */
     uint64_t r9;        /* offset +8:  saved user r9  (Linux arg6) */
     uint64_t r8;        /* offset +16: saved user r8  (Linux arg5) */
-    uint64_t rflags;    /* offset +24: saved user RFLAGS (r11 at entry) */
-    uint64_t rip;       /* offset +32: saved user RIP  (rcx at entry) */
-    uint64_t user_rsp;  /* offset +40: saved user RSP (pushed first) */
+    uint64_t rbx;       /* offset +24: callee-saved */
+    uint64_t rbp;       /* offset +32: callee-saved */
+    uint64_t r12;       /* offset +40: callee-saved */
+    uint64_t r13;       /* offset +48: callee-saved */
+    uint64_t r14;       /* offset +56: callee-saved */
+    uint64_t r15;       /* offset +64: callee-saved */
+    uint64_t rflags;    /* offset +72: saved user RFLAGS (r11 at entry) */
+    uint64_t rip;       /* offset +80: saved user RIP  (rcx at entry) */
+    uint64_t user_rsp;  /* offset +88: saved user RSP (pushed first) */
 } syscall_frame_t;
 #endif
 

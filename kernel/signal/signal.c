@@ -303,11 +303,14 @@ signal_deliver(cpu_state_t *s)
  * Returns 0 if no signal or SIG_DFL action (sched_exit never returns for SIG_DFL).
  * Returns 1 if a user handler was installed (caller sets rax=0, does sysret).
  *
- * Limitation: only rip/rflags/user_rsp/r8/r9/r10 are saved in
- * syscall_frame_t. rbx/rbp/r11-r15/rax/rcx/rdx/rsi/rdi from the interrupted
- * context are not restored into the signal frame gregs. Signal handlers that
- * rely on exact register restoration of these fields will not work correctly.
- * SIG_DFL (sched_exit) and simple SIGCHLD handlers work fine.
+ * syscall_frame_t includes callee-saved registers (rbx, rbp, r12-r15)
+ * pushed by syscall_entry.asm.  All saved registers are written to the
+ * signal frame's gregs[] so sys_rt_sigreturn can restore the full context.
+ *
+ * rdi/rsi/rdx are read from saved_rdi_ptr (pushed separately in the asm
+ * for Linux ABI preservation).  rax (syscall result) is passed via rdi
+ * slot overwrite.  rcx and r11 are set to rip and rflags respectively
+ * (the SYSCALL instruction overwrites the originals).
  */
 int
 signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
@@ -357,9 +360,25 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
     rt_sigframe_t sf;
     __builtin_memset(&sf, 0, sizeof(sf));
     sf.pretcode          = (uint64_t)sa->sa_restorer;
+    /* Save all registers from the expanded syscall_frame_t.
+     * Callee-saved (rbx/rbp/r12-r15) are pushed by syscall_entry.asm Step 2b.
+     * Without these, sigreturn would zero them (C5 audit fix). */
     sf.gregs[REG_R8]     = (int64_t)frame->r8;
     sf.gregs[REG_R9]     = (int64_t)frame->r9;
     sf.gregs[REG_R10]    = (int64_t)frame->r10;
+    sf.gregs[REG_R11]    = (int64_t)frame->rflags;  /* R11 = RFLAGS per SYSCALL */
+    sf.gregs[REG_R12]    = (int64_t)frame->r12;
+    sf.gregs[REG_R13]    = (int64_t)frame->r13;
+    sf.gregs[REG_R14]    = (int64_t)frame->r14;
+    sf.gregs[REG_R15]    = (int64_t)frame->r15;
+    sf.gregs[REG_RBX]    = (int64_t)frame->rbx;
+    sf.gregs[REG_RBP]    = (int64_t)frame->rbp;
+    sf.gregs[REG_RCX]    = (int64_t)frame->rip;     /* RCX = return RIP per SYSCALL */
+    /* rdi/rsi/rdx are saved separately by the asm (Linux ABI preservation).
+     * Read them from saved_rdi_ptr stack layout. */
+    sf.gregs[REG_RDI]    = (int64_t)*saved_rdi_ptr;
+    sf.gregs[REG_RSI]    = (int64_t)*(saved_rdi_ptr - 1);
+    sf.gregs[REG_RDX]    = (int64_t)*(saved_rdi_ptr - 2);
     sf.gregs[REG_RIP]    = (int64_t)frame->rip;
     sf.gregs[REG_EFL]    = (int64_t)frame->rflags;
     sf.gregs[REG_RSP]    = (int64_t)frame->user_rsp;

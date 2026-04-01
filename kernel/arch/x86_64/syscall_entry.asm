@@ -51,7 +51,18 @@ syscall_entry:
     ; Pushed deepest-first so the pop order on return is r11, rcx, rsp.
     push qword [gs:32]             ; push saved user RSP onto kernel stack
     push rcx                       ; return RIP
-    push r11                       ; RFLAGS    (top, popped first on return)
+    push r11                       ; RFLAGS
+
+    ; ── Step 2b: save callee-saved registers (part of syscall_frame_t) ────────
+    ; signal_deliver_sysret reads these to build a complete signal frame.
+    ; sys_rt_sigreturn writes them back.  Without this, sigreturn after a
+    ; SYSRET-path signal delivery zeroes rbx/rbp/r12-r15 (C5 audit fix).
+    push r15
+    push r14
+    push r13
+    push r12
+    push rbp
+    push rbx
 
     ; ── Step 3: save r8/r9/r10; build 8-arg SysV call ────────────────────────
     ; Linux: rax=num, rdi=arg1, rsi=arg2, rdx=arg3, r10=arg4, r8=arg5, r9=arg6
@@ -158,6 +169,14 @@ syscall_entry:
     pop  r9
     pop  r8
     ; rax = return value from syscall_dispatch
+
+    ; Restore callee-saved registers (pushed in Step 2b)
+    pop  rbx
+    pop  rbp
+    pop  r12
+    pop  r13
+    pop  r14
+    pop  r15
 
     ; ── Step 4: restore RFLAGS, RIP, RSP; return to ring 3 ──────────────────
     pop  r11          ; RFLAGS
