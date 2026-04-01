@@ -1603,6 +1603,7 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
     /* 4. Allocate child PCB */
     aegis_process_t *child = kva_alloc_pages(2);
     if (!child) { result = (uint64_t)-(int64_t)12; goto fail_early; }
+    __builtin_memset(child, 0, sizeof(*child));
 
     /* 5. Create fresh PML4 for child */
     child->pml4_phys = vmm_create_user_pml4();

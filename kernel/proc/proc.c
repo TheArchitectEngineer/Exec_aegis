@@ -71,6 +71,8 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     /* Allocate process control block (2 kva pages — PCB exceeds 4KB with
      * CAP_TABLE_SIZE=64 caps + exec_caps + sigactions[64] + mmap_free[64]). */
     aegis_process_t *proc = kva_alloc_pages(2);
+    if (!proc) return;
+    __builtin_memset(proc, 0, sizeof(*proc));
 
     /* Allocate kernel stack (STACK_PAGES kva pages — per-process higher-half VA).
      * kva pages are mapped into pd_hi (shared with user PML4s), so this

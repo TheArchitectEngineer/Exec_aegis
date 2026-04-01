@@ -484,14 +484,26 @@ acpi_power_button_init(void)
     uint16_t evt_base = (uint16_t)s_pm1a_evt;
     uint16_t en_off   = (uint16_t)(s_pm1_evt_len / 2);  /* PM1_EN offset */
 
-    /* Clear any pending power button status (write-1-to-clear) */
-    outw_port(evt_base, 0x0100);  /* PWRBTN_STS = bit 8 */
+    /* Disable ALL PM1 event enables first to prevent spurious SCI */
+    outw_port(evt_base + en_off, 0x0000);
 
-    /* Enable power button SCI */
-    uint16_t en = inw_port(evt_base + en_off);
-    outw_port(evt_base + en_off, en | 0x0100);  /* PWRBTN_EN = bit 8 */
+    /* Clear ALL pending PM1 status bits (write-1-to-clear) */
+    outw_port(evt_base, 0xFFFF);
 
-    /* Unmask the SCI IRQ in the PIC */
+    /* Small delay for hardware to settle */
+    for (int i = 0; i < 100; i++)
+        (void)inb_port(0x80);
+
+    /* Clear again — some chipsets latch status between clear and enable */
+    outw_port(evt_base, 0xFFFF);
+
+    /* Now enable ONLY the power button event */
+    outw_port(evt_base + en_off, 0x0100);  /* PWRBTN_EN = bit 8 */
+
+    /* Clear one more time after enable — catches any edge-triggered latch */
+    outw_port(evt_base, 0x0100);
+
+    /* Unmask the SCI IRQ in the PIC (IOAPIC already routes it if present) */
     if (s_sci_int < 16)
         pic_unmask((uint8_t)s_sci_int);
 
