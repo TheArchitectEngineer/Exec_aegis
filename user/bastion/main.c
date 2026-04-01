@@ -200,6 +200,9 @@ draw_form(void)
      * for centering, not s_logo_h/4. */
     int logo_dh = s_logo_h > 0 ? s_logo_h / 2 : 20;
     int logo_y = s_fb_h / 2 - logo_dh / 2;
+    /* Debug: compare with kernel splash position (serial only) */
+    dprintf(2, "bastion: logo at y=%d (fb_h=%d, logo_dh=%d, orig_h=%d)\n",
+            logo_y, s_fb_h, logo_dh, s_logo_h);
     if (s_logo_pixels) {
         draw_logo(cx, logo_y);
     } else {

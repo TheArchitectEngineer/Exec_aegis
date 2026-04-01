@@ -891,9 +891,13 @@ fb_boot_splash(void)
             s_fb_va[i] = SPLASH_BG;
     }
 
-    /* Center the logo */
-    uint32_t lx = (s_fb_width  > LOGO_BOOT_W) ? (s_fb_width  - LOGO_BOOT_W) / 2 : 0;
-    uint32_t ly = (s_fb_height > LOGO_BOOT_H) ? (s_fb_height - LOGO_BOOT_H) / 2 : 0;
+    /* Center the logo — must match Bastion's: y = fb_h/2 - (logo_h/2) */
+    uint32_t lx = s_fb_width / 2 - LOGO_BOOT_W / 2;
+    uint32_t ly = s_fb_height / 2 - LOGO_BOOT_H / 2;
+
+    /* Debug: print position to serial so we can compare with Bastion */
+    printk("[SPLASH] logo at y=%u (fb_h=%u, logo_h=%u)\n",
+           (unsigned)ly, (unsigned)s_fb_height, (unsigned)LOGO_BOOT_H);
 
     _blit_logo_rgba(logo_boot_data, LOGO_BOOT_W, LOGO_BOOT_H,
                     lx, ly, SPLASH_BG);
