@@ -27,8 +27,8 @@ CFLAGS = \
     -Ikernel/sched \
     -Ikernel/proc \
     -Ikernel/syscall \
-    -Ikernel/elf \
     -Ikernel/fs \
+    -Ikernel/tty \
     -Ikernel/signal \
     -Ikernel/drivers \
     -Ikernel/net
@@ -94,8 +94,9 @@ ARCH_SRCS = \
 CORE_SRCS = \
     kernel/core/main.c \
     kernel/core/printk.c \
-    kernel/core/random.c \
-    kernel/signal/signal.c
+    kernel/core/random.c
+
+SIGNAL_SRCS = kernel/signal/signal.c
 
 MM_SRCS = \
     kernel/mm/pmm.c \
@@ -147,9 +148,11 @@ FS_SRCS = \
     kernel/fs/ext2_dir.c \
     kernel/fs/ramfs.c \
     kernel/fs/procfs.c \
-    kernel/fs/tty.c \
-    kernel/fs/pty.c \
     kernel/fs/memfd.c
+
+TTY_SRCS = \
+    kernel/tty/tty.c \
+    kernel/tty/pty.c
 
 USERSPACE_SRCS = \
     kernel/syscall/syscall.c \
@@ -163,7 +166,7 @@ USERSPACE_SRCS = \
     kernel/syscall/sys_disk.c \
     kernel/syscall/futex.c \
     kernel/proc/proc.c \
-    kernel/elf/elf.c \
+    kernel/proc/elf.c \
 
 # Programs embedded in initrd via objcopy --input binary
 OBJCOPY = x86_64-elf-objcopy
@@ -188,13 +191,15 @@ MM_OBJS        = $(patsubst kernel/%.c,$(BUILD)/%.o,$(MM_SRCS))
 BOOT_OBJ       = $(BUILD)/arch/x86_64/boot.o
 ARCH_ASM_OBJS  = $(patsubst kernel/%.asm,$(BUILD)/%.o,$(ARCH_ASMS))
 SCHED_OBJS     = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SCHED_SRCS))
+SIGNAL_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(SIGNAL_SRCS))
+TTY_OBJS       = $(patsubst kernel/%.c,$(BUILD)/%.o,$(TTY_SRCS))
 FS_OBJS        = $(patsubst kernel/%.c,$(BUILD)/%.o,$(FS_SRCS))
 DRIVER_OBJS    = $(patsubst kernel/%.c,$(BUILD)/%.o,$(DRIVER_SRCS))
 NET_OBJS       = $(patsubst kernel/%.c,$(BUILD)/%.o,$(NET_SRCS))
 USERSPACE_OBJS = $(patsubst kernel/%.c,$(BUILD)/%.o,$(USERSPACE_SRCS))
 
-ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(MM_OBJS) \
-           $(SCHED_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(BLOB_OBJS)
+ALL_OBJS = $(BOOT_OBJ) $(ARCH_OBJS) $(ARCH_ASM_OBJS) $(CORE_OBJS) $(SIGNAL_OBJS) $(MM_OBJS) \
+           $(SCHED_OBJS) $(TTY_OBJS) $(FS_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(USERSPACE_OBJS) $(BLOB_OBJS)
 
 .PHONY: all iso disk run run-fb shell login test clean gdb sym curl_bin build-musl \
         user/vigil/vigil user/login/login.elf user/vigictl/vigictl user/stsh/stsh.elf

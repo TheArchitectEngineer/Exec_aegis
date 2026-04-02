@@ -1,6 +1,6 @@
 #include "gpt.h"
 #include "blkdev.h"
-#include "../core/printk.h"
+#include "printk.h"
 #include <stdint.h>
 #include <stddef.h>
 

@@ -9,7 +9,7 @@
 #include "ext2.h"
 #include "spinlock.h"
 #include "smp.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 #include <stddef.h>
 
 /* Compile-time guard: ctx_switch.asm assumes sp is at offset 0 of TCB.

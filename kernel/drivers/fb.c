@@ -13,10 +13,10 @@
 #include "arch.h"
 #include "serial.h"
 #include "pcie.h"
-#include "../mm/vmm.h"
-#include "../mm/kva.h"
-#include "../mm/pmm.h"
-#include "../core/printk.h"
+#include "vmm.h"
+#include "kva.h"
+#include "pmm.h"
+#include "printk.h"
 
 /* -- Font data -------------------------------------------------------------
  * 256 glyphs x 16 rows x 1 byte per row = 4096 bytes total.

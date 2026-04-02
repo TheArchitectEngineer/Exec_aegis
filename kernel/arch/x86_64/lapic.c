@@ -9,9 +9,9 @@
 
 #include "lapic.h"
 #include "arch.h"
-#include "../../mm/vmm.h"
-#include "../../mm/kva.h"
-#include "../../core/printk.h"
+#include "vmm.h"
+#include "kva.h"
+#include "printk.h"
 
 #include <stdint.h>
 

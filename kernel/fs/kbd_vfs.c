@@ -4,7 +4,7 @@
 #include "kbd.h"
 #include "printk.h"
 #include "arch.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 #include "uaccess.h"
 #include "syscall_util.h"
 #include <stdint.h>

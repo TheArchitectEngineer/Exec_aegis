@@ -1,6 +1,6 @@
 #include "tss.h"
 #include "smp.h"
-#include "../core/printk.h"
+#include "printk.h"
 
 /* Verify the TSS is exactly 104 bytes as per x86-64 spec. */
 _Static_assert(sizeof(aegis_tss_t) == 104, "TSS must be 104 bytes");

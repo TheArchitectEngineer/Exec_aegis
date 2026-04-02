@@ -3,7 +3,7 @@
 #include "uaccess.h"
 #include "arch.h"
 #include "printk.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 #include <stdint.h>
 
 #define CONSOLE_BUF 256

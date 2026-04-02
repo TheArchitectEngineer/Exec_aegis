@@ -2,10 +2,10 @@
 #include "memfd.h"
 #include "fd_table.h"
 #include "proc.h"
-#include "../mm/kva.h"
-#include "../mm/pmm.h"
-#include "../mm/vmm.h"
-#include "../core/spinlock.h"
+#include "kva.h"
+#include "pmm.h"
+#include "vmm.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 static memfd_t   s_memfds[MEMFD_MAX];

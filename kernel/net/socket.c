@@ -5,8 +5,8 @@
 #include "printk.h"
 #include "tcp.h"
 #include "sched.h"
-#include "../mm/uaccess.h"
-#include "../core/spinlock.h"
+#include "uaccess.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 static sock_t s_socks[SOCK_TABLE_SIZE];  /* zero-initialized by C runtime */

@@ -8,7 +8,7 @@
  */
 
 #include "ext2_internal.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 
 spinlock_t ext2_lock = SPINLOCK_INIT;
 

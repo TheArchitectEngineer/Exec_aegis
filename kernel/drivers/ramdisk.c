@@ -1,7 +1,7 @@
 #include "ramdisk.h"
-#include "../fs/blkdev.h"
-#include "../mm/kva.h"
-#include "../core/printk.h"
+#include "blkdev.h"
+#include "kva.h"
+#include "printk.h"
 #include <stdint.h>
 
 static uint8_t *s_base;   /* KVA pointer to mapped module */

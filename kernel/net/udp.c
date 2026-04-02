@@ -3,7 +3,7 @@
 #include "ip.h"
 #include "socket.h"
 #include "epoll.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 
 /* Local memory helpers. */
 static void _udp_memset(void *dst, int val, uint32_t n)

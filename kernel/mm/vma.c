@@ -1,7 +1,7 @@
 /* kernel/mm/vma.c — per-process Virtual Memory Area tracking */
 
 #include "vma.h"
-#include "../proc/proc.h"
+#include "proc.h"
 #include "kva.h"
 
 #define PAGE_SIZE 4096u

@@ -2,7 +2,7 @@
 #include "futex.h"
 #include "sched.h"
 #include "syscall_util.h"
-#include "../mm/uaccess.h"
+#include "uaccess.h"
 #include "spinlock.h"
 
 #define FUTEX_MAX_WAIT 64

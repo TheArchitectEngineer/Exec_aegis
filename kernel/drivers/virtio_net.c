@@ -17,7 +17,7 @@
  * Queue 0 = RX (NIC writes frames in), Queue 1 = TX (driver writes frames out).
  */
 #include "virtio_net.h"
-#include "../net/netdev.h"
+#include "netdev.h"
 #include "arch.h"
 #include "pcie.h"
 #include "kva.h"

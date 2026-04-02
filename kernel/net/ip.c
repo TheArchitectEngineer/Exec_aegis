@@ -3,8 +3,8 @@
 #include "eth.h"
 #include "udp.h"
 #include "tcp.h"
-#include "../core/printk.h"
-#include "../core/spinlock.h"
+#include "printk.h"
+#include "spinlock.h"
 #include "arch.h"   /* arch_get_ticks() */
 
 /* Local memory helpers (kernel has no libc). */

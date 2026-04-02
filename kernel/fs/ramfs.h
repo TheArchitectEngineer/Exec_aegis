@@ -3,7 +3,7 @@
 #define AEGIS_RAMFS_H
 
 #include "vfs.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 #define RAMFS_MAX_FILES   32

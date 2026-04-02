@@ -2,7 +2,7 @@
 #include "arch.h"     /* aegis_mem_region_t, arch_mm_region_count/get_regions */
 #include "printk.h"
 #include "spinlock.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 #include <stdint.h>
 #include <stddef.h>
 /* Note: -nostdinc blocks string.h even from GCC freestanding headers.

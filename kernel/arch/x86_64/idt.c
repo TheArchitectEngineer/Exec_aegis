@@ -9,7 +9,7 @@
 #include "tlb.h"
 #include "printk.h"
 #include "arch.h"
-#include "../../drivers/fb.h"
+#include "fb.h"
 
 /* 256 entries: full IDT covering all x86-64 interrupt vectors */
 static aegis_idt_gate_t s_idt[256];

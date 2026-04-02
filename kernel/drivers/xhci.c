@@ -18,10 +18,10 @@
 #include "xhci.h"
 #include "arch.h"
 #include "pcie.h"
-#include "../mm/vmm.h"
-#include "../mm/kva.h"
-#include "../mm/pmm.h"
-#include "../core/printk.h"
+#include "vmm.h"
+#include "kva.h"
+#include "pmm.h"
+#include "printk.h"
 #include <stdint.h>
 #include <stddef.h>
 

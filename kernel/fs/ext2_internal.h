@@ -4,8 +4,8 @@
 
 #include "ext2.h"
 #include "blkdev.h"
-#include "../core/printk.h"
-#include "../core/spinlock.h"
+#include "printk.h"
+#include "spinlock.h"
 
 /* Errno codes used within the ext2 subsystem.
  * The kernel does not include <errno.h>; define what we need here. */

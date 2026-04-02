@@ -7,8 +7,8 @@
 #include "printk.h"
 #include "uaccess.h"
 #include "cap.h"
-#include "../sched/sched.h"
-#include "../proc/proc.h"
+#include "sched.h"
+#include "proc.h"
 #include <stdint.h>
 
 static ramfs_t s_run_ramfs;

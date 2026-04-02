@@ -5,7 +5,7 @@
  */
 #include "netdev.h"
 #include "eth.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stddef.h>
 
 static netdev_t *s_devices[NETDEV_MAX];

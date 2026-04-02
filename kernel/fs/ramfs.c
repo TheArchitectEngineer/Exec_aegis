@@ -4,7 +4,7 @@
 #include "printk.h"
 #include "uaccess.h"
 #include "syscall_util.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 /* RAMFS_MAX_FILES, RAMFS_MAX_NAMELEN, RAMFS_MAX_SIZE defined in ramfs.h */

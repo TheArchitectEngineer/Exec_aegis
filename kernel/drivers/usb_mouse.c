@@ -7,8 +7,8 @@
  * Blocking read uses sti/hlt/cli pattern (same as kbd_read).
  */
 #include "usb_mouse.h"
-#include "../sched/sched.h"
-#include "../core/spinlock.h"
+#include "sched.h"
+#include "spinlock.h"
 #include "arch.h"
 #include <stddef.h>
 

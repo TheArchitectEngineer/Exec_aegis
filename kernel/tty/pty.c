@@ -6,7 +6,7 @@
 #include "proc.h"
 #include "signal.h"
 #include "arch.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 /* ── Static pool ──────────────────────────────────────────────────── */

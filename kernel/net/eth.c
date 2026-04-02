@@ -2,8 +2,8 @@
 #include "eth.h"
 #include "ip.h"     /* ip_rx(), net_get_config() */
 #include "arch.h"   /* arch_get_ticks() */
-#include "../core/printk.h"
-#include "../core/spinlock.h"
+#include "printk.h"
+#include "spinlock.h"
 #include <stddef.h>
 
 /* Local memory helpers — kernel does not link against libc. */

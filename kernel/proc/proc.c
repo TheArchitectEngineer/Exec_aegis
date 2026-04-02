@@ -12,7 +12,7 @@
 #include "spinlock.h"
 #include "random.h"
 #include "initrd.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 #include "vfs.h"
 #include <stdint.h>
 #include <stddef.h>

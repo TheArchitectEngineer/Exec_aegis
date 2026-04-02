@@ -4,7 +4,7 @@
 #include "printk.h"
 #include "arch.h"
 #include "spinlock.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 #include <stdint.h>
 #include <stddef.h>
 

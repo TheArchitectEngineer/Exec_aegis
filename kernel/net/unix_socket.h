@@ -4,7 +4,7 @@
 
 #include "vfs.h"
 #include "sched.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 #define AF_UNIX          1

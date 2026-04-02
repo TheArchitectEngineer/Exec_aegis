@@ -3,7 +3,7 @@
 #include "arch.h"
 #include "printk.h"
 #include "spinlock.h"
-#include "../drivers/fb.h"
+#include "fb.h"
 
 /*
  * printk — route formatted output to all available output sinks.

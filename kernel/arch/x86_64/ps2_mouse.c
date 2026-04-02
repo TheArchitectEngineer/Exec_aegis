@@ -18,7 +18,7 @@
 #include "arch.h"
 #include "pic.h"
 #include "printk.h"
-#include "../drivers/usb_mouse.h"
+#include "usb_mouse.h"
 
 #define KBD_DATA    0x60
 #define KBD_STATUS  0x64

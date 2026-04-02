@@ -4,8 +4,8 @@
 #include "socket.h"
 #include "epoll.h"
 #include "arch.h"   /* arch_get_ticks() */
-#include "../core/printk.h"
-#include "../core/spinlock.h"
+#include "printk.h"
+#include "spinlock.h"
 #include <stddef.h>                 /* NULL */
 
 /* S2: RFC 793 serial number arithmetic for TCP sequence numbers.

@@ -6,7 +6,7 @@
 #include "proc.h"
 #include "sched.h"
 #include "syscall_util.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 static spinlock_t tty_global_lock = SPINLOCK_INIT;

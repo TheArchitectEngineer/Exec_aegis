@@ -3,7 +3,7 @@
 #include "proc.h"
 #include "uaccess.h"
 #include "arch.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 static epoll_fd_t s_epoll[EPOLL_MAX_INSTANCES];

@@ -5,7 +5,7 @@
 #include "vfs.h"
 #include "tty.h"
 #include "sched.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 #define PTY_MAX_PAIRS  16

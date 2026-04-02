@@ -3,10 +3,10 @@
 #include "arch.h"
 #include "printk.h"
 #include "random.h"
-#include "../drivers/xhci.h"
+#include "xhci.h"
 #include "netdev.h"
-#include "../../net/tcp.h"
-#include "../../net/ip.h"
+#include "tcp.h"
+#include "ip.h"
 
 #define PIT_CHANNEL0 0x40
 #define PIT_CMD      0x43

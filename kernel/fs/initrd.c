@@ -377,7 +377,7 @@ static vfs_file_t s_urandom_file = {
 
 /* ── /dev/mouse VFS device ──────────────────────────────────────────────── */
 
-#include "../drivers/usb_mouse.h"
+#include "usb_mouse.h"
 
 static int
 mouse_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)

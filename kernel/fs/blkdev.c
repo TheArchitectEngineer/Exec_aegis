@@ -1,6 +1,6 @@
 /* blkdev.c — Block device registration table */
 #include "blkdev.h"
-#include "../core/spinlock.h"
+#include "spinlock.h"
 #include <stddef.h>
 
 static blkdev_t *s_devices[BLKDEV_MAX];
