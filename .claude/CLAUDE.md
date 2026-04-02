@@ -257,7 +257,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | xHCI + USB HID | ✅ | xHCI on q35+qemu-xhci; keyboard + mouse HID boot protocol |
 | GPT partitions | ✅ | CRC32 + primary header; Aegis GUID prefix |
 | virtio-net + net stack | ✅ | Ethernet/ARP/IPv4/ICMP/TCP/UDP; netdev_t; 12-byte virtio header |
-| Vigil init system | ✅ | Service supervision + respawn; exec_caps |
+| Vigil init system | ✅ | Service supervision + respawn |
 | Socket API + epoll | ✅ | socket/bind/listen/accept/connect/send/recv; sock_t VFS fds; httpd |
 | DHCP + curl | ✅ | Userspace RFC 2131; BearSSL+curl static; outbound TCP broken |
 | Threads (Phase 29) | ✅ | clone(CLONE_VM); per-thread TLS; fd_table_t refcount; futex |
@@ -276,9 +276,10 @@ A subsystem is ✅ only when `make test` passes with it included.
 | stsh — Styx shell (Phase 42) | ✅ | CAP_DELEGATE/QUERY; caps/sandbox builtins; line editing; tab completion |
 | Quiet boot + lumen fixes (Phase 42b) | ✅ | printk_quiet; dual-ISO test harness |
 | IPC (Phase 44) | ✅ | AF_UNIX SOCK_STREAM; SCM_RIGHTS; memfd_create; MAP_SHARED |
-| capd + sys_cap_grant (Phase 45) | ✅ | sys_cap_grant(363); capd daemon; policy files; AF_UNIX fix |
+| capd + sys_cap_grant (Phase 45) | ✅ Retired | capd daemon + sys_cap_grant(363) removed in Phase 46c cap-policy redesign |
 | Bastion (Phase 46) | ✅ | Graphical display manager; libauth.a + libcitadel.a |
 | GUI polish (Phase 46b) | ✅ | Dark mode, frosted glass, TTF fonts, sys_reboot |
+| Cap-policy redesign (Phase 46c) | ✅ | Two-tier kernel policy; /etc/aegis/caps.d/; sys_auth_session(364); capd+exec_caps eliminated |
 
 ### Known deviations
 
@@ -309,6 +310,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Phase | Content | Status |
 |-------|---------|--------|
 | 25-46b | (All complete — see Build Status table) | ✅ Done |
+| 46c | **Cap-policy redesign** — two-tier kernel policy (service+admin caps); /etc/aegis/caps.d/; sys_auth_session(364); capd+exec_caps+sys_cap_grant_exec/runtime removed | ✅ Done |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph | Not started |
 | 48 | **Super key + extended keyboard** — PS/2 E0; Super modifier; multimedia scancodes | Not started |
 | 49 | **TCP polish** — send segmentation; per-connection TX buffer; flow control. Required for SSH. | Not started |
@@ -416,11 +418,15 @@ These are constraints from completed phases that remain load-bearing. Grouped by
 - MAP_SHARED only for memfd fds (not ext2 or pipes)
 - ftruncate only for memfd (not ext2)
 
-### Capability System (Phase 45)
+### Capability System (Phase 46c — policy redesign)
 
-- No cap revocation. `sys_cap_grant` is grant-only. Restart process to reset.
-- capd is single-threaded, binary protocol, holds 15/16 cap slots.
-- `sys_cap_grant` rights check is kind-only (not rights-matched).
+Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/caps.d/<binary>` declare caps per-binary. The kernel reads these at execve time.
+
+- **Service caps** (unconditional): granted to any process that execs the binary. For daemons and standard tools.
+- **Admin caps** (require authenticated session): only granted if `proc->authenticated` is set. `sys_auth_session` (syscall 364) sets this flag after login verifies credentials.
+- **Baseline** (hardcoded, all processes): VFS_OPEN, VFS_READ, VFS_WRITE, IPC, PROC_READ(read), THREAD_CREATE.
+- **Retired syscalls**: `sys_cap_grant_exec` (361) and `sys_cap_grant_runtime` (363) removed. capd daemon eliminated. Vigil `exec_caps` mechanism eliminated.
+- No cap revocation. Restart process to reset caps.
 - `ls /` OOM is pre-existing since Phase 45.
 
 ### SMP (Phase 38)

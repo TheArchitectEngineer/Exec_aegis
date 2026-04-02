@@ -269,7 +269,7 @@ overlay_draw_cb(surface_t *s, int w, int h)
 int
 main(void)
 {
-    /* Note: Lumen no longer requests caps from capd. Bastion (parent)
+    /* Note: Caps come from kernel policy at exec time. Bastion (parent)
      * handles cap delegation. Lumen runs with baseline caps only. */
 
     fb_info_t fb_info;

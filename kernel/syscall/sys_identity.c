@@ -271,7 +271,7 @@ uint64_t sys_getegid(void) { return sys_getgid(); }
  * cmd=0: ACPI S5 power off
  * cmd=1: keyboard controller reset (reboot)
  *
- * Requires CAP_KIND_POWER — explicitly granted via capd.
+ * Requires CAP_KIND_POWER — granted via kernel cap policy.
  */
 uint64_t
 sys_reboot(uint64_t cmd)

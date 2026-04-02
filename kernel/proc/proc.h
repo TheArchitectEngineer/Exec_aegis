@@ -33,7 +33,7 @@ typedef struct aegis_process {
     uint64_t      pml4_phys;              /* physical address of this process's PML4 */
     fd_table_t   *fd_table;               /* shared, refcounted fd table (Phase 29) */
     cap_slot_t    caps[CAP_TABLE_SIZE];   /* Phase 11 — capability table */
-    cap_slot_t    exec_caps[CAP_TABLE_SIZE]; /* caps to grant post-execve; zeroed after apply */
+    uint32_t      authenticated;          /* 1 if session passed login auth; survives exec */
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
     uint64_t      brk_base;               /* initial brk (ELF end); shrink floor */
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */

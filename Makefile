@@ -94,7 +94,8 @@ ARCH_SRCS = \
 CORE_SRCS = \
     kernel/core/main.c \
     kernel/core/printk.c \
-    kernel/core/random.c
+    kernel/core/random.c \
+    kernel/cap/cap_policy.c
 
 SIGNAL_SRCS = kernel/signal/signal.c
 
@@ -345,11 +346,6 @@ user/pty_test/pty_test.elf: user/pty_test/main.c $(MUSL_BUILT)
 user/ipc_test/ipc_test.elf: user/ipc_test/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/ipc_test
 
-user/capd/capd.elf: user/capd/main.c $(MUSL_BUILT)
-	$(MAKE) -C user/capd
-
-user/capd_test/capd_test.elf: user/capd_test/main.c $(MUSL_BUILT)
-	$(MAKE) -C user/capd_test
 
 # ── Binary blob embedding (objcopy) ──────────────────────────────────────────
 # Each user ELF → linkable .o with _binary_<name>_bin_start/end symbols.
@@ -523,8 +519,6 @@ DISK_USER_BINS = \
 	user/proc_test/proc_test.elf \
 	user/pty_test/pty_test.elf \
 	user/ipc_test/ipc_test.elf \
-	user/capd/capd.elf \
-	user/capd_test/capd_test.elf \
 	user/dynlink_test/dynlink_test.elf \
 	user/dhcp/dhcp \
 	user/installer/installer.elf \
@@ -587,10 +581,10 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/
 	printf 'write build/musl-dynamic/usr/lib/libc.so /lib/libc.so\nwrite build/musl-dynamic/usr/lib/libc.so /lib/ld-musl-x86_64.so.1\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# User binaries (dynamically linked, loaded from ext2 at runtime)
-	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite user/installer/installer.elf /bin/installer\nwrite user/fb_test/fb_test.elf /bin/fb_test\nwrite user/mouse_test/mouse_test.elf /bin/mouse_test\nwrite user/lumen/lumen.elf /bin/lumen\nwrite user/bastion/bastion.elf /bin/bastion\nwrite user/chronos/chronos /bin/chronos\nwrite user/ln/ln.elf /bin/ln\nwrite user/chmod/chmod.elf /bin/chmod\nwrite user/chown/chown.elf /bin/chown\nwrite user/readlink/readlink.elf /bin/readlink\nwrite user/stsh/stsh.elf /bin/stsh\nwrite user/pwn/pwn.elf /bin/pwn\nwrite user/ipc_test/ipc_test.elf /bin/ipc_test\nwrite user/capd/capd.elf /bin/capd\nwrite user/capd_test/capd_test.elf /bin/capd_test\nwrite /tmp/aegis-motd /etc/motd\n' \
+	printf 'write user/shell/shell.elf /bin/sh\nwrite user/ls/ls.elf /bin/ls\nwrite user/cat/cat.elf /bin/cat\nwrite user/echo/echo.elf /bin/echo\nwrite user/pwd/pwd.elf /bin/pwd\nwrite user/uname/uname.elf /bin/uname\nwrite user/clear/clear.elf /bin/clear\nwrite user/true/true.elf /bin/true\nwrite user/false/false.elf /bin/false\nwrite user/wc/wc.elf /bin/wc\nwrite user/grep/grep.elf /bin/grep\nwrite user/sort/sort.elf /bin/sort\nwrite user/mv/mv.elf /bin/mv\nwrite user/cp/cp.elf /bin/cp\nwrite user/rm/rm.elf /bin/rm\nwrite user/mkdir/mkdir.elf /bin/mkdir\nwrite user/touch/touch.elf /bin/touch\nwrite user/whoami/whoami.elf /bin/whoami\nwrite user/httpd/httpd.elf /bin/httpd\nwrite user/vigictl/vigictl /bin/vigictl\nwrite user/thread_test/thread_test.elf /bin/thread_test\nwrite user/mmap_test/mmap_test.elf /bin/mmap_test\nwrite user/proc_test/proc_test.elf /bin/proc_test\nwrite user/pty_test/pty_test.elf /bin/pty_test\nwrite user/dhcp/dhcp /bin/dhcp\nwrite user/dynlink_test/dynlink_test.elf /bin/dynlink_test\nwrite user/vigil/vigil /bin/vigil\nwrite user/login/login.elf /bin/login\nwrite user/installer/installer.elf /bin/installer\nwrite user/fb_test/fb_test.elf /bin/fb_test\nwrite user/mouse_test/mouse_test.elf /bin/mouse_test\nwrite user/lumen/lumen.elf /bin/lumen\nwrite user/bastion/bastion.elf /bin/bastion\nwrite user/chronos/chronos /bin/chronos\nwrite user/ln/ln.elf /bin/ln\nwrite user/chmod/chmod.elf /bin/chmod\nwrite user/chown/chown.elf /bin/chown\nwrite user/readlink/readlink.elf /bin/readlink\nwrite user/stsh/stsh.elf /bin/stsh\nwrite user/pwn/pwn.elf /bin/pwn\nwrite user/ipc_test/ipc_test.elf /bin/ipc_test\nwrite /tmp/aegis-motd /etc/motd\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# Set execute permission on all binaries (debugfs writes mode 0644 by default)
-	printf 'set_inode_field /bin/sh mode 0100755\nset_inode_field /bin/ls mode 0100755\nset_inode_field /bin/cat mode 0100755\nset_inode_field /bin/echo mode 0100755\nset_inode_field /bin/pwd mode 0100755\nset_inode_field /bin/uname mode 0100755\nset_inode_field /bin/clear mode 0100755\nset_inode_field /bin/true mode 0100755\nset_inode_field /bin/false mode 0100755\nset_inode_field /bin/wc mode 0100755\nset_inode_field /bin/grep mode 0100755\nset_inode_field /bin/sort mode 0100755\nset_inode_field /bin/mv mode 0100755\nset_inode_field /bin/cp mode 0100755\nset_inode_field /bin/rm mode 0100755\nset_inode_field /bin/mkdir mode 0100755\nset_inode_field /bin/touch mode 0100755\nset_inode_field /bin/whoami mode 0100755\nset_inode_field /bin/httpd mode 0100755\nset_inode_field /bin/vigictl mode 0100755\nset_inode_field /bin/thread_test mode 0100755\nset_inode_field /bin/mmap_test mode 0100755\nset_inode_field /bin/proc_test mode 0100755\nset_inode_field /bin/pty_test mode 0100755\nset_inode_field /bin/dhcp mode 0100755\nset_inode_field /bin/dynlink_test mode 0100755\nset_inode_field /bin/vigil mode 0100755\nset_inode_field /bin/login mode 0100755\nset_inode_field /bin/installer mode 0100755\nset_inode_field /bin/fb_test mode 0100755\nset_inode_field /bin/mouse_test mode 0100755\nset_inode_field /bin/lumen mode 0100755\nset_inode_field /bin/bastion mode 0100755\nset_inode_field /bin/chronos mode 0100755\nset_inode_field /bin/ln mode 0100755\nset_inode_field /bin/chmod mode 0100755\nset_inode_field /bin/chown mode 0100755\nset_inode_field /bin/readlink mode 0100755\nset_inode_field /bin/stsh mode 0100755\nset_inode_field /bin/pwn mode 0100755\nset_inode_field /bin/ipc_test mode 0100755\nset_inode_field /bin/capd mode 0100755\nset_inode_field /bin/capd_test mode 0100755\n' \
+	printf 'set_inode_field /bin/sh mode 0100755\nset_inode_field /bin/ls mode 0100755\nset_inode_field /bin/cat mode 0100755\nset_inode_field /bin/echo mode 0100755\nset_inode_field /bin/pwd mode 0100755\nset_inode_field /bin/uname mode 0100755\nset_inode_field /bin/clear mode 0100755\nset_inode_field /bin/true mode 0100755\nset_inode_field /bin/false mode 0100755\nset_inode_field /bin/wc mode 0100755\nset_inode_field /bin/grep mode 0100755\nset_inode_field /bin/sort mode 0100755\nset_inode_field /bin/mv mode 0100755\nset_inode_field /bin/cp mode 0100755\nset_inode_field /bin/rm mode 0100755\nset_inode_field /bin/mkdir mode 0100755\nset_inode_field /bin/touch mode 0100755\nset_inode_field /bin/whoami mode 0100755\nset_inode_field /bin/httpd mode 0100755\nset_inode_field /bin/vigictl mode 0100755\nset_inode_field /bin/thread_test mode 0100755\nset_inode_field /bin/mmap_test mode 0100755\nset_inode_field /bin/proc_test mode 0100755\nset_inode_field /bin/pty_test mode 0100755\nset_inode_field /bin/dhcp mode 0100755\nset_inode_field /bin/dynlink_test mode 0100755\nset_inode_field /bin/vigil mode 0100755\nset_inode_field /bin/login mode 0100755\nset_inode_field /bin/installer mode 0100755\nset_inode_field /bin/fb_test mode 0100755\nset_inode_field /bin/mouse_test mode 0100755\nset_inode_field /bin/lumen mode 0100755\nset_inode_field /bin/bastion mode 0100755\nset_inode_field /bin/chronos mode 0100755\nset_inode_field /bin/ln mode 0100755\nset_inode_field /bin/chmod mode 0100755\nset_inode_field /bin/chown mode 0100755\nset_inode_field /bin/readlink mode 0100755\nset_inode_field /bin/stsh mode 0100755\nset_inode_field /bin/pwn mode 0100755\nset_inode_field /bin/ipc_test mode 0100755\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	# Auth files for login
 	printf 'root:x:0:0:root:/root:/bin/stsh\n' > /tmp/aegis-passwd
@@ -654,26 +648,19 @@ $(ROOTFS): $(DISK_USER_BINS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/
 	printf 'write /tmp/aegis-chronos-run /etc/vigil/services/chronos/run\nwrite /tmp/aegis-chronos-policy /etc/vigil/services/chronos/policy\nwrite /tmp/aegis-chronos-user /etc/vigil/services/chronos/user\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
 	rm -f /tmp/aegis-chronos-run /tmp/aegis-chronos-policy /tmp/aegis-chronos-user
-	# capd vigil service — capability broker daemon (holds all delegatable caps)
-	printf 'mkdir /etc/vigil/services/capd\n' \
+	# Capability policy files — /etc/aegis/caps.d/<binary>
+	printf 'mkdir /etc/aegis\nmkdir /etc/aegis/caps.d\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	printf '/bin/capd\n' > /tmp/aegis-capd-run
-	printf 'respawn\nmax_restarts=5\n' > /tmp/aegis-capd-policy
-	printf 'CAP_DELEGATE AUTH CAP_GRANT SETUID NET_ADMIN DISK_ADMIN CAP_QUERY\n' > /tmp/aegis-capd-caps
-	printf 'root\n' > /tmp/aegis-capd-user
-	printf 'write /tmp/aegis-capd-run /etc/vigil/services/capd/run\nwrite /tmp/aegis-capd-policy /etc/vigil/services/capd/policy\nwrite /tmp/aegis-capd-caps /etc/vigil/services/capd/caps\nwrite /tmp/aegis-capd-user /etc/vigil/services/capd/user\n' \
+	printf 'service AUTH SETUID\n' > /tmp/aegis-cap-login
+	printf 'service AUTH FB SETUID\n' > /tmp/aegis-cap-bastion
+	printf 'service NET_SOCKET\n' > /tmp/aegis-cap-httpd
+	printf 'service NET_SOCKET NET_ADMIN\n' > /tmp/aegis-cap-dhcp
+	printf 'admin DISK_ADMIN POWER CAP_DELEGATE CAP_QUERY\nadmin PROC_READ\n' > /tmp/aegis-cap-stsh
+	printf 'service FB THREAD_CREATE\n' > /tmp/aegis-cap-lumen
+	printf 'admin DISK_ADMIN\n' > /tmp/aegis-cap-installer
+	printf 'write /tmp/aegis-cap-login /etc/aegis/caps.d/login\nwrite /tmp/aegis-cap-bastion /etc/aegis/caps.d/bastion\nwrite /tmp/aegis-cap-httpd /etc/aegis/caps.d/httpd\nwrite /tmp/aegis-cap-dhcp /etc/aegis/caps.d/dhcp\nwrite /tmp/aegis-cap-stsh /etc/aegis/caps.d/stsh\nwrite /tmp/aegis-cap-lumen /etc/aegis/caps.d/lumen\nwrite /tmp/aegis-cap-installer /etc/aegis/caps.d/installer\n' \
 	    | /sbin/debugfs -w $(ROOTFS)
-	rm -f /tmp/aegis-capd-run /tmp/aegis-capd-policy /tmp/aegis-capd-caps /tmp/aegis-capd-user
-	# capd policy files — /etc/aegis/capd.d/<binary>.policy
-	printf 'mkdir /etc/aegis\nmkdir /etc/aegis/capd.d\n' \
-	    | /sbin/debugfs -w $(ROOTFS)
-	printf 'allow AUTH CAP_GRANT CAP_DELEGATE CAP_QUERY SETUID\n' > /tmp/aegis-capd-login
-	printf 'allow NET_ADMIN\n' > /tmp/aegis-capd-dhcp
-	printf 'allow AUTH CAP_GRANT CAP_DELEGATE CAP_QUERY SETUID POWER\n' > /tmp/aegis-capd-bastion
-	printf 'allow NET_ADMIN\n' > /tmp/aegis-capd-capd_test
-	printf 'write /tmp/aegis-capd-login /etc/aegis/capd.d/login.policy\nwrite /tmp/aegis-capd-dhcp /etc/aegis/capd.d/dhcp.policy\nwrite /tmp/aegis-capd-bastion /etc/aegis/capd.d/bastion.policy\nwrite /tmp/aegis-capd-capd_test /etc/aegis/capd.d/capd_test.policy\n' \
-	    | /sbin/debugfs -w $(ROOTFS)
-	rm -f /tmp/aegis-capd-login /tmp/aegis-capd-dhcp /tmp/aegis-capd-bastion /tmp/aegis-capd-capd_test
+	rm -f /tmp/aegis-cap-login /tmp/aegis-cap-bastion /tmp/aegis-cap-httpd /tmp/aegis-cap-dhcp /tmp/aegis-cap-stsh /tmp/aegis-cap-lumen /tmp/aegis-cap-installer
 	# curl binary and CA bundle on ext2
 	printf 'mkdir /etc/ssl\nmkdir /etc/ssl/certs\n' \
 	    | /sbin/debugfs -w $(ROOTFS)

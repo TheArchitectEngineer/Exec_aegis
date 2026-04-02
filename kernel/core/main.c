@@ -119,6 +119,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
 
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
+    cap_policy_load();      /* load /etc/aegis/caps.d/ policy files          */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
     ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */

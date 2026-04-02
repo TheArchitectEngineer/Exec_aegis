@@ -1,34 +1,25 @@
-/* sys_cap.c — Capability syscalls: grant_exec, grant_runtime, query */
+/* sys_cap.c — Capability syscalls: auth_session, grant_runtime, query */
 #include "sys_impl.h"
 
 /*
- * sys_cap_grant_exec — syscall 361
+ * sys_auth_session — syscall 364
  *
- * Pre-registers a capability in exec_caps[].  When the calling process
- * subsequently calls sys_execve, the exec_caps are applied to the new
- * image's cap table after the baseline (VFS_OPEN/READ/WRITE) is set,
- * then exec_caps[] is zeroed.  Allows a parent to delegate extra caps
- * (e.g. CAP_KIND_AUTH) to a child that will exec a service binary.
+ * Marks the calling process as authenticated.  This flag is inherited
+ * by fork/clone and survives exec.  Admin-tier caps from policy files
+ * are only granted at exec time when proc->authenticated == 1.
  *
- * Requires: CAP_KIND_CAP_GRANT with CAP_RIGHTS_READ in caller's cap table.
+ * Requires: CAP_KIND_AUTH in caller's cap table.
  */
 uint64_t
-sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
+sys_auth_session(void)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
+    if (!sched_current()->is_user)
+        return (uint64_t)-(int64_t)1;  /* EPERM */
     if (cap_check(proc->caps, CAP_TABLE_SIZE,
-                  CAP_KIND_CAP_GRANT, CAP_RIGHTS_READ) != 0)
+                  CAP_KIND_AUTH, CAP_RIGHTS_READ) != 0)
         return (uint64_t)-(int64_t)ENOCAP;
-    uint32_t kind   = (uint32_t)kind_arg;
-    uint32_t rights = (uint32_t)rights_arg;
-    if (kind == CAP_KIND_NULL || kind >= CAP_TABLE_SIZE)
-        return (uint64_t)-(int64_t)22; /* EINVAL */
-    /* H6: Caller must hold the cap being pre-registered — cannot grant
-     * capabilities it does not possess. */
-    if (cap_check(proc->caps, CAP_TABLE_SIZE, kind, rights) != 0)
-        return (uint64_t)-(int64_t)ENOCAP;
-    int r = cap_grant(proc->exec_caps, CAP_TABLE_SIZE, kind, rights);
-    if (r < 0) return (uint64_t)-(int64_t)12; /* ENOMEM/table full */
+    proc->authenticated = 1;
     return 0;
 }
 

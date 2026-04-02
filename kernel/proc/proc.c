@@ -69,7 +69,7 @@ void
 proc_spawn(const uint8_t *elf_data, size_t elf_len)
 {
     /* Allocate process control block (2 kva pages — PCB exceeds 4KB with
-     * CAP_TABLE_SIZE=64 caps + exec_caps + sigactions[64] + mmap_free[64]). */
+     * CAP_TABLE_SIZE=64 caps + sigactions[64] + mmap_free[64]). */
     aegis_process_t *proc = kva_alloc_pages(2);
     if (!proc) return;
     __builtin_memset(proc, 0, sizeof(*proc));
@@ -332,14 +332,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
         }
     }
 
-    /* Zero exec_caps — pre-registered caps that will be applied by execve. */
-    {
-        uint32_t ci;
-        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
-            proc->exec_caps[ci].kind   = CAP_KIND_NULL;
-            proc->exec_caps[ci].rights = 0;
-        }
-    }
+    proc->authenticated    = 0;  /* init is not authenticated until login succeeds */
 
     proc->pid              = proc_alloc_pid();   /* 1 for init */
     proc->tgid             = proc->pid;
@@ -372,38 +365,15 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->task.waiting_for = 0;
 
     /* Grant initial capabilities to PID 1 (vigil/init).
-     * Init is the root of the capability delegation tree — it must hold
-     * FULL rights (READ|WRITE|EXEC = 7) on every cap so it can delegate
-     * any subset downward via exec_caps and capd.  The H5/H6 audit fixes
-     * enforce that a delegator holds at least the rights being granted. */
-#define CAP_RIGHTS_FULL (CAP_RIGHTS_READ | CAP_RIGHTS_WRITE | CAP_RIGHTS_EXEC)
-
-    static const struct { uint32_t kind; const char *name; } init_caps[] = {
-        { CAP_KIND_VFS_OPEN,      "VFS_OPEN" },
-        { CAP_KIND_VFS_WRITE,     "VFS_WRITE" },
-        { CAP_KIND_VFS_READ,      "VFS_READ" },
-        { CAP_KIND_AUTH,          "AUTH" },
-        { CAP_KIND_CAP_GRANT,    "CAP_GRANT" },
-        { CAP_KIND_SETUID,        "SETUID" },
-        { CAP_KIND_NET_SOCKET,    "NET_SOCKET" },
-        { CAP_KIND_NET_ADMIN,     "NET_ADMIN" },
-        { CAP_KIND_PROC_READ,     "PROC_READ" },
-        { CAP_KIND_IPC,           "IPC" },
-        { CAP_KIND_DISK_ADMIN,    "DISK_ADMIN" },
-        { CAP_KIND_FB,            "FB" },
-        { CAP_KIND_THREAD_CREATE, "THREAD_CREATE" },
-        { CAP_KIND_CAP_DELEGATE,  "CAP_DELEGATE" },
-        { CAP_KIND_CAP_QUERY,     "CAP_QUERY" },
-    };
-    for (uint32_t ci = 0; ci < sizeof(init_caps)/sizeof(init_caps[0]); ci++) {
-        if (cap_grant(proc->caps, CAP_TABLE_SIZE,
-                      init_caps[ci].kind, CAP_RIGHTS_FULL) < 0) {
-            printk("[CAP] FAIL: cap_grant %s returned -ENOCAP\n",
-                   init_caps[ci].name);
-            panic_halt("[CAP] FAIL: init cap_grant failed");
-        }
-    }
-#undef CAP_RIGHTS_FULL
+     * Init receives the baseline caps plus PROC_READ with WRITE (for kill).
+     * All other caps come from policy files via cap_policy_lookup at exec time.
+     * Vigil itself needs the baseline to open files, read dirs, and signal children. */
+    cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,      CAP_RIGHTS_READ);
+    cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,     CAP_RIGHTS_WRITE);
+    cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,      CAP_RIGHTS_READ);
+    cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,           CAP_RIGHTS_READ);
+    cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,     CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
+    cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
 
     /* Pre-open fd 1 (stdout) to the console device.
      * User process inherits stdout without a sys_open call. */
@@ -431,7 +401,7 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
      * pgid and sends itself SIGTTIN repeatedly. */
     kbd_set_tty_pgrp(proc->pgid);
 
-    printk("[CAP] OK: 15 capabilities granted to init\n");
+    printk("[CAP] OK: 6 baseline capabilities granted to init\n");
 
     sched_add(&proc->task);
 }

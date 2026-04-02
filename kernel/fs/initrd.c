@@ -77,6 +77,19 @@ static const char s_chronos_run[]    = "/bin/chronos\n";
 static const char s_chronos_policy[] = "oneshot\n";
 static const char s_chronos_caps[]   = "NET_SOCKET\n";
 
+/* Capability policy files — /etc/aegis/caps.d/<binary>
+ * The kernel's cap policy table reads these at execve time to determine
+ * which capabilities to grant. Format: "tier CAP1 CAP2 ...\n" per line.
+ * "service" tier: granted unconditionally at execve.
+ * "admin" tier: granted only if the session is authenticated. */
+static const char s_cap_login[]     = "service AUTH SETUID\n";
+static const char s_cap_bastion[]   = "service AUTH FB SETUID\n";
+static const char s_cap_httpd[]     = "service NET_SOCKET\n";
+static const char s_cap_dhcp[]      = "service NET_SOCKET NET_ADMIN\n";
+static const char s_cap_stsh[]      = "admin DISK_ADMIN POWER CAP_DELEGATE CAP_QUERY\nadmin PROC_READ\n";
+static const char s_cap_lumen[]     = "service FB THREAD_CREATE\n";
+static const char s_cap_installer[] = "admin DISK_ADMIN\n";
+
 /* Compile-time size constants for static string entries. */
 static const unsigned int s_hosts_size         = sizeof(s_hosts)         - 1;
 static const unsigned int s_passwd_size        = sizeof(s_passwd)        - 1;
@@ -94,6 +107,13 @@ static const unsigned int s_dhcp_caps_size   = sizeof(s_dhcp_caps)   - 1;
 static const unsigned int s_chronos_run_size    = sizeof(s_chronos_run)    - 1;
 static const unsigned int s_chronos_policy_size = sizeof(s_chronos_policy) - 1;
 static const unsigned int s_chronos_caps_size   = sizeof(s_chronos_caps)   - 1;
+static const unsigned int s_cap_login_size      = sizeof(s_cap_login)      - 1;
+static const unsigned int s_cap_bastion_size    = sizeof(s_cap_bastion)    - 1;
+static const unsigned int s_cap_httpd_size      = sizeof(s_cap_httpd)      - 1;
+static const unsigned int s_cap_dhcp_size       = sizeof(s_cap_dhcp)       - 1;
+static const unsigned int s_cap_stsh_size       = sizeof(s_cap_stsh)       - 1;
+static const unsigned int s_cap_lumen_size      = sizeof(s_cap_lumen)      - 1;
+static const unsigned int s_cap_installer_size  = sizeof(s_cap_installer)  - 1;
 
 /* Binary blobs embedded via objcopy --input binary.
  * Symbols: _binary_<name>_start, _binary_<name>_end.
@@ -150,11 +170,18 @@ static const initrd_entry_t s_files[] = {
     { "/etc/vigil/services/chronos/run", (const unsigned char *)s_chronos_run, (const unsigned char *)s_chronos_run + s_chronos_run_size },
     { "/etc/vigil/services/chronos/policy", (const unsigned char *)s_chronos_policy, (const unsigned char *)s_chronos_policy + s_chronos_policy_size },
     { "/etc/vigil/services/chronos/caps", (const unsigned char *)s_chronos_caps, (const unsigned char *)s_chronos_caps + s_chronos_caps_size },
+    { "/etc/aegis/caps.d/login", (const unsigned char *)s_cap_login, (const unsigned char *)s_cap_login + s_cap_login_size },
+    { "/etc/aegis/caps.d/bastion", (const unsigned char *)s_cap_bastion, (const unsigned char *)s_cap_bastion + s_cap_bastion_size },
+    { "/etc/aegis/caps.d/httpd", (const unsigned char *)s_cap_httpd, (const unsigned char *)s_cap_httpd + s_cap_httpd_size },
+    { "/etc/aegis/caps.d/dhcp", (const unsigned char *)s_cap_dhcp, (const unsigned char *)s_cap_dhcp + s_cap_dhcp_size },
+    { "/etc/aegis/caps.d/stsh", (const unsigned char *)s_cap_stsh, (const unsigned char *)s_cap_stsh + s_cap_stsh_size },
+    { "/etc/aegis/caps.d/lumen", (const unsigned char *)s_cap_lumen, (const unsigned char *)s_cap_lumen + s_cap_lumen_size },
+    { "/etc/aegis/caps.d/installer", (const unsigned char *)s_cap_installer, (const unsigned char *)s_cap_installer + s_cap_installer_size },
     { (const char *)0, (const unsigned char *)0, (const unsigned char *)0 }  /* sentinel */
 };
 
 
-static const uint32_t s_nfiles = 23;
+static const uint32_t s_nfiles = 32;
 
 /* Helper: return file size for an entry. */
 static uint32_t
@@ -260,7 +287,7 @@ static const dir_entry_t s_root_entries[] = {
 };
 static const dir_entry_t s_etc_entries[] = {
     { "motd", 8 }, { "banner", 8 }, { "banner.net", 8 }, { "passwd", 8 }, { "shadow", 8 }, { "profile", 8 },
-    { "vigil", 4 }, { (const char *)0, 0 }
+    { "vigil", 4 }, { "aegis", 4 }, { (const char *)0, 0 }
 };
 static const dir_entry_t s_vigil_entries[] = {
     { "services", 4 }, { (const char *)0, 0 }
@@ -276,6 +303,13 @@ static const dir_entry_t s_vigil_httpd_entries[] = {
 };
 static const dir_entry_t s_vigil_dhcp_entries[] = {
     { "run", 8 }, { "policy", 8 }, { "caps", 8 }, { (const char *)0, 0 }
+};
+static const dir_entry_t s_aegis_entries[] = {
+    { "caps.d", 4 }, { (const char *)0, 0 }
+};
+static const dir_entry_t s_aegis_capsd_entries[] = {
+    { "login", 8 }, { "bastion", 8 }, { "httpd", 8 }, { "dhcp", 8 },
+    { "stsh", 8 }, { "lumen", 8 }, { "installer", 8 }, { (const char *)0, 0 }
 };
 /* s_bin_entries removed — /bin directory listing now handled by ext2.
  * Individual files (/bin/login, /bin/vigil) are still found via initrd_open
@@ -487,24 +521,28 @@ initrd_open(const char *path, vfs_file_t *out)
 
     /* Check for directory paths first */
     {
-        const char *dirs[10] = {
+        const char *dirs[12] = {
             "/", "/etc", "/dev",
             "/etc/vigil", "/etc/vigil/services", "/etc/vigil/services/getty",
             "/etc/vigil/services/httpd",
             "/etc/vigil/services/dhcp",
             "/root",
+            "/etc/aegis",
+            "/etc/aegis/caps.d",
             (const char *)0
         };
-        const dir_entry_t *dir_tables[10] = {
+        const dir_entry_t *dir_tables[12] = {
             s_root_entries, s_etc_entries, s_dev_entries,
             s_vigil_entries, s_vigil_services_entries, s_vigil_getty_entries,
             s_vigil_httpd_entries,
             s_vigil_dhcp_entries,
             s_root_dir_entries,
+            s_aegis_entries,
+            s_aegis_capsd_entries,
             (const dir_entry_t *)0
         };
         uint32_t d;
-        for (d = 0; d < 9; d++) {
+        for (d = 0; d < 11; d++) {
             const char *a = path, *b = dirs[d];
             while (*a && *b && *a == *b) { a++; b++; }
             if (*a == *b) {

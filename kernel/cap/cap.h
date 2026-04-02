@@ -32,6 +32,37 @@ typedef struct {
 #define CAP_KIND_IPC          15u  /* may create AF_UNIX sockets and memfd objects */
 #define CAP_KIND_POWER        16u  /* may call sys_reboot (shutdown/reboot) */
 
+/* Policy tiers — controls when caps from /etc/aegis/caps.d/ are granted */
+#define CAP_TIER_SERVICE  1u  /* granted unconditionally at exec */
+#define CAP_TIER_ADMIN    2u  /* granted only if proc->authenticated */
+
+/* Maximum caps per policy entry and max policy entries */
+#define CAP_POLICY_MAX_CAPS    16u
+#define CAP_POLICY_MAX_ENTRIES 32u
+
+/* One capability in a policy entry */
+typedef struct {
+    uint32_t kind;    /* CAP_KIND_* */
+    uint32_t rights;  /* CAP_RIGHTS_* */
+    uint32_t tier;    /* CAP_TIER_SERVICE or CAP_TIER_ADMIN */
+} cap_policy_cap_t;
+
+/* A single policy entry — maps a binary basename to its caps */
+typedef struct {
+    char             name[64];  /* binary basename, e.g. "httpd" */
+    cap_policy_cap_t caps[CAP_POLICY_MAX_CAPS];
+    uint32_t         count;     /* number of valid caps[] entries */
+} cap_policy_entry_t;
+
+/* Load all policy files from /etc/aegis/caps.d/ at boot.
+ * Must be called after vfs_init() + console_init(). */
+void cap_policy_load(void);
+
+/* Look up the policy for a binary by full exe_path.
+ * Extracts basename (everything after last '/') and compares.
+ * Returns pointer to entry, or NULL if no policy found. */
+const cap_policy_entry_t *cap_policy_lookup(const char *exe_path);
+
 /* Capability rights (bitfield) */
 #define CAP_RIGHTS_READ   (1u << 0)
 #define CAP_RIGHTS_WRITE  (1u << 1)

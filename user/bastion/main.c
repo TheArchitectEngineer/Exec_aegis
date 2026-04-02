@@ -4,7 +4,9 @@
  * as the authenticated user's session. Handles lock/unlock via SIGUSR1/2.
  *
  * Vigil service: graphical mode, respawn policy.
- * Caps from capd: AUTH, CAP_GRANT, CAP_DELEGATE, CAP_QUERY, SETUID.
+ * Capabilities: AUTH, FB, SETUID from kernel policy table (service tier).
+ * After successful auth, calls auth_elevate_session() so the spawned
+ * Lumen/shell gets admin-tier caps from the policy table.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -359,6 +361,8 @@ do_auth(void)
     s_uid = uid;
     s_gid = gid;
 
+    /* Elevate session so spawned Lumen/shell gets admin-tier caps */
+    auth_elevate_session();
     auth_set_identity(uid, gid);
     auth_grant_shell_caps();
 
@@ -390,8 +394,8 @@ main(void)
             return 0;
     }
 
-    /* Request capabilities from capd */
-    auth_request_caps();
+    /* AUTH + FB + SETUID caps come from kernel policy table (service tier).
+     * No runtime cap request needed — bastion is listed in caps.d/bastion. */
 
     /* Map framebuffer */
     memset(&s_fb_info, 0, sizeof(s_fb_info));

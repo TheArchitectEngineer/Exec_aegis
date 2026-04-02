@@ -124,7 +124,7 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case 61: return sys_waitpid(arg1, arg2, arg3);
     case 62: return sys_kill(arg1, arg2);
     case 360: return sys_setfg(arg1);
-    case 361: return sys_cap_grant_exec(arg1, arg2);
+    case 364: return sys_auth_session();
     case  79: return sys_getcwd(arg1, arg2);
     case  80: return sys_chdir(arg1);
     case 217: return sys_getdents64(arg1, arg2, arg3);

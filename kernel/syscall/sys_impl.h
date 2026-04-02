@@ -157,7 +157,7 @@ uint64_t sys_getegid(void);
 uint64_t sys_reboot(uint64_t cmd);
 
 /* ── sys_cap.c ─────────────────────────────────────────────────────────── */
-uint64_t sys_cap_grant_exec(uint64_t kind, uint64_t rights);
+uint64_t sys_auth_session(void);
 uint64_t sys_cap_grant_runtime(uint64_t target_pid, uint64_t kind, uint64_t rights);
 uint64_t sys_cap_query(uint64_t pid_arg, uint64_t buf_uptr, uint64_t buflen);
 

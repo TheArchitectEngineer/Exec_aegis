@@ -206,12 +206,11 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
         }
     }
 
-    /* 4. Copy capability tables. */
+    /* 4. Copy capability table + authenticated flag. */
     uint32_t ci;
     for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
         child->caps[ci] = parent->caps[ci];
-    for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
-        child->exec_caps[ci] = parent->exec_caps[ci];
+    child->authenticated = parent->authenticated;
 
     /* 5. Scalar fields. */
     child->brk       = parent->brk;
@@ -439,12 +438,7 @@ sys_fork(syscall_frame_t *frame)
     uint32_t ci;
     for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
         child->caps[ci] = parent->caps[ci];
-
-    /* exec_caps are not inherited by fork — child starts with an empty exec_caps table */
-    for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
-        child->exec_caps[ci].kind   = CAP_KIND_NULL;
-        child->exec_caps[ci].rights = 0;
-    }
+    child->authenticated = parent->authenticated;
 
     child->brk             = parent->brk;
     child->brk_base        = parent->brk_base;

@@ -1,8 +1,9 @@
 /* auth.c — shared authentication library for Aegis.
  *
  * Provides credential verification against /etc/passwd + /etc/shadow,
- * identity switching (setuid/setgid), and capability pre-registration
- * for the user's shell. Used by both /bin/login and /bin/bastion.
+ * identity switching (setuid/setgid), and session elevation for the
+ * kernel capability policy table. Used by both /bin/login and
+ * /bin/bastion.
  */
 #include "auth.h"
 #include <stdio.h>
@@ -11,47 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
-#include <sys/socket.h>
-#include <sys/un.h>
 #include <sys/syscall.h>
-
-/* ---- capd client ------------------------------------------------------ */
-
-int
-capd_request(unsigned int kind)
-{
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) return -1;
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, "/run/capd.sock", sizeof(addr.sun_path) - 1);
-    for (int retry = 0; retry < 3; retry++) {
-        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
-            goto connected;
-        usleep(100000);
-    }
-    close(sock);
-    return -1;
-connected:;
-    write(sock, &kind, sizeof(kind));
-    /* Read response with manual timeout — poll in non-blocking mode.
-     * AF_UNIX reads via sys_read don't support SO_RCVTIMEO, so we
-     * set O_NONBLOCK and retry with usleep to avoid blocking forever
-     * if capd closes without sending a response. */
-    fcntl(sock, F_SETFL, O_NONBLOCK);
-    int result = -1;
-    ssize_t n = -1;
-    for (int wait = 0; wait < 20; wait++) {  /* 20 × 100ms = 2s timeout */
-        n = read(sock, &result, sizeof(result));
-        if (n > 0) break;
-        if (n == 0) break;  /* EOF — capd closed */
-        usleep(100000);
-    }
-    close(sock);
-    if (n != (ssize_t)sizeof(result)) return -1;
-    return result >= 0 ? 0 : -1;
-}
 
 /* ---- passwd/shadow lookup --------------------------------------------- */
 
@@ -168,12 +129,7 @@ auth_grant_shell_caps(void)
 }
 
 void
-auth_request_caps(void)
+auth_elevate_session(void)
 {
-    capd_request(4);   /* CAP_KIND_AUTH */
-    capd_request(5);   /* CAP_KIND_CAP_GRANT */
-    capd_request(13);  /* CAP_KIND_CAP_DELEGATE */
-    capd_request(14);  /* CAP_KIND_CAP_QUERY */
-    capd_request(6);   /* CAP_KIND_SETUID */
-    capd_request(16);  /* CAP_KIND_POWER */
+    syscall(364);  /* sys_auth_session — marks session as authenticated */
 }

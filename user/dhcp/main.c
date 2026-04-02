@@ -22,31 +22,8 @@
 
 #define SYS_NETCFG 500
 
-/* Request a capability from capd (binary protocol).
- * Sends uint32_t kind, reads int32_t result (0=OK). */
-static int
-capd_request(unsigned int kind)
-{
-    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (sock < 0) return -1;
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, "/run/capd.sock", sizeof(addr.sun_path) - 1);
-    for (int retry = 0; retry < 3; retry++) {
-        if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0)
-            goto connected;
-        usleep(100000);
-    }
-    close(sock);
-    return -1;
-connected:;
-    write(sock, &kind, sizeof(kind));
-    int result = -1;
-    read(sock, &result, sizeof(result));
-    close(sock);
-    return result >= 0 ? 0 : -1;
-}
+/* Caps are now granted by kernel policy at exec time via /etc/aegis/caps.d/.
+ * No runtime cap request needed. */
 
 /* ---- DHCP packet layout (RFC 2131) ----------------------------------- */
 
@@ -415,9 +392,7 @@ try_renew(int fd)
 int
 main(void)
 {
-    /* Request NET_ADMIN from capd (kind=8) */
-    if (capd_request(8) < 0)
-        dprintf(2, "[DHCP] warning: capd NET_ADMIN request failed\n");
+    /* NET_ADMIN cap comes from kernel policy (/etc/aegis/caps.d/dhcp) at exec time */
 
     /* Read MAC via sys_netcfg op=1 — if MAC is all zeros, no NIC present */
     netcfg_info_t info;

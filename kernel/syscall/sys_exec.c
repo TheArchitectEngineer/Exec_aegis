@@ -164,34 +164,33 @@ sys_execve(syscall_frame_t *frame,
     proc->task.fs_base = 0;
 
     /* Reset capability table to baseline on exec — exec is a capability boundary.
-     * Login's AUTH/SETUID caps must not propagate to the exec'd shell. */
+     * Login's AUTH/SETUID caps must not propagate to the exec'd shell.
+     * Policy-based caps from /etc/aegis/caps.d/ replace the old exec_caps mechanism. */
     {
         uint32_t ci;
         for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
             proc->caps[ci].kind   = CAP_KIND_NULL;
             proc->caps[ci].rights = 0;
         }
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,   CAP_RIGHTS_READ);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
+        /* Baseline: every exec'd process gets these unconditionally */
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,      CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,     CAP_RIGHTS_WRITE);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,      CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,           CAP_RIGHTS_READ);
+        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,     CAP_RIGHTS_READ);
         cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ, CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_FB,        CAP_RIGHTS_READ);
-        cap_grant(proc->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,       CAP_RIGHTS_READ);
-        /* DISK_ADMIN and AUTH are NOT in the baseline — they propagate only
-         * via vigil exec_caps for specific binaries (installer, login). */
 
-        /* Apply pre-registered exec caps, then zero them (consumed on exec). */
-        {
-            uint32_t ci;
-            for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
-                if (proc->exec_caps[ci].kind != CAP_KIND_NULL) {
+        /* Policy lookup: grant caps based on binary name and authentication state */
+        const cap_policy_entry_t *pol = cap_policy_lookup(path);
+        if (pol) {
+            for (ci = 0; ci < pol->count; ci++) {
+                if (pol->caps[ci].tier == CAP_TIER_SERVICE) {
                     cap_grant(proc->caps, CAP_TABLE_SIZE,
-                              proc->exec_caps[ci].kind,
-                              proc->exec_caps[ci].rights);
-                    proc->exec_caps[ci].kind   = CAP_KIND_NULL;
-                    proc->exec_caps[ci].rights = 0;
+                              pol->caps[ci].kind, pol->caps[ci].rights);
+                } else if (pol->caps[ci].tier == CAP_TIER_ADMIN &&
+                           proc->authenticated) {
+                    cap_grant(proc->caps, CAP_TABLE_SIZE,
+                              pol->caps[ci].kind, pol->caps[ci].rights);
                 }
             }
         }
@@ -470,7 +469,7 @@ done:
  *         if (uint64_t)-1, child gets no open fds
  *
  * The child starts in a new session (sid = pid, pgid = pid).
- * Capabilities: baseline + parent's exec_caps applied and consumed.
+ * Capabilities: baseline + policy-based caps from /etc/aegis/caps.d/.
  *
  * Returns child PID on success, negative errno on failure.
  */
@@ -870,7 +869,8 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
     child->signal_mask     = 0;
     __builtin_memset(child->sigactions, 0, sizeof(child->sigactions));
 
-    /* 12. Capabilities: baseline + exec_caps, OR cap_mask if provided. */
+    /* 12. Capabilities: baseline + policy, OR cap_mask if provided.
+     * Policy-based caps from /etc/aegis/caps.d/ replace the old exec_caps mechanism. */
     {
         uint32_t ci;
         for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
@@ -878,6 +878,35 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
             child->caps[ci].rights = 0;
         }
 
+        /* Baseline: every spawned process gets these unconditionally */
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,      CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,     CAP_RIGHTS_WRITE);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,      CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,           CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,     CAP_RIGHTS_READ);
+        cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
+
+        /* Policy lookup: grant caps based on binary name and authentication state.
+         * authenticated flag is inherited from parent for spawned children. */
+        {
+            const cap_policy_entry_t *pol = cap_policy_lookup(path);
+            if (pol) {
+                for (ci = 0; ci < pol->count; ci++) {
+                    if (pol->caps[ci].tier == CAP_TIER_SERVICE) {
+                        cap_grant(child->caps, CAP_TABLE_SIZE,
+                                  pol->caps[ci].kind, pol->caps[ci].rights);
+                    } else if (pol->caps[ci].tier == CAP_TIER_ADMIN &&
+                               parent->authenticated) {
+                        cap_grant(child->caps, CAP_TABLE_SIZE,
+                                  pol->caps[ci].kind, pol->caps[ci].rights);
+                    }
+                }
+            }
+        }
+
+        /* cap_mask restricts the computed cap set (baseline + policy).
+         * If provided, only caps that appear in BOTH the computed set AND
+         * the mask survive. */
         if (cap_mask_uptr != 0) {
             /* cap_mask mode: caller must hold CAP_DELEGATE */
             if (cap_check(parent->caps, CAP_TABLE_SIZE,
@@ -897,7 +926,16 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
             copy_from_user(mask, (const void *)cap_mask_uptr,
                            sizeof(mask));
 
-            /* Validate and apply: caller can only grant caps it holds */
+            /* Validate and apply: caller can only grant caps it holds.
+             * Zero the child's caps and re-grant only those in the mask
+             * that the parent also holds. */
+            cap_slot_t computed[CAP_TABLE_SIZE];
+            for (ci = 0; ci < CAP_TABLE_SIZE; ci++)
+                computed[ci] = child->caps[ci];
+            for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
+                child->caps[ci].kind   = CAP_KIND_NULL;
+                child->caps[ci].rights = 0;
+            }
             for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
                 if (mask[ci].kind == CAP_KIND_NULL)
                     continue;
@@ -912,36 +950,17 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
                     result = (uint64_t)-(int64_t)ENOCAP;
                     goto fail_child;
                 }
-                cap_grant(child->caps, CAP_TABLE_SIZE,
-                          mask[ci].kind, mask[ci].rights);
-            }
-            /* exec_caps NOT applied in cap_mask mode */
-        } else {
-            /* Normal mode: baseline + exec_caps */
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_OPEN,   CAP_RIGHTS_READ);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_WRITE,  CAP_RIGHTS_WRITE);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_VFS_READ,   CAP_RIGHTS_READ);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_NET_SOCKET, CAP_RIGHTS_READ);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_THREAD_CREATE, CAP_RIGHTS_READ);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_PROC_READ,  CAP_RIGHTS_READ | CAP_RIGHTS_WRITE);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_FB,         CAP_RIGHTS_READ);
-            cap_grant(child->caps, CAP_TABLE_SIZE, CAP_KIND_IPC,        CAP_RIGHTS_READ);
-
-            for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
-                if (parent->exec_caps[ci].kind != CAP_KIND_NULL) {
+                /* Only grant if it was in the computed set (baseline+policy) */
+                if (cap_check(computed, CAP_TABLE_SIZE,
+                              mask[ci].kind, mask[ci].rights) == 0) {
                     cap_grant(child->caps, CAP_TABLE_SIZE,
-                              parent->exec_caps[ci].kind,
-                              parent->exec_caps[ci].rights);
-                    parent->exec_caps[ci].kind   = CAP_KIND_NULL;
-                    parent->exec_caps[ci].rights = 0;
+                              mask[ci].kind, mask[ci].rights);
                 }
             }
         }
 
-        for (ci = 0; ci < CAP_TABLE_SIZE; ci++) {
-            child->exec_caps[ci].kind   = CAP_KIND_NULL;
-            child->exec_caps[ci].rights = 0;
-        }
+        /* Inherit authenticated flag from parent */
+        child->authenticated = parent->authenticated;
     }
 
     /* 13. File descriptor table. */

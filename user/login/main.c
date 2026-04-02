@@ -1,8 +1,9 @@
 /* login — text-mode login binary for Aegis.
  *
  * Authenticates via libauth.a, then execve's the user's shell.
- * Capabilities acquired from capd: AUTH, CAP_GRANT, CAP_DELEGATE,
- * CAP_QUERY, SETUID.
+ * Capabilities: AUTH and SETUID from kernel policy table (service tier).
+ * After successful auth, calls auth_elevate_session() so the spawned
+ * shell gets admin-tier caps from the policy table.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,8 +46,8 @@ main(void)
     char shell[256];
     int  uid = 0, gid = 0;
 
-    /* Request capabilities from capd */
-    auth_request_caps();
+    /* AUTH + SETUID caps come from kernel policy table (service tier).
+     * No runtime cap request needed — login is listed in caps.d/login. */
 
     /* Display pre-auth banner */
     {
@@ -100,7 +101,8 @@ main(void)
             continue;
         }
 
-        /* Success — set identity and launch shell */
+        /* Success — elevate session, set identity, and launch shell */
+        auth_elevate_session();
         write(1, "\033[2J\033[H", 7);
         auth_set_identity(uid, gid);
         chdir(home);

@@ -17,17 +17,6 @@
 
 typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 
-/* Cap kind constants — must match kernel/cap/cap.h */
-#define SVC_CAP_AUTH        4u
-#define SVC_CAP_NET_SOCKET  7u
-#define SVC_CAP_NET_ADMIN   8u
-#define SVC_CAP_DISK_ADMIN 11u
-#define SVC_CAP_SETUID      6u
-#define SVC_CAP_THREAD_CREATE 9u
-#define SVC_CAP_RIGHTS_READ  1u
-#define SVC_CAP_RIGHTS_WRITE 2u
-#define SVC_CAP_RIGHTS_FULL  7u  /* READ|WRITE|EXEC — for delegation brokers */
-
 typedef struct {
     char     name[64];
     char     run_cmd[256];
@@ -37,22 +26,7 @@ typedef struct {
     pid_t    pid;
     int      restarts;
     int      active;
-    int      needs_auth;       /* 1 if caps file listed AUTH */
-    int      needs_net_socket; /* 1 if caps file listed NET_SOCKET */
-    int      needs_net_admin;  /* 1 if caps file listed NET_ADMIN */
-    int      needs_disk_admin; /* 1 if caps file listed DISK_ADMIN */
-    int      needs_fb;         /* 1 if caps file listed FB */
-    int      needs_cap_grant;    /* 1 if caps file listed CAP_GRANT */
-    int      needs_cap_delegate; /* 1 if caps file listed CAP_DELEGATE */
-    int      needs_cap_query;    /* 1 if caps file listed CAP_QUERY */
-    int      needs_setuid;       /* 1 if caps file listed SETUID */
-    int      needs_thread_create; /* 1 if caps file listed THREAD_CREATE */
 } service_t;
-
-#define SVC_CAP_FB          12u
-#define SVC_CAP_CAP_GRANT    5u
-#define SVC_CAP_CAP_DELEGATE 13u
-#define SVC_CAP_CAP_QUERY    14u
 
 static service_t s_svcs[VIGIL_MAX_SERVICES];
 static int       s_nsvc = 0;
@@ -120,20 +94,6 @@ load_service(const char *name)
     char *p = strstr(pol, "max_restarts=");
     if (p) s->max_restarts = atoi(p + 13);
 
-    char caps_buf[128] = "";
-    snprintf(path, sizeof(path), "%s/%s/caps", VIGIL_SERVICES_DIR, name);
-    read_file(path, caps_buf, sizeof(caps_buf));
-    s->needs_auth       = (strstr(caps_buf, "AUTH")       != NULL);
-    s->needs_net_socket = (strstr(caps_buf, "NET_SOCKET") != NULL);
-    s->needs_net_admin  = (strstr(caps_buf, "NET_ADMIN")  != NULL);
-    s->needs_disk_admin = (strstr(caps_buf, "DISK_ADMIN") != NULL);
-    s->needs_fb         = (strstr(caps_buf, "FB")         != NULL);
-    s->needs_cap_grant    = (strstr(caps_buf, "CAP_GRANT")    != NULL);
-    s->needs_cap_delegate = (strstr(caps_buf, "CAP_DELEGATE") != NULL);
-    s->needs_cap_query    = (strstr(caps_buf, "CAP_QUERY")    != NULL);
-    s->needs_setuid        = (strstr(caps_buf, "SETUID")        != NULL);
-    s->needs_thread_create = (strstr(caps_buf, "THREAD_CREATE") != NULL);
-
     /* Read optional boot mode filter */
     s->mode[0] = '\0';
     snprintf(path, sizeof(path), "%s/%s/mode", VIGIL_SERVICES_DIR, name);
@@ -152,40 +112,15 @@ start_service(service_t *s)
     if (s->pid > 0) return;
     pid_t pid = fork();
     if (pid == 0) {
-        /* Grant AUTH exec_cap before exec so login can read /etc/shadow.
-         * exec_caps are zeroed on fork; the child re-registers them here.
-         * sys_cap_grant_exec (361) succeeds because the fork child inherits
-         * vigil's caps[], which include CAP_KIND_CAP_GRANT. */
-        /* Grant exec_caps with full rights — the H5 audit fix requires
-         * that a delegator (capd) hold at least the rights it grants.
-         * Services that don't delegate only use the rights they need;
-         * holding extra rights is harmless (the cap system is allowlist). */
-        if (s->needs_auth)
-            syscall(361, (long)SVC_CAP_AUTH, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_net_socket)
-            syscall(361, (long)SVC_CAP_NET_SOCKET, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_net_admin)
-            syscall(361, (long)SVC_CAP_NET_ADMIN, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_disk_admin)
-            syscall(361, (long)SVC_CAP_DISK_ADMIN, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_fb)
-            syscall(361, (long)SVC_CAP_FB, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_cap_grant)
-            syscall(361, (long)SVC_CAP_CAP_GRANT, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_cap_delegate)
-            syscall(361, (long)SVC_CAP_CAP_DELEGATE, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_cap_query)
-            syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_setuid)
-            syscall(361, (long)SVC_CAP_SETUID, (long)SVC_CAP_RIGHTS_FULL);
-        if (s->needs_thread_create)
-            syscall(361, (long)SVC_CAP_THREAD_CREATE, (long)SVC_CAP_RIGHTS_FULL);
-
-        /* In quiet mode, close stdout for non-getty services so daemon
+        /* In quiet mode, close stdout for non-interactive services so daemon
          * chatter doesn't pollute the serial stream (breaks test pattern
          * matching).  Keep stderr open — services that need serial
-         * visibility (e.g. DHCP) can log via stderr/dprintf(2,...). */
-        if (s_quiet && !s->needs_auth)
+         * visibility (e.g. DHCP) can log via stderr/dprintf(2,...).
+         * Heuristic: close stdout if run_cmd is not /bin/login and not
+         * /bin/bastion (the two interactive auth services). */
+        if (s_quiet &&
+            strcmp(s->run_cmd, "/bin/login") != 0 &&
+            strcmp(s->run_cmd, "/bin/bastion") != 0)
             close(1);
 
         /* Exec the binary directly when run_cmd is an absolute path — this
@@ -340,7 +275,6 @@ main(void)
         s->max_restarts = 5;
         s->pid          = -1;
         s->active       = 1;
-        s->needs_auth   = 1;
     }
 
     int i;

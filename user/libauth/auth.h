@@ -3,10 +3,6 @@
 #ifndef AUTH_H
 #define AUTH_H
 
-/* Connect to capd and request a capability by kind number.
- * Returns 0 on success, -1 on failure. */
-int capd_request(unsigned int kind);
-
 /* Look up username in /etc/passwd.
  * Returns 0 on success, -1 on failure.
  * Fills uid, gid, home, shell from the matching entry. */
@@ -35,8 +31,9 @@ void auth_set_identity(int uid, int gid);
  * The shell inherits these capabilities. */
 void auth_grant_shell_caps(void);
 
-/* Request the standard auth capabilities from capd:
- * AUTH, CAP_GRANT, CAP_DELEGATE, CAP_QUERY, SETUID */
-void auth_request_caps(void);
+/* Mark the current session as authenticated.  The kernel's policy table
+ * uses this to grant admin-tier capabilities to processes spawned
+ * after successful login/unlock. */
+void auth_elevate_session(void);
 
 #endif /* AUTH_H */
