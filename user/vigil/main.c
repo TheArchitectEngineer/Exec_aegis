@@ -26,6 +26,7 @@ typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 #define SVC_CAP_THREAD_CREATE 9u
 #define SVC_CAP_RIGHTS_READ  1u
 #define SVC_CAP_RIGHTS_WRITE 2u
+#define SVC_CAP_RIGHTS_FULL  7u  /* READ|WRITE|EXEC — for delegation brokers */
 
 typedef struct {
     char     name[64];
@@ -155,27 +156,30 @@ start_service(service_t *s)
          * exec_caps are zeroed on fork; the child re-registers them here.
          * sys_cap_grant_exec (361) succeeds because the fork child inherits
          * vigil's caps[], which include CAP_KIND_CAP_GRANT. */
+        /* Grant exec_caps with full rights — the H5 audit fix requires
+         * that a delegator (capd) hold at least the rights it grants.
+         * Services that don't delegate only use the rights they need;
+         * holding extra rights is harmless (the cap system is allowlist). */
         if (s->needs_auth)
-            syscall(361, (long)SVC_CAP_AUTH, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_AUTH, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_net_socket)
-            syscall(361, (long)SVC_CAP_NET_SOCKET, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_NET_SOCKET, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_net_admin)
-            syscall(361, (long)SVC_CAP_NET_ADMIN, (long)SVC_CAP_RIGHTS_WRITE);
+            syscall(361, (long)SVC_CAP_NET_ADMIN, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_disk_admin)
-            syscall(361, (long)SVC_CAP_DISK_ADMIN,
-                    (long)(SVC_CAP_RIGHTS_READ | SVC_CAP_RIGHTS_WRITE));
+            syscall(361, (long)SVC_CAP_DISK_ADMIN, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_fb)
-            syscall(361, (long)SVC_CAP_FB, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_FB, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_cap_grant)
-            syscall(361, (long)SVC_CAP_CAP_GRANT, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_CAP_GRANT, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_cap_delegate)
-            syscall(361, (long)SVC_CAP_CAP_DELEGATE, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_CAP_DELEGATE, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_cap_query)
-            syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_CAP_QUERY, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_setuid)
-            syscall(361, (long)SVC_CAP_SETUID, (long)SVC_CAP_RIGHTS_WRITE);
+            syscall(361, (long)SVC_CAP_SETUID, (long)SVC_CAP_RIGHTS_FULL);
         if (s->needs_thread_create)
-            syscall(361, (long)SVC_CAP_THREAD_CREATE, (long)SVC_CAP_RIGHTS_READ);
+            syscall(361, (long)SVC_CAP_THREAD_CREATE, (long)SVC_CAP_RIGHTS_FULL);
 
         /* In quiet mode, close stdout for non-getty services so daemon
          * chatter doesn't pollute the serial stream (breaks test pattern
