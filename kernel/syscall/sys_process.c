@@ -172,6 +172,8 @@ uint64_t
 sys_set_tid_address(uint64_t arg1)
 {
     aegis_task_t *task = sched_current();
+    if (arg1 && arg1 >= 0xFFFF800000000000ULL)
+        return (uint64_t)-(int64_t)14;  /* EFAULT — reject kernel addresses */
     task->clear_child_tid = arg1;
     if (!task->is_user) return 1;
     return (uint64_t)((aegis_process_t *)task)->pid;
@@ -240,6 +242,14 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
 
     /* ── Thread creation (CLONE_VM set) ─────────────────────────────────── */
 
+    /* H4: Reject kernel addresses for TLS pointer. */
+    if ((cl & CLONE_SETTLS) && tls >= 0xFFFF800000000000ULL)
+        return (uint64_t)-(int64_t)14;  /* EFAULT */
+
+    /* H3: Reject kernel addresses for CLONE_CHILD_CLEARTID pointer. */
+    if ((cl & CLONE_CHILD_CLEARTID) && ctid >= 0xFFFF800000000000ULL)
+        return (uint64_t)-(int64_t)14;  /* EFAULT */
+
     aegis_task_t    *parent_task = sched_current();
     if (!parent_task || !parent_task->is_user)
         return (uint64_t)-(int64_t)1;  /* EPERM */
@@ -283,6 +293,7 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
 
     /* 5. Scalar fields. */
     child->brk       = parent->brk;
+    child->brk_base  = parent->brk_base;
     child->mmap_base = parent->mmap_base;
     __builtin_memcpy(child->mmap_free, parent->mmap_free,
                      parent->mmap_free_count * sizeof(mmap_free_t));
@@ -431,9 +442,11 @@ sys_clone(syscall_frame_t *frame, uint64_t flags, uint64_t child_stack,
 
     /* 9. CLONE_PARENT_SETTID: write child tid to parent's *ptid. */
     if (cl & CLONE_PARENT_SETTID) {
-        uint32_t tid_val = child->pid;
-        vmm_write_user_bytes(parent->pml4_phys, ptid,
-                             &tid_val, sizeof(tid_val));
+        if (user_ptr_valid(ptid, 4)) {
+            uint32_t tid_val = child->pid;
+            vmm_write_user_bytes(parent->pml4_phys, ptid,
+                                 &tid_val, sizeof(tid_val));
+        }
     }
 
     /* 10. CLONE_CHILD_SETTID: write child tid to child's *ctid.
@@ -503,6 +516,7 @@ sys_fork(syscall_frame_t *frame)
     }
 
     child->brk             = parent->brk;
+    child->brk_base        = parent->brk_base;
     child->mmap_base       = parent->mmap_base;
     __builtin_memcpy(child->mmap_free, parent->mmap_free,
                      parent->mmap_free_count * sizeof(mmap_free_t));
@@ -927,6 +941,7 @@ sys_execve(syscall_frame_t *frame,
 
     /* 5. Reset heap/mmap/TLS state */
     proc->brk       = 0;
+    proc->brk_base  = 0;
     proc->mmap_base = 0x0000700000000000ULL;
     proc->mmap_free_count = 0;
     vma_clear(proc);
@@ -972,6 +987,13 @@ sys_execve(syscall_frame_t *frame,
         }
     }
 
+    /* C2: Reset signal state across exec — pending signals, mask, and all
+     * signal dispositions must be cleared.  Matches POSIX exec semantics:
+     * caught signals are reset to SIG_DFL, pending signals are discarded. */
+    proc->pending_signals = 0;
+    proc->signal_mask = 0;
+    __builtin_memset(proc->sigactions, 0, sizeof(proc->sigactions));
+
     /* 6. Load new ELF */
     elf_load_result_t er;
     elf_load_result_t interp_er;
@@ -989,7 +1011,8 @@ sys_execve(syscall_frame_t *frame,
         ext2_buf   = (void *)0;
         ext2_pages = 0;
     }
-    proc->brk = er.brk;
+    proc->brk      = er.brk;
+    proc->brk_base = er.brk;
 
     /* 6a. If PT_INTERP present, load the interpreter at INTERP_BASE */
     has_interp = (er.interp[0] != '\0');
@@ -1065,11 +1088,11 @@ sys_execve(syscall_frame_t *frame,
             while (abuf->argv_ptrs[i][slen]) slen++;
             slen++;  /* include null terminator */
             if (sp_va - slen < USER_STACK_BASE_EXEC)
-                { ret = (uint64_t)-(int64_t)7; goto done; }  /* E2BIG */
+                { sched_exit(); __builtin_unreachable(); }  /* E2BIG — past PNR */
             sp_va -= slen;
             if (vmm_write_user_bytes(proc->pml4_phys, sp_va,
                                      abuf->argv_ptrs[i], slen) != 0)
-                { ret = (uint64_t)-(int64_t)14; goto done; }  /* EFAULT */
+                { sched_exit(); __builtin_unreachable(); }  /* EFAULT — past PNR */
             abuf->str_ptrs[i] = sp_va;
         }
     }
@@ -1082,7 +1105,7 @@ sys_execve(syscall_frame_t *frame,
         uint8_t rnd[16];
         random_get_bytes(rnd, 16);
         if (vmm_write_user_bytes(proc->pml4_phys, sp_va, rnd, 16) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }  /* past PNR */
     }
     uint64_t at_random_va = sp_va;
 
@@ -1108,7 +1131,7 @@ sys_execve(syscall_frame_t *frame,
     if ((sp_va % 16) != 8)
         sp_va -= 8;
     if (sp_va < USER_STACK_BASE_EXEC)
-        { ret = (uint64_t)-(int64_t)7; goto done; }  /* E2BIG */
+        { sched_exit(); __builtin_unreachable(); }  /* E2BIG — past PNR */
 
     /* 8b. Write the pointer table */
     {
@@ -1117,65 +1140,65 @@ sys_execve(syscall_frame_t *frame,
 
         if (vmm_write_user_u64(proc->pml4_phys, wp,
                                (uint64_t)argc2) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         for (i = 0; i < argc2; i++) {
             if (vmm_write_user_u64(proc->pml4_phys, wp,
                                    abuf->str_ptrs[i]) != 0)
-                { ret = (uint64_t)-(int64_t)14; goto done; }
+                { sched_exit(); __builtin_unreachable(); }
             wp += 8;
         }
 
         /* argv NULL terminator */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         /* envp NULL (empty environment) */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         /* auxv: AT_PHDR */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 3ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, er.phdr_va) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         /* auxv: AT_PHNUM */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 5ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp,
                                (uint64_t)er.phdr_count) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         /* auxv: AT_PAGESZ */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 6ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, 4096ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         /* auxv: AT_ENTRY */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 9ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, er.entry) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         /* auxv: AT_RANDOM — pointer to 16 random bytes on user stack */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 25ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, at_random_va) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
 
         if (has_interp) {
@@ -1189,10 +1212,10 @@ sys_execve(syscall_frame_t *frame,
 
         /* auxv: AT_NULL (end sentinel) */
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
         wp += 8;
         if (vmm_write_user_u64(proc->pml4_phys, wp, 0ULL) != 0)
-            { ret = (uint64_t)-(int64_t)14; goto done; }
+            { sched_exit(); __builtin_unreachable(); }
     }
     } /* table_qwords/table_bytes scope */
 
@@ -1415,6 +1438,10 @@ sys_cap_grant_exec(uint64_t kind_arg, uint64_t rights_arg)
     uint32_t rights = (uint32_t)rights_arg;
     if (kind == CAP_KIND_NULL || kind >= CAP_TABLE_SIZE)
         return (uint64_t)-(int64_t)22; /* EINVAL */
+    /* H6: Caller must hold the cap being pre-registered — cannot grant
+     * capabilities it does not possess. */
+    if (cap_check(proc->caps, CAP_TABLE_SIZE, kind, rights) != 0)
+        return (uint64_t)-(int64_t)ENOCAP;
     int r = cap_grant(proc->exec_caps, CAP_TABLE_SIZE, kind, rights);
     if (r < 0) return (uint64_t)-(int64_t)12; /* ENOMEM/table full */
     return 0;
@@ -1442,10 +1469,10 @@ sys_cap_grant_runtime(uint64_t target_pid, uint64_t kind_arg, uint64_t rights_ar
     if (kind == CAP_KIND_NULL || kind >= CAP_TABLE_SIZE)
         return (uint64_t)-(int64_t)22; /* EINVAL */
 
-    /* Caller must hold the cap kind being granted (any rights suffice —
-     * the caller's authority to delegate derives from CAP_DELEGATE, not
-     * from matching the target's rights exactly). */
-    if (cap_check(caller->caps, CAP_TABLE_SIZE, kind, 0) != 0)
+    /* H5: Caller must hold the cap kind being granted with at least the
+     * rights being delegated — prevents escalation beyond caller's own
+     * authority. */
+    if (cap_check(caller->caps, CAP_TABLE_SIZE, kind, rights) != 0)
         return (uint64_t)-(int64_t)ENOCAP;
 
     /* Look up target process */
@@ -1586,6 +1613,16 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
             elf_data = (const uint8_t *)initrd_get_data(&f);
             elf_size = (uint64_t)initrd_get_size(&f);
         } else {
+            /* H1: ext2 path — check execute permission before loading. */
+            {
+                uint32_t elf_ino;
+                if (ext2_open(path, &elf_ino) == 0) {
+                    int xperm = ext2_check_perm(elf_ino,
+                        (uint16_t)parent->uid, (uint16_t)parent->gid, 1);
+                    if (xperm != 0)
+                        { result = (uint64_t)-(int64_t)13; goto fail_early; } /* EACCES */
+                }
+            }
             vfs_file_t vf;
             int vr = vfs_open(path, 0, &vf);
             if (vr != 0) { result = (uint64_t)-(int64_t)2; goto fail_early; }
@@ -1842,6 +1879,7 @@ sys_spawn(uint64_t path_uptr, uint64_t argv_uptr,
     child->task.tid        = child->pid;
 
     child->brk             = er.brk;
+    child->brk_base        = er.brk;
     child->mmap_base       = 0x0000700000000000ULL;
     child->mmap_free_count = 0;
 

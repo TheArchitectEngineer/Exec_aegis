@@ -491,7 +491,8 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
     proc->fd_table->fds[2] = *console_open();
 
     /* Initialise heap break to top of ELF segments. */
-    proc->brk = brk_start;
+    proc->brk      = brk_start;
+    proc->brk_base = brk_start;
 
     /* Initialise mmap bump allocator base (112 TB — safely above heap, below stack). */
     proc->mmap_base = 0x0000700000000000ULL;

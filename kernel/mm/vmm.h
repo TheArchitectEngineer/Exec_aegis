@@ -90,9 +90,14 @@ void vmm_teardown_identity(void);
 void vmm_free_user_pml4(uint64_t pml4_phys);
 
 /* vmm_phys_of_user — walk pml4_phys to find the physical address mapped at virt.
- * Returns physical address, or 0 if not mapped.
+ * Returns physical address, or 0 if not mapped (PRESENT bit must be set).
  * Uses the window allocator. Safe to call with any PML4 (not just active CR3). */
 uint64_t vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt);
+
+/* vmm_phys_of_user_raw — like vmm_phys_of_user but returns the physical address
+ * for any non-zero leaf PTE regardless of PRESENT bit. Use for munmap to find
+ * and free physical frames backing PROT_NONE pages (PRESENT cleared by mprotect). */
+uint64_t vmm_phys_of_user_raw(uint64_t pml4_phys, uint64_t virt);
 
 /* vmm_unmap_user_page — clear the PTE for virt in pml4_phys and invlpg.
  * Does not free the physical page. Caller frees via pmm_free_page.

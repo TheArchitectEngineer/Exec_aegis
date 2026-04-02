@@ -644,6 +644,44 @@ vmm_phys_of_user(uint64_t pml4_phys, uint64_t virt)
     return result;
 }
 
+/* H4: vmm_phys_of_user_raw — like vmm_phys_of_user but returns the physical
+ * address for ANY non-zero leaf PTE regardless of PRESENT bit. This finds
+ * physical frames backing PROT_NONE pages (PRESENT cleared by mprotect) so
+ * munmap can free them instead of leaking. */
+uint64_t
+vmm_phys_of_user_raw(uint64_t pml4_phys, uint64_t virt)
+{
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    uint64_t *pml4  = vmm_window_map(pml4_phys);
+    uint64_t  pml4e = pml4[pml4_idx];
+    if (!(pml4e & VMM_FLAG_PRESENT)) { vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return 0; }
+
+    uint64_t *pdpt  = vmm_window_map(ARCH_PTE_ADDR(pml4e));
+    uint64_t  pdpte = pdpt[pdpt_idx];
+    if (!(pdpte & VMM_FLAG_PRESENT)) { vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return 0; }
+
+    uint64_t *pd  = vmm_window_map(ARCH_PTE_ADDR(pdpte));
+    uint64_t  pde = pd[pd_idx];
+    if (!(pde & VMM_FLAG_PRESENT) || (pde & PTE_PS)) {
+        vmm_window_unmap(); spin_unlock_irqrestore(&vmm_window_lock, fl); return 0;
+    }
+
+    uint64_t *pt  = vmm_window_map(ARCH_PTE_ADDR(pde));
+    uint64_t  pte = pt[pt_idx];
+    vmm_window_unmap();
+
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
+
+    /* Return phys for any non-zero PTE, even if PRESENT is clear (PROT_NONE). */
+    return pte ? ARCH_PTE_ADDR(pte) : 0;
+}
+
 void
 vmm_unmap_user_page(uint64_t pml4_phys, uint64_t virt)
 {

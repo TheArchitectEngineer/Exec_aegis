@@ -172,7 +172,8 @@ stat_copy_path(uint64_t user_ptr, char *out, uint32_t bufsz)
         if (c == 0) return 0;
     }
     out[bufsz - 1] = '\0';
-    return 0;
+    /* Loop completed without finding null — path was truncated */
+    return -36; /* ENAMETOOLONG */
 }
 
 /*
@@ -285,6 +286,8 @@ sys_chdir(uint64_t path_ptr)
     char kpath[256];
     uint64_t i;
     for (i = 0; i < 255; i++) {
+        if (!user_ptr_valid(path_ptr + i, 1))
+            return (uint64_t)-(int64_t)14; /* EFAULT */
         char c;
         copy_from_user(&c, (const void *)(uintptr_t)(path_ptr + i), 1);
         kpath[i] = c;
@@ -410,6 +413,9 @@ sys_nanosleep(uint64_t arg1, uint64_t arg2)
     if (!user_ptr_valid(arg1, sizeof(ts)))
         return (uint64_t)-(int64_t)14; /* EFAULT */
     copy_from_user(&ts, (const void *)(uintptr_t)arg1, sizeof(ts));
+
+    if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000)
+        return (uint64_t)-(int64_t)22; /* EINVAL */
 
     uint64_t ticks = (uint64_t)ts.tv_sec * 100ULL
                    + (uint64_t)ts.tv_nsec / 10000000ULL;
@@ -788,7 +794,8 @@ copy_path_from_user(char *kpath, uint64_t user_ptr, uint32_t bufsz)
         if (c == '\0') return 0;
     }
     kpath[bufsz - 1] = '\0';
-    return 0;
+    /* Loop completed without finding null — path was truncated */
+    return -36; /* ENAMETOOLONG */
 }
 
 /*
@@ -1100,6 +1107,18 @@ sys_chmod(uint64_t arg1, uint64_t arg2)
     if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
         return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
 
+    /* Ownership check: only file owner (or uid 0) may chmod */
+    {
+        uint32_t ino;
+        if (ext2_open(resolved, &ino) == 0) {
+            ext2_inode_t inode;
+            if (ext2_read_inode(ino, &inode) == 0) {
+                if (proc->uid != 0 && proc->uid != inode.i_uid)
+                    return (uint64_t)-(int64_t)13; /* EACCES */
+            }
+        }
+    }
+
     int r = ext2_chmod(resolved, (uint16_t)arg2);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }
@@ -1119,6 +1138,15 @@ sys_fchmod(uint64_t arg1, uint64_t arg2)
     if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
     vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    /* Ownership check via stat: only file owner (or uid 0) may fchmod */
+    if (f->ops->stat) {
+        k_stat_t ks;
+        if (f->ops->stat(f->priv, &ks) == 0) {
+            if (proc->uid != 0 && proc->uid != ks.st_uid)
+                return (uint64_t)-(int64_t)13; /* EACCES */
+        }
+    }
 
     int r = vfs_fchmod(f, (uint16_t)arg2);
     if (r < 0) return (uint64_t)-(int64_t)22; /* EINVAL — not an ext2 fd */
@@ -1145,6 +1173,18 @@ sys_chown(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
         return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
 
+    /* Ownership check: only file owner (or uid 0) may chown */
+    {
+        uint32_t ino;
+        if (ext2_open(resolved, &ino) == 0) {
+            ext2_inode_t inode;
+            if (ext2_read_inode(ino, &inode) == 0) {
+                if (proc->uid != 0 && proc->uid != inode.i_uid)
+                    return (uint64_t)-(int64_t)13; /* EACCES */
+            }
+        }
+    }
+
     int r = ext2_chown(resolved, (uint16_t)arg2, (uint16_t)arg3, 1);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;
 }
@@ -1164,6 +1204,15 @@ sys_fchown(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (arg1 >= PROC_MAX_FDS) return (uint64_t)-(int64_t)9; /* EBADF */
     vfs_file_t *f = &proc->fd_table->fds[arg1];
     if (!f->ops) return (uint64_t)-(int64_t)9; /* EBADF */
+
+    /* Ownership check via stat: only file owner (or uid 0) may fchown */
+    if (f->ops->stat) {
+        k_stat_t ks;
+        if (f->ops->stat(f->priv, &ks) == 0) {
+            if (proc->uid != 0 && proc->uid != ks.st_uid)
+                return (uint64_t)-(int64_t)13; /* EACCES */
+        }
+    }
 
     int r = vfs_fchown(f, (uint16_t)arg2, (uint16_t)arg3);
     if (r < 0) return (uint64_t)-(int64_t)22; /* EINVAL — not an ext2 fd */
@@ -1188,6 +1237,18 @@ sys_lchown(uint64_t arg1, uint64_t arg2, uint64_t arg3)
 
     if (resolve_path(path, proc->cwd, resolved, sizeof(resolved)) != 0)
         return (uint64_t)-(int64_t)36; /* ENAMETOOLONG */
+
+    /* Ownership check: only file owner (or uid 0) may lchown */
+    {
+        uint32_t ino;
+        if (ext2_open(resolved, &ino) == 0) {
+            ext2_inode_t inode;
+            if (ext2_read_inode(ino, &inode) == 0) {
+                if (proc->uid != 0 && proc->uid != inode.i_uid)
+                    return (uint64_t)-(int64_t)13; /* EACCES */
+            }
+        }
+    }
 
     int r = ext2_chown(resolved, (uint16_t)arg2, (uint16_t)arg3, 0);
     return (r < 0) ? (uint64_t)(int64_t)r : 0;

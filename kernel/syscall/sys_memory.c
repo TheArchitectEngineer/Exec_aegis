@@ -28,6 +28,11 @@ sys_brk(uint64_t arg1)
     if (arg1 >= 0x00007FFFFFFFFFFFULL)
         return proc->brk;
 
+    /* M2: reject shrink below the initial ELF brk — prevents freeing
+     * ELF segment pages via brk manipulation. */
+    if (arg1 < proc->brk_base)
+        return proc->brk;
+
     /* Page-align upward so proc->brk is always page-aligned */
     arg1 = (arg1 + 4095UL) & ~4095UL;
 
@@ -237,6 +242,10 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
             base = proc->mmap_base;
             if (base + len > USER_ADDR_MAX || base + len < base)
                 return (uint64_t)-(int64_t)12;  /* -ENOMEM */
+        } else {
+            /* H3: freelist-returned base needs the same overflow check. */
+            if (base + len > USER_ADDR_MAX || base + len < base)
+                return (uint64_t)-(int64_t)12;  /* -ENOMEM */
         }
     }
 
@@ -356,8 +365,16 @@ sys_munmap(uint64_t arg1, uint64_t arg2)
     if (arg1 & 0xFFFUL)
         return (uint64_t)-(int64_t)22;   /* EINVAL — not page-aligned */
 
-    aegis_process_t *proc = (aegis_process_t *)sched_current();
     uint64_t len = (arg2 + 4095UL) & ~4095UL;
+
+    /* C7: reject kernel addresses and overflow — prevent kernel VAs from
+     * being inserted into the mmap freelist. */
+    if (arg1 >= 0x00007FFFFFFFFFFFULL ||
+        arg1 + len > 0x00007FFFFFFFFFFFULL ||
+        arg1 + len < arg1)
+        return (uint64_t)-(int64_t)22;   /* EINVAL */
+
+    aegis_process_t *proc = (aegis_process_t *)sched_current();
 
     /* Check if this is a shared mapping — don't free physical pages
      * (they belong to the memfd, not this process). */
@@ -374,7 +391,10 @@ sys_munmap(uint64_t arg1, uint64_t arg2)
 
     uint64_t va;
     for (va = arg1; va < arg1 + len; va += 4096UL) {
-        uint64_t phys = vmm_phys_of_user(proc->pml4_phys, va);
+        /* H4: use vmm_phys_of_user_raw to find physical frames even when
+         * PRESENT is cleared (PROT_NONE pages from mprotect). Without this,
+         * munmap leaks physical frames for PROT_NONE pages. */
+        uint64_t phys = vmm_phys_of_user_raw(proc->pml4_phys, va);
         if (phys) {
             vmm_unmap_user_page(proc->pml4_phys, va);
             if (!is_shared_vma)

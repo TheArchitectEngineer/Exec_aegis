@@ -43,6 +43,10 @@ uint64_t sys_futex(uint64_t addr, uint64_t op, uint64_t val,
     if (!user_ptr_valid(addr, sizeof(uint32_t)))
         return (uint64_t)-(int64_t)14; /* EFAULT */
 
+    /* H1: futex address must be 4-byte aligned (atomic access requirement). */
+    if (addr & 0x3)
+        return (uint64_t)-(int64_t)22; /* EINVAL */
+
     if (cmd == FUTEX_WAIT) {
         uint32_t uval;
         copy_from_user(&uval, (const void *)(uintptr_t)addr,

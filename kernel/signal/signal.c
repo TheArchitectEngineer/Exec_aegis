@@ -379,6 +379,9 @@ signal_deliver_sysret(syscall_frame_t *frame, uint64_t *saved_rdi_ptr)
     sf.gregs[REG_RDI]    = (int64_t)*saved_rdi_ptr;
     sf.gregs[REG_RSI]    = (int64_t)*(saved_rdi_ptr - 1);
     sf.gregs[REG_RDX]    = (int64_t)*(saved_rdi_ptr - 2);
+    /* C6: save syscall return value (rax) so sigreturn restores it.
+     * The asm pushes rax before calling us: saved_rdi_ptr[-3] = rax. */
+    sf.gregs[REG_RAX]    = (int64_t)*(saved_rdi_ptr - 3);
     sf.gregs[REG_RIP]    = (int64_t)frame->rip;
     sf.gregs[REG_EFL]    = (int64_t)frame->rflags;
     sf.gregs[REG_RSP]    = (int64_t)frame->user_rsp;

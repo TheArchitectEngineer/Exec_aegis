@@ -38,23 +38,26 @@ sys_write(uint64_t arg1, uint64_t arg2, uint64_t arg3)
     if (!user_ptr_valid(arg2, arg3))
         return (uint64_t)-14;  /* EFAULT */
 
-    /* Retry loop: the write op (e.g. console_write_fn) may return a partial
-     * count when the user buffer straddles a page boundary.  Loop until all
-     * bytes are written or the write op signals an error (r <= 0).
+    /* Copy user buffer to kernel staging area to prevent TOCTOU — the user
+     * could modify or unmap the buffer between the user_ptr_valid check and
+     * the actual write.  Copy in 256-byte chunks (same pattern as sys_writev).
      *
      * For pipes, pipe_write_fn returns a positive partial count or a negative
      * errno (-EPIPE).  The loop handles both correctly:
      *   - partial positive: advance offset and retry the remainder.
      *   - zero or negative: break and return that value. */
+    vfs_file_t *f = &proc->fd_table->fds[arg1];
     uint64_t total = 0;
     while (total < arg3) {
-        int r = proc->fd_table->fds[arg1].ops->write(
-                    proc->fd_table->fds[arg1].priv,
-                    (const void *)(uintptr_t)(arg2 + total),
-                    arg3 - total);
+        uint8_t staging[256];
+        uint64_t chunk = arg3 - total;
+        if (chunk > 256) chunk = 256;
+        copy_from_user(staging, (const void *)(uintptr_t)(arg2 + total), chunk);
+        int r = f->ops->write(f->priv, staging, chunk);
         if (r <= 0)
             return (total > 0) ? total : (uint64_t)(int64_t)r;
         total += (uint64_t)r;
+        if ((uint64_t)r < chunk) break;  /* short write — don't retry */
     }
     return total;
 }

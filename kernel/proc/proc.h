@@ -35,6 +35,7 @@ typedef struct aegis_process {
     cap_slot_t    caps[CAP_TABLE_SIZE];   /* Phase 11 — capability table */
     cap_slot_t    exec_caps[CAP_TABLE_SIZE]; /* caps to grant post-execve; zeroed after apply */
     uint64_t      brk;                    /* current heap limit (user VA); grows up */
+    uint64_t      brk_base;               /* initial brk (ELF end); shrink floor */
     uint64_t      mmap_base;              /* next anonymous mmap VA; bump allocator */
     mmap_free_t   mmap_free[MMAP_FREE_MAX]; /* VA freelist for munmap→mmap reuse */
     uint32_t      mmap_free_count;          /* number of entries in mmap_free[]  */
