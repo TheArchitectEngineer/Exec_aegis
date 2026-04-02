@@ -307,14 +307,14 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 25-46b | (All complete — see Build Status table) | ✅ Done |
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph | Not started |
 | 48 | **Super key + extended keyboard** — PS/2 E0; Super modifier; multimedia scancodes | Not started |
-| 49 | **HDA audio** — Intel HDA controller; PCM playback/capture; /dev/audio VFS | Not started |
-| 50 | **TCP polish** — send segmentation; per-connection TX buffer; flow control. Required for SSH. | Not started |
-| 51 | **TinySSH + sftp-server** — NaCl crypto, key-only auth; CAP_KIND_NET_LISTEN | Not started |
-| 52 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
-| 53 | **virtio-blk driver** — PCI virtio block (1af4:1001); needed for cloud VMs | Not started |
-| 54 | **Deep security audit** — syscall fuzzing, capability bypass, TOCTOU, SMP atomicity | Not started |
-| 55 | **Release** | Not started |
-| — | RTL8125 2.5GbE driver — post-release, requires WiFi confirmed working | Not started |
+| 49 | **TCP polish** — send segmentation; per-connection TX buffer; flow control. Required for SSH. | Not started |
+| 50 | **TinySSH + sftp-server** — NaCl crypto, key-only auth; CAP_KIND_NET_LISTEN | Not started |
+| 51 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
+| 52 | **virtio-blk driver** — PCI virtio block (1af4:1001); needed for cloud VMs | Not started |
+| 53 | **Deep security audit** — syscall fuzzing, capability bypass, TOCTOU, SMP atomicity | Not started |
+| 54 | **Release** | Not started |
+| — | HDA audio — Intel HDA controller; PCM playback/capture; /dev/audio VFS | Post-release |
+| — | RTL8125 2.5GbE driver — post-release, requires WiFi confirmed working | Post-release |
 
 ---
 
