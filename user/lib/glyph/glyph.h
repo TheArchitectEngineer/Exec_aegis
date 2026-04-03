@@ -61,6 +61,7 @@ struct glyph_widget {
     int dirty;
     int visible;
     int focusable;
+    int hovered;    /* 1 if cursor is over this widget */
 
     /* Callbacks -- set by concrete widget types */
     void (*draw_fn)(glyph_widget_t *self, surface_t *surf, int ox, int oy);
@@ -144,6 +145,7 @@ void glyph_window_set_focus(glyph_window_t *win, glyph_widget_t *widget);
 void glyph_window_set_content(glyph_window_t *win, glyph_widget_t *root);
 void glyph_window_mark_dirty_rect(glyph_window_t *win, glyph_rect_t r);
 void glyph_window_mark_all_dirty(glyph_window_t *win);
+void glyph_window_update_hover(glyph_window_t *win, int screen_x, int screen_y);
 
 /* ---- Layout containers ---- */
 

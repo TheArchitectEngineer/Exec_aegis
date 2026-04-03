@@ -21,10 +21,6 @@ button_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
     uint32_t bg, fg;
 
     switch (btn->state) {
-    case GLYPH_BTN_HOVER:
-        bg = BTN_BG_HOVER;
-        fg = BTN_FG;
-        break;
     case GLYPH_BTN_PRESSED:
         bg = BTN_BG_PRESSED;
         fg = BTN_FG;
@@ -34,7 +30,8 @@ button_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
         fg = BTN_FG_DISABLED;
         break;
     default:
-        bg = BTN_BG_NORMAL;
+        /* Auto-hover from widget system overrides normal state */
+        bg = self->hovered ? BTN_BG_HOVER : BTN_BG_NORMAL;
         fg = BTN_FG;
         break;
     }

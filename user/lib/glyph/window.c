@@ -383,3 +383,33 @@ glyph_window_mark_all_dirty(glyph_window_t *win)
     win->dirty_rect.h = win->surf_h;
     win->has_dirty = 1;
 }
+
+void
+glyph_window_update_hover(glyph_window_t *win, int screen_x, int screen_y)
+{
+    if (!win || !win->root)
+        return;
+
+    /* Convert screen coords to client-area coords */
+    int cx = screen_x - win->x - client_ox();
+    int cy = screen_y - win->y - client_oy();
+
+    glyph_widget_t *hit = NULL;
+    if (cx >= 0 && cy >= 0 && cx < win->client_w && cy < win->client_h)
+        hit = glyph_widget_hit_test(win->root, cx, cy);
+
+    /* Walk widget tree and update hover state */
+    glyph_widget_t *stack[64];
+    int sp = 0;
+    stack[sp++] = win->root;
+    while (sp > 0) {
+        glyph_widget_t *w = stack[--sp];
+        int should_hover = (w == hit) ? 1 : 0;
+        if (w->hovered != should_hover) {
+            w->hovered = should_hover;
+            glyph_widget_mark_dirty(w);
+        }
+        for (int i = 0; i < w->nchildren && sp < 64; i++)
+            stack[sp++] = w->children[i];
+    }
+}

@@ -498,6 +498,10 @@ comp_handle_mouse(compositor_t *c, uint8_t buttons, int16_t dx, int16_t dy)
         comp_add_dirty(c, new_r);
     }
 
+    /* Update widget hover state on cursor move (skip during drag) */
+    if (!c->dragging && !c->selecting && !c->content_drag_win && c->focused)
+        glyph_window_update_hover(c->focused, c->cursor_x, c->cursor_y);
+
     /* Desktop selection in progress */
     if (c->selecting && left) {
         glyph_rect_t old_sel = {
