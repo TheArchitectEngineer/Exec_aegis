@@ -174,24 +174,32 @@ draw_selection_box(surface_t *s, compositor_t *c)
 
 /* ---- Composite ---- */
 
+/* Blit modes: 0 = full frost (blur+tint+keyed), 1 = fast frost (tint+keyed,
+ * no blur — used during drag for non-dragged windows), 2 = opaque (dragged window) */
+#define BLIT_FROST      0
+#define BLIT_FAST_FROST  1
+#define BLIT_OPAQUE      2
+
 static void
-blit_window_to_back(surface_t *back, glyph_window_t *win, int force_opaque)
+blit_window_to_back(surface_t *back, glyph_window_t *win, int mode)
 {
-    if (win->frosted && win->chromeless && !force_opaque) {
-        /* Chromeless frosted window (dropdown terminal): blur+tint+keyed blit */
-        draw_box_blur(back, win->x, win->y, win->surf_w, win->surf_h, 10);
+    if (win->frosted && win->chromeless && mode != BLIT_OPAQUE) {
+        /* Chromeless frosted window (dropdown terminal) */
+        if (mode == BLIT_FROST)
+            draw_box_blur(back, win->x, win->y, win->surf_w, win->surf_h, 10);
         draw_blend_rect(back, win->x, win->y, win->surf_w, win->surf_h,
                         C_TERM_BG, 128);
         draw_blit_keyed(back, win->x, win->y, win->surface.buf,
                         win->surf_w, win->surf_h, C_TERM_BG);
-    } else if (win->frosted && !force_opaque) {
+    } else if (win->frosted && mode != BLIT_OPAQUE) {
         int bd = GLYPH_BORDER_WIDTH;
         int tb = GLYPH_TITLEBAR_HEIGHT;
         int total_w = win->client_w + 2 * bd;
         int total_h = win->client_h + tb + 2 * bd;
 
-        /* 1. Blur the entire window footprint */
-        draw_box_blur(back, win->x, win->y, total_w, total_h, 10);
+        /* 1. Blur the entire window footprint (skip during fast frost) */
+        if (mode == BLIT_FROST)
+            draw_box_blur(back, win->x, win->y, total_w, total_h, 10);
 
         /* 2. Dark tint on titlebar region */
         draw_blend_rect(back, win->x, win->y, total_w, tb + bd,
@@ -421,8 +429,12 @@ comp_composite(compositor_t *c)
         if (!dominated)
             continue;
         glyph_window_render(win);
-        int opaque = c->dragging;  /* all windows opaque during drag */
-        blit_window_to_back(&c->back, win, opaque);
+        int mode = BLIT_FROST;
+        if (c->dragging) {
+            /* Dragged window: opaque. Others: fast frost (no blur). */
+            mode = (win == c->drag_win) ? BLIT_OPAQUE : BLIT_FAST_FROST;
+        }
+        blit_window_to_back(&c->back, win, mode);
     }
 
     /* Overlay (frosted glass dock etc.) — once, after windows */
