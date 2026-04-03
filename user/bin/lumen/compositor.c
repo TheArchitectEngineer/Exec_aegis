@@ -238,22 +238,24 @@ blit_window_to_back(surface_t *back, glyph_window_t *win, int force_opaque)
         draw_circle_filled(back, btn_x + 22, btn_cy, 7, 0x00FEBC2E);
         draw_circle_filled(back, btn_x + 44, btn_cy, 7, 0x0028C840);
 
-        /* 7. Blit client area content from window surface (opaque overlay) */
+        /* 7. Blit client area content with color keying (transparent pixels) */
         {
-            int cx = bd;                    /* client x in window surface */
-            int cy = bd + tb;               /* client y in window surface */
-            int dx = win->x + cx;           /* dest x on backbuffer */
-            int dy = win->y + cy;           /* dest y on backbuffer */
-            for (int row = 0; row < win->client_h; row++) {
-                if (dy + row < 0 || dy + row >= back->h) continue;
-                for (int col = 0; col < win->client_w; col++) {
-                    if (dx + col < 0 || dx + col >= back->w) continue;
-                    uint32_t px = win->surface.buf[(cy + row) * win->surface.pitch + (cx + col)];
-                    /* Skip key-colored pixels (transparent).
-                     * Terminal windows use C_TERM_BG, widget windows use C_SHADOW. */
-                    uint32_t key = win->priv ? C_TERM_BG : C_SHADOW;
-                    if (px != key)
-                        back->buf[(dy + row) * back->pitch + (dx + col)] = px;
+            int cx = bd, cy = bd + tb;
+            int dx = win->x + cx, dy = win->y + cy;
+            int cw = win->client_w, ch2 = win->client_h;
+            /* Clamp to backbuffer bounds once */
+            int sx0 = 0, sy0 = 0;
+            if (dx < 0) { sx0 = -dx; cw += dx; dx = 0; }
+            if (dy < 0) { sy0 = -dy; ch2 += dy; dy = 0; }
+            if (dx + cw > back->w) cw = back->w - dx;
+            if (dy + ch2 > back->h) ch2 = back->h - dy;
+            uint32_t key = win->priv ? C_TERM_BG : C_SHADOW;
+            for (int row = 0; row < ch2; row++) {
+                uint32_t *src_row = &win->surface.buf[(cy + sy0 + row) * win->surface.pitch + cx + sx0];
+                uint32_t *dst_row = &back->buf[(dy + row) * back->pitch + dx];
+                for (int col = 0; col < cw; col++) {
+                    if (src_row[col] != key)
+                        dst_row[col] = src_row[col];
                 }
             }
         }
@@ -419,7 +421,7 @@ comp_composite(compositor_t *c)
         if (!dominated)
             continue;
         glyph_window_render(win);
-        int opaque = (c->dragging && win == c->drag_win);
+        int opaque = c->dragging;  /* all windows opaque during drag */
         blit_window_to_back(&c->back, win, opaque);
     }
 
