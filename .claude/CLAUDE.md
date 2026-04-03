@@ -19,15 +19,15 @@ However, this is a guideline, not a hard block. The catastrophic debugging sessi
 git clean -fdx --exclude=references --exclude=.worktrees
 rm -f user/vigil/vigil user/vigictl/vigictl user/login/login.elf
 make clean
-make INIT=vigil iso
+make iso
 ```
 
 **Why every step matters:**
 1. `git clean -fdx` — removes ALL untracked files. `make clean` only removes `build/`.
 2. `rm -f user/vigil/vigil ...` — these are GIT-TRACKED binaries. `git clean` doesn't touch them.
-3. `make INIT=vigil iso` — the default `INIT` is `oksh`, NOT `vigil`. Plain `make iso` embeds the WRONG init binary.
+3. `make iso` — init is always vigil (hardcoded in Makefile).
 
-**NEVER trust `make clean` alone. NEVER omit `INIT=vigil`. ALWAYS nuke user binaries.**
+**NEVER trust `make clean` alone. ALWAYS nuke user binaries.**
 **NEVER use incremental builds for ISO creation.**
 
 ---

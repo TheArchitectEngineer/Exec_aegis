@@ -43,27 +43,7 @@ DISK    = $(BUILD)/disk.img
 ROOTFS  = $(BUILD)/rootfs.img
 SGDISK  = /usr/sbin/sgdisk
 
-# ── INIT variable ─────────────────��──────────────────────────────��──────────
-# INIT=vigil (default): embeds user/bin/vigil/vigil as init process
-# INIT=shell          : embeds user/bin/shell/shell.elf as init process
-# INIT=login          : embeds user/bin/login/login.elf as init process
-INIT ?= vigil
-
-ifeq ($(INIT),shell)
-INIT_ELF_SRC = user/bin/shell/shell.elf
-else ifeq ($(INIT),login)
-INIT_ELF_SRC = user/bin/login/login.elf
-else ifeq ($(INIT),vigil)
-INIT_ELF_SRC = user/bin/vigil/vigil
-else
-INIT_ELF_SRC = user/bin/shell/shell.elf
-endif
-
-INIT_STAMP = $(BUILD)/.init_stamp_$(INIT)
-$(INIT_STAMP):
-	@mkdir -p $(BUILD)
-	@rm -f $(BUILD)/.init_stamp_*
-	@touch $@
+# Init process is always vigil.
 
 # ── Kernel source lists ─────────────────────────────────��───────────────────
 ARCH_SRCS = \
@@ -260,35 +240,27 @@ $(BUILD)/blobs/%.o: $(BUILD)/blobs/%.bin
 	  --rename-section .data=.rodata,alloc,load,readonly,data,contents \
 	  $*.bin $*.o
 
-# Source mappings for each blob
-$(BUILD)/blobs/login.bin: user/bin/login/login.elf
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $@
+# Blob source mapping: name → ELF path.
+# Add new blobs here — one line each. The macro generates the copy rule.
+BLOB_MAP_login = user/bin/login/login.elf
+BLOB_MAP_vigil = user/bin/vigil/vigil
+BLOB_MAP_shell = user/bin/shell/shell.elf
+BLOB_MAP_init  = user/bin/vigil/vigil
 
-$(BUILD)/blobs/vigil.bin: user/bin/vigil/vigil
+define BLOB_COPY_RULE
+$(BUILD)/blobs/$(1).bin: $$(BLOB_MAP_$(1))
 	@mkdir -p $(BUILD)/blobs
-	@cp $< $@
+	@cp $$< $$@
+endef
+$(foreach b,login vigil shell init,$(eval $(call BLOB_COPY_RULE,$(b))))
 
-$(BUILD)/blobs/shell.bin: user/bin/shell/shell.elf
+# Static initrd copies of echo/cat/ls (built from source, no dynamic linker)
+define BLOB_STATIC_RULE
+$(BUILD)/blobs/$(1).bin: user/bin/$(1)/main.c
 	@mkdir -p $(BUILD)/blobs
-	@cp $< $@
-
-$(BUILD)/blobs/init.bin: $(INIT_ELF_SRC) $(INIT_STAMP)
-	@mkdir -p $(BUILD)/blobs
-	@cp $< $@
-
-# Static initrd copies of echo/cat/ls (for INIT=shell tests only)
-$(BUILD)/blobs/echo.bin: user/bin/echo/main.c
-	@mkdir -p $(BUILD)/blobs
-	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $@ $<
-
-$(BUILD)/blobs/cat.bin: user/bin/cat/main.c
-	@mkdir -p $(BUILD)/blobs
-	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $@ $<
-
-$(BUILD)/blobs/ls.bin: user/bin/ls/main.c
-	@mkdir -p $(BUILD)/blobs
-	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $@ $<
+	musl-gcc -static -O2 -s -fno-pie -no-pie -Wl,--build-id=none -o $$@ $$<
+endef
+$(foreach b,echo cat ls,$(eval $(call BLOB_STATIC_RULE,$(b))))
 
 # ── Final link ──────���─────────────────────────────────────��──────────────────
 $(BUILD)/aegis.elf: $(ALL_OBJS) $(CAP_LIB)
@@ -400,10 +372,10 @@ run-fb: iso
 	    -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 shell:
-	$(MAKE) INIT=shell run
+	$(MAKE) run
 
 login:
-	$(MAKE) INIT=login run
+	$(MAKE) run
 
 # ── Debug targets ────────────────────────────────────────────────────────────
 gdb: iso
