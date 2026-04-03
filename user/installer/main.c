@@ -407,46 +407,92 @@ generate_salt(char *buf, int bufsize)
     buf[pos] = '\0';
 }
 
+/* read_line — read a line with echo and backspace handling.
+ * Returns length of string (0 if empty/Enter only). */
+static int
+read_line(const char *prompt, char *buf, int bufsize)
+{
+    int i = 0;
+    char c;
+    printf("%s", prompt);
+    fflush(stdout);
+    while (i < bufsize - 1 && read(0, &c, 1) == 1) {
+        if (c == '\n' || c == '\r') break;
+        if (c == '\b' || c == 127) {
+            if (i > 0) { i--; write(1, "\b \b", 3); }
+            continue;
+        }
+        buf[i++] = c;
+        write(1, &c, 1);
+    }
+    buf[i] = '\0';
+    printf("\n");
+    return i;
+}
+
+static int
+hash_password(const char *password, char *out, int outsz)
+{
+    char salt[32];
+    generate_salt(salt, sizeof(salt));
+    char *hashed = crypt(password, salt);
+    if (!hashed) return -1;
+    snprintf(out, (size_t)outsz, "%s", hashed);
+    return 0;
+}
+
 static int setup_user(void)
 {
-    char username[64] = "root";
-    char password[64] = "";
-    char confirm[64] = "";
+    char root_pass[64] = "";
+    char root_confirm[64] = "";
+    char username[64] = "";
+    char user_pass[64] = "";
+    char user_confirm[64] = "";
+    char root_hash[256] = "";
+    char user_hash[256] = "";
 
-    printf("\n--- User Account Setup ---\n");
-    printf("Username [root]: ");
-    fflush(stdout);
-    {
-        char ubuf[64];
-        int ui = 0;
-        char c;
-        while (ui < (int)sizeof(ubuf) - 1 && read(0, &c, 1) == 1) {
-            if (c == '\n' || c == '\r') break;
-            if (c == '\b' || c == 127) {
-                if (ui > 0) { ui--; write(1, "\b \b", 3); }
-                continue;
-            }
-            ubuf[ui++] = c;
-            write(1, &c, 1);
-        }
-        ubuf[ui] = '\0';
-        printf("\n");
-        if (ui > 0) strcpy(username, ubuf);
-    }
+    /* Step 1: root password (mandatory) */
+    printf("\n--- Root Password ---\n");
 
-    if (read_password("Password: ", password, sizeof(password)) == 0) {
-        printf("ERROR: password cannot be empty\n");
+    if (read_password("Root password: ", root_pass, sizeof(root_pass)) == 0) {
+        printf("ERROR: root password cannot be empty\n");
         return -1;
     }
-
-    if (read_password("Confirm password: ", confirm, sizeof(confirm)) == 0) {
-        printf("ERROR: password confirmation failed\n");
+    if (read_password("Confirm root password: ", root_confirm, sizeof(root_confirm)) == 0) {
+        printf("ERROR: confirmation failed\n");
         return -1;
     }
-
-    if (strcmp(password, confirm) != 0) {
+    if (strcmp(root_pass, root_confirm) != 0) {
         printf("ERROR: passwords do not match\n");
         return -1;
+    }
+    if (hash_password(root_pass, root_hash, sizeof(root_hash)) < 0) {
+        printf("ERROR: crypt() failed\n");
+        return -1;
+    }
+    printf("Root password set.\n");
+
+    /* Step 2: optional user account */
+    printf("\n--- User Account (optional, press Enter to skip) ---\n");
+    int ulen = read_line("Username: ", username, sizeof(username));
+
+    if (ulen > 0) {
+        if (read_password("Password: ", user_pass, sizeof(user_pass)) == 0) {
+            printf("ERROR: user password cannot be empty\n");
+            return -1;
+        }
+        if (read_password("Confirm password: ", user_confirm, sizeof(user_confirm)) == 0) {
+            printf("ERROR: confirmation failed\n");
+            return -1;
+        }
+        if (strcmp(user_pass, user_confirm) != 0) {
+            printf("ERROR: passwords do not match\n");
+            return -1;
+        }
+        if (hash_password(user_pass, user_hash, sizeof(user_hash)) < 0) {
+            printf("ERROR: crypt() failed\n");
+            return -1;
+        }
     }
 
     /* Write /etc/passwd */
@@ -454,33 +500,56 @@ static int setup_user(void)
         int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/passwd\n"); return -1; }
         char line[256];
-        int n = snprintf(line, sizeof(line), "%s:x:0:0:%s:/root:/bin/stsh\n",
-                         username, username);
+        int n = snprintf(line, sizeof(line),
+                         "root:x:0:0:root:/root:/bin/stsh\n");
         write(fd, line, (size_t)n);
+        if (ulen > 0) {
+            n = snprintf(line, sizeof(line),
+                         "%s:x:1000:1000:%s:/home/%s:/bin/stsh\n",
+                         username, username, username);
+            write(fd, line, (size_t)n);
+        }
         close(fd);
     }
 
-    /* Write /etc/shadow with real SHA-512 hash */
+    /* Write /etc/shadow */
     {
-        char salt[32];
-        generate_salt(salt, sizeof(salt));
-
-        char *hashed = crypt(password, salt);
-        if (!hashed) {
-            printf("ERROR: crypt() failed\n");
-            return -1;
-        }
-
         int fd = open("/etc/shadow", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/shadow\n"); return -1; }
         char line[512];
         int n = snprintf(line, sizeof(line),
-                         "%s:%s:19814:0:99999:7:::\n", username, hashed);
+                         "root:%s:19814:0:99999:7:::\n", root_hash);
+        write(fd, line, (size_t)n);
+        if (ulen > 0) {
+            n = snprintf(line, sizeof(line),
+                         "%s:%s:19814:0:99999:7:::\n", username, user_hash);
+            write(fd, line, (size_t)n);
+        }
+        close(fd);
+    }
+
+    /* Write /etc/group */
+    {
+        int fd = open("/etc/group", O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd < 0) { printf("ERROR: cannot write /etc/group\n"); return -1; }
+        char line[256];
+        int n = snprintf(line, sizeof(line),
+                         "root:x:0:root\nwheel:x:999:root");
+        if (ulen > 0) {
+            n = snprintf(line, sizeof(line),
+                         "root:x:0:root\nwheel:x:999:root,%s\n%s:x:1000:%s\n",
+                         username, username, username);
+        } else {
+            n = snprintf(line, sizeof(line),
+                         "root:x:0:root\nwheel:x:999:root\n");
+        }
         write(fd, line, (size_t)n);
         close(fd);
     }
 
-    printf("User '%s' configured.\n", username);
+    printf("Root configured.\n");
+    if (ulen > 0)
+        printf("User '%s' configured (uid=1000).\n", username);
     return 0;
 }
 
