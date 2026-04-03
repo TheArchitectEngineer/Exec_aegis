@@ -63,7 +63,13 @@ typedef struct {
     /* Padding offsets (for dropdown vs normal) */
     int pad_x, pad_y;
     int is_dropdown;
+    /* Scrollbar drag state */
+    int sb_dragging;
 } term_priv_t;
+
+#define SB_WIDTH  8   /* scrollbar width in pixels */
+#define SB_THUMB_COLOR  0x00606878
+#define SB_THUMB_HI     0x00808898
 
 /* Access a cell in the ring buffer.
  * vis_row is 0..rows-1 (top of visible area = 0).
@@ -203,6 +209,27 @@ static void render_term_grid(glyph_window_t *win)
     if (tp->master_fd >= 0 && tp->scroll_offset == 0)
         draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
                        cw, ch, C_TERM_FG);
+
+    /* Scrollbar — only visible when scrolled back or has scrollback content */
+    if (tp->scroll_offset > 0 || tp->sb_dragging) {
+        int track_h = tp->rows * ch;
+        int track_x = ox + tp->cols * cw;  /* right edge of text area */
+        int track_y = oy;
+
+        /* Subtle track background */
+        draw_blend_rect(s, track_x, track_y, SB_WIDTH, track_h, 0x00000000, 30);
+
+        /* Thumb: size proportional to visible/total, position from scroll_offset */
+        int total = SCROLLBACK_LINES + tp->rows;
+        int thumb_h = tp->rows * track_h / total;
+        if (thumb_h < 16) thumb_h = 16;
+        /* scroll_offset=0 → thumb at bottom; scroll_offset=max → thumb at top */
+        int usable = track_h - thumb_h;
+        int thumb_y = track_y + usable - (usable * tp->scroll_offset / SCROLLBACK_LINES);
+
+        uint32_t tc = tp->sb_dragging ? SB_THUMB_HI : SB_THUMB_COLOR;
+        draw_fill_rect(s, track_x + 1, thumb_y, SB_WIDTH - 2, thumb_h, tc);
+    }
 }
 
 static void term_render_content(glyph_window_t *win)
@@ -419,7 +446,38 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
     glyph_window_mark_all_dirty(win);
 }
 
-/* ---- Mouse callbacks for text selection ---- */
+/* ---- Scrollbar helpers ---- */
+
+/* Convert a Y position (in window-local coords) to scroll_offset */
+static void
+sb_set_from_y(term_priv_t *tp, int y)
+{
+    int track_h = tp->rows * tp->cell_h;
+    int total = SCROLLBACK_LINES + tp->rows;
+    int thumb_h = tp->rows * track_h / total;
+    if (thumb_h < 16) thumb_h = 16;
+    int usable = track_h - thumb_h;
+    if (usable <= 0) return;
+
+    int rel_y = y - tp->pad_y;
+    if (rel_y < 0) rel_y = 0;
+    if (rel_y > track_h) rel_y = track_h;
+
+    /* Invert: top of track = max scroll, bottom = 0 */
+    int offset = SCROLLBACK_LINES * (usable - rel_y) / usable;
+    if (offset < 0) offset = 0;
+    if (offset > SCROLLBACK_LINES) offset = SCROLLBACK_LINES;
+    tp->scroll_offset = offset;
+}
+
+static int
+sb_hit(term_priv_t *tp, int x)
+{
+    int sb_x = tp->pad_x + tp->cols * tp->cell_w;
+    return x >= sb_x && x < sb_x + SB_WIDTH;
+}
+
+/* ---- Mouse callbacks for text selection + scrollbar ---- */
 
 static void
 term_mouse_down(glyph_window_t *win, int x, int y)
@@ -427,6 +485,14 @@ term_mouse_down(glyph_window_t *win, int x, int y)
     term_priv_t *tp = win->priv;
     int ox, oy;
     get_padding(tp, &ox, &oy);
+
+    /* Scrollbar click */
+    if (sb_hit(tp, x)) {
+        tp->sb_dragging = 1;
+        sb_set_from_y(tp, y);
+        glyph_window_mark_all_dirty(win);
+        return;
+    }
 
     int col = (x - ox) / tp->cell_w;
     int row = (y - oy) / tp->cell_h;
@@ -451,6 +517,14 @@ static void
 term_mouse_move(glyph_window_t *win, int x, int y)
 {
     term_priv_t *tp = win->priv;
+
+    /* Scrollbar drag */
+    if (tp->sb_dragging) {
+        sb_set_from_y(tp, y);
+        glyph_window_mark_all_dirty(win);
+        return;
+    }
+
     if (!tp->sel_active || tp->sel_done)
         return;
 
@@ -476,6 +550,14 @@ static void
 term_mouse_up(glyph_window_t *win, int x, int y)
 {
     term_priv_t *tp = win->priv;
+
+    /* End scrollbar drag */
+    if (tp->sb_dragging) {
+        tp->sb_dragging = 0;
+        glyph_window_mark_all_dirty(win);
+        return;
+    }
+
     if (!tp->sel_active)
         return;
 
