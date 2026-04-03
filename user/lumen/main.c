@@ -530,6 +530,14 @@ main(void)
             }
 
             activity = 1;
+            /* Yield after keyboard input so the shell gets a chance to
+             * process input and produce output before we poll PTY masters.
+             * Without this, the PTY read returns nothing and the response
+             * appears one frame late (user has to press Enter twice). */
+            {
+                struct timespec yield_ts = { 0, 1000000 }; /* 1ms */
+                nanosleep(&yield_ts, NULL);
+            }
         }
 next_poll:
 
