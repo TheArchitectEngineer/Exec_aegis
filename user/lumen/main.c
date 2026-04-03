@@ -530,14 +530,6 @@ main(void)
             }
 
             activity = 1;
-            /* Yield after keyboard input so the shell gets a chance to
-             * process input and produce output before we poll PTY masters.
-             * Without this, the PTY read returns nothing and the response
-             * appears one frame late (user has to press Enter twice). */
-            {
-                struct timespec yield_ts = { 0, 1000000 }; /* 1ms */
-                nanosleep(&yield_ts, NULL);
-            }
         }
 next_poll:
 
@@ -722,6 +714,27 @@ after_mouse:
                 if (menu_open)
                     menu_draw(&comp.fb);
                 cursor_show(comp.cursor_x, comp.cursor_y);
+            }
+        }
+
+        /* Second PTY read pass — after compositing, the shell has had
+         * time to run (sched_tick during composite's FB writes).  This
+         * catches output that wasn't ready during the first pass. */
+        if (activity) {
+            for (int wi = 0; wi < comp.nwindows; wi++) {
+                glyph_window_t *win = comp.windows[wi];
+                if (win->tag <= 0) continue;
+                int mfd = win->tag;
+                int late = 0;
+                while ((n = read(mfd, pty_buf, sizeof(pty_buf))) > 0) {
+                    terminal_write(win, pty_buf, (int)n);
+                    late = 1;
+                }
+                if (late) {
+                    cursor_hide();
+                    comp_composite(&comp);
+                    cursor_show(comp.cursor_x, comp.cursor_y);
+                }
             }
         }
 
