@@ -86,7 +86,22 @@ load_logo(void)
         got += (size_t)n;
     }
     close(fd);
-    if (got < sz) { free(s_logo_pixels); s_logo_pixels = NULL; s_logo_w = s_logo_h = 0; }
+    if (got < sz) { free(s_logo_pixels); s_logo_pixels = NULL; s_logo_w = s_logo_h = 0; return; }
+
+    /* Pre-composite alpha onto the background color so we can blit opaquely */
+    uint32_t bg = 0x00202030;
+    int npx = s_logo_w * s_logo_h;
+    for (int i = 0; i < npx; i++) {
+        uint32_t px = s_logo_pixels[i];
+        uint32_t a = (px >> 24) & 0xFF;
+        if (a == 0xFF) continue;  /* fully opaque — keep as-is */
+        if (a == 0) { s_logo_pixels[i] = bg; continue; }
+        uint32_t inv = 255 - a;
+        uint32_t r = (((px >> 16) & 0xFF) * a + ((bg >> 16) & 0xFF) * inv) / 255;
+        uint32_t g = (((px >> 8) & 0xFF) * a + ((bg >> 8) & 0xFF) * inv) / 255;
+        uint32_t b = ((px & 0xFF) * a + (bg & 0xFF) * inv) / 255;
+        s_logo_pixels[i] = (r << 16) | (g << 8) | b;
+    }
 }
 
 /* ---- Drawing helpers ------------------------------------------------- */
