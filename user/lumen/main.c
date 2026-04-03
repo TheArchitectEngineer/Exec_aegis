@@ -600,7 +600,9 @@ next_poll:
                             } else if (item == MENU_ITEM_REBOOT) {
                                 syscall(SYS_REBOOT, 1L);  /* reboot */
                             } else if (item == MENU_ITEM_POWEROFF) {
-                                syscall(SYS_REBOOT, 0L);  /* ACPI S5 power off */
+                                /* Signal init (PID 1) for graceful shutdown.
+                                 * Same path as physical ACPI power button. */
+                                kill(1, SIGTERM);
                             }
                             /* Settings is a stub for now */
                         } else {
