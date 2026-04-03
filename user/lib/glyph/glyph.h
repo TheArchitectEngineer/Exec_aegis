@@ -114,11 +114,6 @@ struct glyph_window {
     glyph_rect_t dirty_rect;
     int has_dirty;
 
-    /* Chrome cache — avoids re-rendering rounded rect per frame.
-     * Invalidated automatically when focused_window changes. */
-    uint32_t *chrome_cache;
-    int chrome_valid;
-    int chrome_focused;        /* focus state the cache was built for */
 
     /* Flags */
     int visible;
