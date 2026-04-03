@@ -103,39 +103,71 @@ menu_total_height(void)
 }
 
 static void
-menu_draw(surface_t *fb)
+menu_draw(surface_t *s)
 {
     if (!menu_open)
         return;
 
     int mh = menu_total_height();
 
-    /* Background with rounded corners */
-    draw_rounded_rect(fb, MENU_X, MENU_Y, MENU_W, mh, 8, MENU_BG);
+    /* Frosted glass background: blur + tint + rounded corner mask */
+    draw_box_blur(s, MENU_X, MENU_Y, MENU_W, mh, 10);
+    draw_blend_rect(s, MENU_X, MENU_Y, MENU_W, mh, MENU_BG, 180);
+
+    /* Mask corners by painting desktop bg over outside-rounded pixels.
+     * Only check the corner regions (r=8). */
+    {
+        int r = 8, mx = MENU_X, my = MENU_Y, mw = MENU_W;
+        for (int py = 0; py < r; py++) {
+            for (int px = 0; px < r; px++) {
+                int dx = r - px, dy = r - py;
+                if (dx * dx + dy * dy > r * r) {
+                    /* Top-left */
+                    draw_px(s, mx + px, my + py, C_BG1);
+                    /* Top-right */
+                    draw_px(s, mx + mw - 1 - px, my + py, C_BG1);
+                    /* Bottom-left */
+                    draw_px(s, mx + px, my + mh - 1 - py, C_BG1);
+                    /* Bottom-right */
+                    draw_px(s, mx + mw - 1 - px, my + mh - 1 - py, C_BG1);
+                }
+            }
+        }
+    }
+
+    /* Subtle border */
+    draw_blend_rect(s, MENU_X, MENU_Y, MENU_W, 1, 0x00FFFFFF, 20);
+    draw_blend_rect(s, MENU_X, MENU_Y + mh - 1, MENU_W, 1, 0x00000000, 30);
+    draw_blend_rect(s, MENU_X, MENU_Y, 1, mh, 0x00FFFFFF, 15);
+    draw_blend_rect(s, MENU_X + MENU_W - 1, MENU_Y, 1, mh, 0x00000000, 20);
 
     /* Draw items */
     int y = MENU_Y + 8;
     for (int i = 0; i < MENU_ITEMS; i++) {
         if (menu_labels[i][0] == '-') {
-            /* Separator line */
-            draw_fill_rect(fb, MENU_X + 12, y + MENU_SEP_H / 2 - 1,
-                           MENU_W - 24, 1, MENU_SEP_COL);
+            draw_blend_rect(s, MENU_X + 12, y + MENU_SEP_H / 2 - 1,
+                            MENU_W - 24, 1, MENU_SEP_COL, 120);
             y += MENU_SEP_H;
         } else {
-            /* Hover highlight */
             if (i == menu_hover)
-                draw_fill_rect(fb, MENU_X + 4, y, MENU_W - 8, MENU_ITEM_H,
-                               MENU_HOVER_BG);
+                draw_blend_rect(s, MENU_X + 4, y, MENU_W - 8, MENU_ITEM_H,
+                                MENU_HOVER_BG, 100);
 
             if (g_font_ui)
-                font_draw_text(fb, g_font_ui, 14, MENU_X + 16, y + 6,
+                font_draw_text(s, g_font_ui, 14, MENU_X + 16, y + 6,
                                menu_labels[i], MENU_TEXT);
             else
-                draw_text(fb, MENU_X + 16, y + 4, menu_labels[i],
+                draw_text(s, MENU_X + 16, y + 4, menu_labels[i],
                           MENU_TEXT, (i == menu_hover) ? MENU_HOVER_BG : MENU_BG);
             y += MENU_ITEM_H;
         }
     }
+}
+
+static glyph_rect_t
+menu_rect(void)
+{
+    return (glyph_rect_t){MENU_X, MENU_Y, MENU_W, menu_total_height()};
 }
 
 /* Returns which menu item index the point is over, or -1 */
@@ -264,6 +296,7 @@ static void
 overlay_draw_cb(surface_t *s, int w, int h)
 {
     dock_draw(s, w, h);
+    menu_draw(s);
 }
 
 int
@@ -575,7 +608,7 @@ next_poll:
                     int old_hover = menu_hover;
                     menu_hover = menu_hit_test(test_x, test_y);
                     if (menu_hover != old_hover)
-                        comp.full_redraw = 1;
+                        comp_add_dirty(&comp, menu_rect());
                 }
 
                 /* Handle button press */
@@ -584,9 +617,9 @@ next_poll:
                     if (menu_open) {
                         int item = menu_hit_test(test_x, test_y);
                         if (item >= 0 && menu_labels[item][0] != '-') {
+                            comp_add_dirty(&comp, menu_rect());
                             menu_open = 0;
                             menu_hover = -1;
-                            comp.full_redraw = 1;
                             if (item == MENU_ITEM_ABOUT) {
                                 glyph_window_t *aw = about_create(fb_w, fb_h);
                                 if (aw) {
@@ -609,9 +642,9 @@ next_poll:
                             /* Settings is a stub for now */
                         } else {
                             /* Click outside menu or on separator — close */
+                            comp_add_dirty(&comp, menu_rect());
                             menu_open = 0;
                             menu_hover = -1;
-                            comp.full_redraw = 1;
                         }
                         comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                         activity = 1;
@@ -620,9 +653,9 @@ next_poll:
 
                     /* Top bar "Aegis" click */
                     if (topbar_hit_aegis(test_x, test_y, fb_w)) {
+                        comp_add_dirty(&comp, menu_rect());
                         menu_open = !menu_open;
                         menu_hover = -1;
-                        comp.full_redraw = 1;
                         comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                         activity = 1;
                         goto after_mouse;
@@ -713,9 +746,6 @@ after_mouse:
             } else {
                 cursor_hide();
                 comp_composite(&comp);
-                /* Draw context menu overlay AFTER composite, on the framebuffer */
-                if (menu_open)
-                    menu_draw(&comp.fb);
                 cursor_show(comp.cursor_x, comp.cursor_y);
             }
         }
