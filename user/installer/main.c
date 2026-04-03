@@ -307,19 +307,41 @@ static int write_grub_cfg(void)
         printf("ERROR: cannot create /boot/grub/grub.cfg\n");
         return -1;
     }
+    /* Installed system grub.cfg — matches live ISO layout but boots
+     * from the ext2 root partition.  rootfs.img/esp.img modules are
+     * only needed on the live ISO (ramdisk), not the installed system
+     * where ext2 is mounted directly from the NVMe partition. */
     const char *cfg =
         "set timeout=3\n"
         "set default=0\n"
+        "\n"
         "insmod all_video\n"
         "insmod gfxterm\n"
-        "set gfxmode=auto\n"
+        "insmod png\n"
+        "\n"
+        "set gfxmode=1024x768x32,800x600x32,auto\n"
         "terminal_input console\n"
         "terminal_output gfxterm\n"
         "\n"
-        "menuentry \"Aegis\" {\n"
+        "if background_image /boot/grub/wallpaper.png; then\n"
+        "    true\n"
+        "fi\n"
+        "\n"
+        "menuentry \"Aegis (graphical)\" {\n"
         "    set gfxpayload=keep\n"
-        "    set root=(hd0,gpt2)\n"
-        "    multiboot2 /boot/aegis.elf\n"
+        "    multiboot2 /boot/aegis.elf boot=graphical quiet\n"
+        "    boot\n"
+        "}\n"
+        "\n"
+        "menuentry \"Aegis (text)\" {\n"
+        "    set gfxpayload=keep\n"
+        "    multiboot2 /boot/aegis.elf boot=text quiet\n"
+        "    boot\n"
+        "}\n"
+        "\n"
+        "menuentry \"Aegis (debug)\" {\n"
+        "    set gfxpayload=keep\n"
+        "    multiboot2 /boot/aegis.elf boot=text\n"
         "    boot\n"
         "}\n";
     write(fd, cfg, strlen(cfg));
