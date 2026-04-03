@@ -416,10 +416,22 @@ static int setup_user(void)
     printf("\n--- User Account Setup ---\n");
     printf("Username [root]: ");
     fflush(stdout);
-    if (fgets(username, sizeof(username), stdin) != NULL) {
-        int len = (int)strlen(username);
-        if (len > 0 && username[len-1] == '\n') username[len-1] = '\0';
-        if (username[0] == '\0') strcpy(username, "root");
+    {
+        char ubuf[64];
+        int ui = 0;
+        char c;
+        while (ui < (int)sizeof(ubuf) - 1 && read(0, &c, 1) == 1) {
+            if (c == '\n' || c == '\r') break;
+            if (c == '\b' || c == 127) {
+                if (ui > 0) { ui--; write(1, "\b \b", 3); }
+                continue;
+            }
+            ubuf[ui++] = c;
+            write(1, &c, 1);
+        }
+        ubuf[ui] = '\0';
+        printf("\n");
+        if (ui > 0) strcpy(username, ubuf);
     }
 
     if (read_password("Password: ", password, sizeof(password)) == 0) {
@@ -442,7 +454,7 @@ static int setup_user(void)
         int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0) { printf("ERROR: cannot write /etc/passwd\n"); return -1; }
         char line[256];
-        int n = snprintf(line, sizeof(line), "%s:x:0:0:%s:/root:/bin/oksh\n",
+        int n = snprintf(line, sizeof(line), "%s:x:0:0:%s:/root:/bin/stsh\n",
                          username, username);
         write(fd, line, (size_t)n);
         close(fd);
@@ -506,8 +518,10 @@ int main(void)
 
     printf("\nInstall to %s? [y/N] ", devs[target].name);
     fflush(stdout);
-    char ans[8];
-    if (fgets(ans, sizeof(ans), stdin) == NULL || (ans[0] != 'y' && ans[0] != 'Y')) {
+    char ans = 0;
+    read(0, &ans, 1);
+    printf("\n");
+    if (ans != 'y' && ans != 'Y') {
         printf("Aborted.\n");
         return 0;
     }
