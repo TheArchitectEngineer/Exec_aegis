@@ -86,9 +86,40 @@ kbd_handler(void)
     uint8_t sc = inb(KBD_DATA);
     random_add_interrupt_entropy();  /* keyboard timing is excellent entropy */
 
-    /* Extended key prefix — skip this byte (next byte is the actual key) */
-    if (sc == 0xE0)
+    /* Extended key prefix — set flag, handle next byte */
+    static int s_e0_prefix;
+    if (sc == 0xE0) {
+        s_e0_prefix = 1;
         return;
+    }
+
+    /* E0-prefixed keys: arrow keys → ESC [ A/B/C/D sequences */
+    if (s_e0_prefix) {
+        s_e0_prefix = 0;
+        if (sc & 0x80) {
+            /* E0 break code — track modifier releases */
+            uint8_t make = sc & 0x7F;
+            if (make == 0x1D) s_ctrl = 0;  /* right Ctrl release */
+            return;
+        }
+        /* E0 make codes */
+        if (sc == 0x1D) { s_ctrl = 1; return; }  /* right Ctrl */
+        char arrow = 0;
+        switch (sc) {
+        case 0x48: arrow = 'A'; break;  /* up */
+        case 0x50: arrow = 'B'; break;  /* down */
+        case 0x4B: arrow = 'D'; break;  /* left */
+        case 0x4D: arrow = 'C'; break;  /* right */
+        case 0x47: arrow = 'H'; break;  /* Home */
+        case 0x4F: arrow = 'F'; break;  /* End */
+        }
+        if (arrow) {
+            buf_push('\033');
+            buf_push('[');
+            buf_push(arrow);
+        }
+        return;
+    }
 
     /* Break code (key released) — bit 7 set */
     if (sc & 0x80) {
