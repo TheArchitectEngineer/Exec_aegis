@@ -5,7 +5,7 @@
 #include <glyph.h>
 
 #define CURSOR_W 16
-#define CURSOR_H 16
+#define CURSOR_H 20
 
 void cursor_init(surface_t *fb);
 void cursor_hide(void);
