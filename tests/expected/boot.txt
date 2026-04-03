@@ -37,7 +37,9 @@
 [CAP] policy: lumen
 [CAP] policy: installer
 [CAP] policy: vigil
-[CAP] OK: loaded 8 policies
+[CAP] policy: shutdown
+[CAP] policy: reboot
+[CAP] OK: loaded 10 policies
 [SMP] OK: 1 CPUs online
 [CAP] OK: 7 baseline capabilities granted to init
 [VMM] OK: identity map removed
