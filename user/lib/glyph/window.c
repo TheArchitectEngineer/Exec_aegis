@@ -145,30 +145,24 @@ render_chrome(glyph_window_t *win)
      * blur+tint shows through. Non-frosted: solid titlebar. */
     uint32_t title_bg = win->frosted ? C_CHROME_SHADOW
                         : (focused ? C_CHROME_TITLE : C_CHROME_UTITLE);
-
-    /* Titlebar area (rounded top corners) */
-    for (int py = 0; py < TB_H + BD_W; py++) {
-        for (int px = 0; px < total_w; px++) {
-            if (!outside_rounded(px, py, total_w, total_h, CORNER_R))
-                draw_px(s, px, py, title_bg);
-        }
-    }
-
-    /* Client area (rounded bottom corners).
-     * Frosted widget windows: use key color (C_SHADOW) so empty areas are
-     * transparent in the compositor's keyed blit, showing frost through.
-     * Terminal windows: use C_TERM_BG (also transparent via terminal keyed path).
-     * Non-frosted: solid white client. */
     uint32_t client_bg = win->frosted ? C_CHROME_SHADOW
                          : C_CHROME_CLIENT;
     if (win->priv)
         client_bg = C_TERM_BG;
 
-    for (int py = TB_H + BD_W; py < total_h; py++) {
-        for (int px = 0; px < total_w; px++) {
-            if (!outside_rounded(px, py, total_w, total_h, CORNER_R))
-                draw_px(s, px, py, client_bg);
-        }
+    if (title_bg == client_bg) {
+        /* Fast path: single color body — use Bresenham rounded rect */
+        draw_rounded_rect(s, 0, 0, total_w, total_h, CORNER_R, title_bg);
+    } else {
+        /* Slow path (non-frosted only): two colors need per-pixel corner test */
+        for (int py = 0; py < TB_H + BD_W; py++)
+            for (int px = 0; px < total_w; px++)
+                if (!outside_rounded(px, py, total_w, total_h, CORNER_R))
+                    draw_px(s, px, py, title_bg);
+        for (int py = TB_H + BD_W; py < total_h; py++)
+            for (int px = 0; px < total_w; px++)
+                if (!outside_rounded(px, py, total_w, total_h, CORNER_R))
+                    draw_px(s, px, py, client_bg);
     }
 
     /* Subtle border outline along the rounded rect (skip for frosted —
