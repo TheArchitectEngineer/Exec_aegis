@@ -55,24 +55,37 @@ void draw_px(surface_t *s, int x, int y, uint32_t c)
 
 void draw_fill_rect(surface_t *s, int x, int y, int w, int h, uint32_t c)
 {
-    int i, j;
-    for (j = y; j < y + h && j < s->h; j++)
-        for (i = x; i < x + w && i < s->w; i++)
-            if (i >= 0 && j >= 0)
-                s->buf[j * s->pitch + i] = c;
+    /* Clamp to surface bounds once — no per-pixel checks needed */
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > s->w) w = s->w - x;
+    if (y + h > s->h) h = s->h - y;
+    if (w <= 0 || h <= 0) return;
+
+    for (int j = y; j < y + h; j++) {
+        uint32_t *row = &s->buf[j * s->pitch + x];
+        for (int i = 0; i < w; i++)
+            row[i] = c;
+    }
 }
 
 void draw_rect(surface_t *s, int x, int y, int w, int h, uint32_t c)
 {
-    int i;
-    for (i = x; i < x + w; i++) {
-        draw_px(s, i, y, c);
-        draw_px(s, i, y + h - 1, c);
+    /* Top and bottom edges */
+    if (y >= 0 && y < s->h) {
+        int x0 = x < 0 ? 0 : x, x1 = x + w > s->w ? s->w : x + w;
+        for (int i = x0; i < x1; i++) s->buf[y * s->pitch + i] = c;
     }
-    for (i = y; i < y + h; i++) {
-        draw_px(s, x, i, c);
-        draw_px(s, x + w - 1, i, c);
+    if (y + h - 1 >= 0 && y + h - 1 < s->h) {
+        int x0 = x < 0 ? 0 : x, x1 = x + w > s->w ? s->w : x + w;
+        for (int i = x0; i < x1; i++) s->buf[(y + h - 1) * s->pitch + i] = c;
     }
+    /* Left and right edges */
+    int y0 = y < 0 ? 0 : y, y1 = y + h > s->h ? s->h : y + h;
+    if (x >= 0 && x < s->w)
+        for (int i = y0; i < y1; i++) s->buf[i * s->pitch + x] = c;
+    if (x + w - 1 >= 0 && x + w - 1 < s->w)
+        for (int i = y0; i < y1; i++) s->buf[i * s->pitch + x + w - 1] = c;
 }
 
 void draw_gradient_v(surface_t *s, int x, int y, int w, int h,
@@ -132,16 +145,20 @@ void draw_text_t(surface_t *s, int x, int y, const char *str, uint32_t fg)
 void draw_blit(surface_t *dst, int dx, int dy,
                const uint32_t *src, int sw, int sh)
 {
-    int x, y;
-    for (y = 0; y < sh; y++) {
-        if (dy + y < 0 || dy + y >= dst->h)
-            continue;
-        for (x = 0; x < sw; x++) {
-            if (dx + x < 0 || dx + x >= dst->w)
-                continue;
-            dst->buf[(dy + y) * dst->pitch + (dx + x)] = src[y * sw + x];
-        }
-    }
+    /* Clamp source region to destination bounds.
+     * src_stride is the original image width (row pitch in pixels). */
+    int src_stride = sw;
+    int sx0 = 0, sy0 = 0;
+    if (dx < 0) { sx0 = -dx; sw += dx; dx = 0; }
+    if (dy < 0) { sy0 = -dy; sh += dy; dy = 0; }
+    if (dx + sw > dst->w) sw = dst->w - dx;
+    if (dy + sh > dst->h) sh = dst->h - dy;
+    if (sw <= 0 || sh <= 0) return;
+
+    for (int y = 0; y < sh; y++)
+        __builtin_memcpy(&dst->buf[(dy + y) * dst->pitch + dx],
+                         &src[(sy0 + y) * src_stride + sx0],
+                         (unsigned long)sw * 4);
 }
 
 void draw_line(surface_t *s, int x0, int y0, int x1, int y1, uint32_t color)
@@ -231,7 +248,6 @@ void draw_circle_filled(surface_t *s, int cx, int cy, int r, uint32_t color)
 void draw_rounded_rect(surface_t *s, int x, int y, int w, int h,
                        int r, uint32_t color)
 {
-    int i;
     if (r < 0) r = 0;
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
