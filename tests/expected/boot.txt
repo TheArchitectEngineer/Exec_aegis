@@ -21,14 +21,6 @@
 [RAMDISK] OK: 32 MB ESP mapped from module 2
 [VFS] OK: initialized
 [INITRD] OK: 32 files registered
-[CAP] policy: login
-[CAP] policy: bastion
-[CAP] policy: httpd
-[CAP] policy: dhcp
-[CAP] policy: stsh
-[CAP] policy: lumen
-[CAP] policy: installer
-[CAP] OK: loaded 7 policies
 [ACPI] OK: MADT parsed, 1 CPUs, no MCFG (legacy machine)
 [ACPI] transitioning to ACPI mode (SMI_CMD=0xb2, val=0xf1)
 [ACPI] ACPI mode enabled (SCI_EN set)
@@ -37,6 +29,15 @@
 [IOAPIC] OK: 24 pins, PIC disabled
 [PCIE] OK: skipped (no ECAM)
 [EXT2] OK: mounted ramdisk0, 60416 blocks, 15104 inodes
+[CAP] policy: login
+[CAP] policy: bastion
+[CAP] policy: httpd
+[CAP] policy: dhcp
+[CAP] policy: stsh
+[CAP] policy: lumen
+[CAP] policy: installer
+[CAP] policy: vigil
+[CAP] OK: loaded 8 policies
 [SMP] OK: 1 CPUs online
 [CAP] OK: 7 baseline capabilities granted to init
 [VMM] OK: identity map removed

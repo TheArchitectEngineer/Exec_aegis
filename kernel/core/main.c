@@ -119,7 +119,6 @@ kernel_main(uint32_t mb_magic, void *mb_info)
 
     vfs_init();             /* [VFS] OK + [INITRD] OK                        */
     console_init();         /* register stdout device (silent)               */
-    cap_policy_load();      /* load /etc/aegis/caps.d/ policy files          */
     acpi_init();            /* parse MCFG+MADT — [ACPI] OK                   */
     lapic_init();           /* Local APIC — [LAPIC] OK or silent skip        */
     ioapic_init();          /* I/O APIC — [IOAPIC] OK or silent skip         */
@@ -140,6 +139,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
             printk("[VFS] WARN: NVMe present but no Aegis root partition — falling back to ramdisk (VOLATILE)\n");
         ext2_mount("ramdisk0");
     }
+    cap_policy_load();      /* load /etc/aegis/caps.d/ — must be after ext2  */
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
     net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */
