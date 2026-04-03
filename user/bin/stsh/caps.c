@@ -32,7 +32,7 @@ static const char *cap_names[] = {
     "IPC",             /* 15 */
     "POWER",           /* 16 */
 };
-#define NUM_CAP_NAMES 16
+#define NUM_CAP_NAMES 17
 
 static const char *
 rights_str(unsigned int rights)

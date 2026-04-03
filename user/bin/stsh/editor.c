@@ -96,6 +96,37 @@ editor_readline(const char *prompt, char *buf, int buflen)
             write(STDOUT_FILENO, "\n", 1);
             return 0;
 
+        case 1:  /* Ctrl-A — Home */
+            pos = 0;
+            redraw(prompt, buf, len, pos);
+            break;
+        case 5:  /* Ctrl-E — End */
+            pos = len;
+            redraw(prompt, buf, len, pos);
+            break;
+        case 11: /* Ctrl-K — kill to end of line */
+            len = pos;
+            buf[len] = '\0';
+            redraw(prompt, buf, len, pos);
+            break;
+        case 21: /* Ctrl-U — kill line (to beginning) */
+            memmove(buf, &buf[pos], len - pos);
+            len -= pos;
+            pos = 0;
+            buf[len] = '\0';
+            redraw(prompt, buf, len, pos);
+            break;
+        case 23: /* Ctrl-W — delete word backward */
+            if (pos > 0) {
+                int end = pos;
+                while (pos > 0 && buf[pos - 1] == ' ') pos--;
+                while (pos > 0 && buf[pos - 1] != ' ') pos--;
+                memmove(&buf[pos], &buf[end], len - end);
+                len -= (end - pos);
+                buf[len] = '\0';
+                redraw(prompt, buf, len, pos);
+            }
+            break;
         case 12: /* Ctrl-L — clear screen */
             write(STDOUT_FILENO, "\033[2J\033[H", 7);
             redraw(prompt, buf, len, pos);
@@ -171,6 +202,18 @@ editor_readline(const char *prompt, char *buf, int buflen)
                     pos = len;
                     redraw(prompt, buf, len, pos);
                     break;
+                case '3': { /* Delete key: ESC[3~ */
+                    unsigned char tilde;
+                    if (read(STDIN_FILENO, &tilde, 1) == 1 && tilde == '~') {
+                        if (pos < len) {
+                            memmove(&buf[pos], &buf[pos + 1], len - pos - 1);
+                            len--;
+                            buf[len] = '\0';
+                            redraw(prompt, buf, len, pos);
+                        }
+                    }
+                    break;
+                }
                 default:
                     break;
                 }

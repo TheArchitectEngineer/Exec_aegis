@@ -92,10 +92,23 @@ complete(char *buf, int *pos, int *len, const char *prompt)
     int ncands = 0;
 
     if (first_token) {
+        /* Builtin completion */
+        static const char *builtins[] = {
+            "cd", "exit", "help", "export", "env",
+            "caps", "sandbox", "grant", NULL
+        };
+        for (int bi = 0; builtins[bi] && ncands < MAX_CANDIDATES; bi++) {
+            if (plen == 0 || strncmp(builtins[bi], prefix, plen) == 0) {
+                candidates[ncands] = strdup(builtins[bi]);
+                if (candidates[ncands])
+                    ncands++;
+            }
+        }
+
         /* Command completion — scan /bin */
         DIR *d = opendir("/bin");
         if (!d)
-            return;
+            goto done_first;
         struct dirent *ent;
         while ((ent = readdir(d)) != NULL && ncands < MAX_CANDIDATES) {
             if (ent->d_name[0] == '.')
@@ -107,6 +120,7 @@ complete(char *buf, int *pos, int *len, const char *prompt)
             }
         }
         closedir(d);
+    done_first: ;
     } else {
         /* File completion */
         char dir[256];

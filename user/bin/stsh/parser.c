@@ -11,6 +11,7 @@ parse_command(char *seg, cmd_t *cmd)
     cmd->argv[0]          = NULL;
     cmd->stdin_file       = NULL;
     cmd->stdout_file      = NULL;
+    cmd->stdout_append    = 0;
     cmd->stderr_to_stdout = 0;
 
     int argc = 0;
@@ -28,11 +29,12 @@ parse_command(char *seg, cmd_t *cmd)
             continue;
         }
 
-        /* >> (append) — store path */
+        /* >> (append) — store path with append flag */
         if (p[0] == '>' && p[1] == '>') {
             p += 2;
             while (*p == ' ' || *p == '\t') p++;
             cmd->stdout_file = p;
+            cmd->stdout_append = 1;
             while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
             if (*p) *p++ = '\0';
             continue;

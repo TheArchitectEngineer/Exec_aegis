@@ -39,6 +39,7 @@ typedef struct {
     char *argv[MAX_ARGV + 1]; /* NULL-terminated */
     char *stdin_file;         /* path for < redirect, NULL if none */
     char *stdout_file;        /* path for > redirect, NULL if none */
+    int   stdout_append;      /* 1 if >> (append), 0 if > (truncate) */
     int   stderr_to_stdout;   /* 1 if 2>&1 was specified */
 } cmd_t;
 

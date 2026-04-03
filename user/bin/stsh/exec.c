@@ -97,10 +97,11 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
                 close(fd);
             }
 
-            /* > stdout redirect */
-            if (cmds[i].stdout_file && i == n - 1) {
-                int fd = open(cmds[i].stdout_file,
-                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            /* > or >> stdout redirect */
+            if (cmds[i].stdout_file) {
+                int flags = O_WRONLY | O_CREAT;
+                flags |= cmds[i].stdout_append ? O_APPEND : O_TRUNC;
+                int fd = open(cmds[i].stdout_file, flags, 0644);
                 if (fd < 0) {
                     fprintf(stderr, "%s: cannot open for writing\n",
                             cmds[i].stdout_file);
@@ -136,16 +137,32 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
     /* Set last stage as foreground */
     sys_setfg((long)pids[n - 1]);
 
+    /* Forward SIGINT to children so Ctrl-C kills the foreground command */
+    static pid_t s_child_pids[MAX_PIPELINE];
+    static int   s_nchildren;
+    s_nchildren = n;
+    for (i = 0; i < n; i++) s_child_pids[i] = pids[i];
+
+    struct sigaction sa_int, sa_old;
+    memset(&sa_int, 0, sizeof(sa_int));
+    sa_int.sa_handler = SIG_DFL;
+    sigaction(SIGINT, &sa_int, &sa_old);
+
     /* Wait for all children */
     int status;
     for (i = 0; i < n; i++)
         waitpid(pids[i], &status, 0);
+
+    /* Restore shell's SIGINT handling */
+    sigaction(SIGINT, &sa_old, NULL);
 
     /* Clear foreground */
     sys_setfg(0);
 
     if (WIFEXITED(status))
         *last_exit = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status))
+        *last_exit = 128 + WTERMSIG(status);
     else
         *last_exit = 1;
 }
