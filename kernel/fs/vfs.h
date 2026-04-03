@@ -99,6 +99,10 @@ extern int vfs_read_nonblock;
  * Called from kernel_main before sched_init. */
 void vfs_init(void);
 
+/* Linux open flag values (used by vfs_open for ext2) */
+#define VFS_O_TRUNC  0x200U
+#define VFS_O_APPEND 0x400U
+
 /* Linux O_CREAT flag value (used by vfs_open for ext2 file creation) */
 #define VFS_O_CREAT 0x40U
 

@@ -120,10 +120,21 @@ vfs_open(const char *path, int flags, vfs_file_t *out)
                         return -13;  /* EACCES */
                 }
             }
+            /* O_TRUNC: set file size to 0 */
+            if (flags & (int)VFS_O_TRUNC) {
+                ext2_inode_t trunc_inode;
+                if (ext2_read_inode(ino, &trunc_inode) == 0) {
+                    trunc_inode.i_size = 0;
+                    ext2_write_inode(ino, &trunc_inode);
+                }
+            }
             ext2_fd_priv_t *p = ext2_pool_alloc(ino);
             if (!p) return -12;
             int sz = ext2_file_size(ino);
             if (sz < 0) sz = 0;
+            /* O_APPEND: start writing at end of file */
+            if (flags & (int)VFS_O_APPEND)
+                p->write_offset = (uint32_t)sz;
             out->ops    = &s_ext2_ops;
             out->priv   = (void *)p;
             out->offset = 0;
