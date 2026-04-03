@@ -542,7 +542,28 @@ main(void)
                     goto next_poll;
                 }
 
-                /* Not a recognized Alt combo -- flush ESC + char to focused PTY */
+                /* CSI sequence (ESC [): read remaining bytes and flush
+                 * as a single write so the shell sees a complete sequence. */
+                if (kbd_byte == '[') {
+                    int mfd = (comp.focused && comp.focused->tag > 0)
+                              ? comp.focused->tag : -1;
+                    if (mfd >= 0) {
+                        char seq[8] = { '\033', '[' };
+                        int slen = 2;
+                        /* Read parameter bytes + final byte */
+                        char cb;
+                        while (slen < 7 && read(0, &cb, 1) == 1) {
+                            seq[slen++] = cb;
+                            if (cb >= 0x40 && cb <= 0x7E)
+                                break;  /* final byte */
+                        }
+                        write(mfd, seq, (unsigned)slen);
+                    }
+                    activity = 1;
+                    goto next_poll;
+                }
+
+                /* Not a recognized combo -- flush ESC + char to focused PTY */
                 int mfd = (comp.focused && comp.focused->tag > 0)
                           ? comp.focused->tag : -1;
                 if (mfd >= 0) {
@@ -712,15 +733,8 @@ after_mouse:
                 activity = 1;
         }
 
-        /* Cursor blink — toggle every ~30 frames (~500ms).
-         * Mark focused terminal window dirty to trigger re-render. */
-        clock_counter++;
-        if ((clock_counter % 30) == 0 && comp.focused && comp.focused->priv) {
-            glyph_window_mark_all_dirty(comp.focused);
-            activity = 1;
-        }
-
         /* Clock update — roughly once per second (60 frames) */
+        clock_counter++;
         if (clock_counter >= 60) {
             clock_counter = 0;
             struct timespec ts;

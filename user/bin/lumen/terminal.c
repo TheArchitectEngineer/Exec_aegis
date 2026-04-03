@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <time.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 
@@ -206,10 +207,11 @@ static void render_term_grid(glyph_window_t *win)
     }
 
     /* Blinking cursor block (only when viewing bottom).
-     * Blink phase toggles every ~30 frames (~500ms at 60fps). */
+     * Uses wall clock so blink works even when terminal is idle. */
     if (tp->master_fd >= 0 && tp->scroll_offset == 0) {
-        static int blink_counter;
-        int phase = (blink_counter++ / 30) & 1;
+        struct timespec now;
+        clock_gettime(CLOCK_REALTIME, &now);
+        int phase = (int)(now.tv_nsec / 500000000L) & 1; /* 0 or 1, toggles every 500ms */
         if (!phase)
             draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
                            cw, ch, C_TERM_FG);

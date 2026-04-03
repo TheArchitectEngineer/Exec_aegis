@@ -565,21 +565,25 @@ fb_putchar(char c)
         } else {
             s_esc_state = 0;
         }
+        _fb_draw_cursor();
         return;
     }
     if (s_esc_state == 2) {
         if ((c >= '0' && c <= '9') || c == ';') {
             if (s_esc_len < 15)
                 s_esc_buf[s_esc_len++] = c;
+            _fb_draw_cursor();
             return;
         }
         s_esc_state     = 0;
         s_esc_buf[s_esc_len] = '\0';
         _fb_dispatch_csi(c);
+        _fb_draw_cursor();
         return;
     }
     if (c == '\033') {
         s_esc_state = 1;
+        _fb_draw_cursor();
         return;
     }
 
