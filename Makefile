@@ -311,12 +311,20 @@ $(BUILD)/wallpaper.raw: assets/wallpaper.png
 
 # ���─ ISO construction ──────────────────────────���──────────────────────────────
 GRUB_CFG ?= tools/grub.cfg
+GRUB_FONT = $(BUILD)/grub-font.pf2
 
-$(BUILD)/aegis.iso: $(BUILD)/aegis.elf $(GRUB_CFG) $(ROOTFS) $(ESP_IMG)
+$(GRUB_FONT): assets/JetBrainsMono-Regular.ttf
+	@mkdir -p $(BUILD)
+	@if command -v grub-mkfont >/dev/null 2>&1; then \
+	    grub-mkfont -o $@ -s 24 $<; \
+	else touch $@; fi
+
+$(BUILD)/aegis.iso: $(BUILD)/aegis.elf $(GRUB_CFG) $(ROOTFS) $(ESP_IMG) $(GRUB_FONT)
 	@mkdir -p $(ISO_DIR)/boot/grub
 	cp $(BUILD)/aegis.elf $(ISO_DIR)/boot/aegis.elf
 	cp $(GRUB_CFG) $(ISO_DIR)/boot/grub/grub.cfg
 	@if [ -f assets/wallpaper.png ]; then cp assets/wallpaper.png $(ISO_DIR)/boot/grub/wallpaper.png; fi
+	@if [ -s $(GRUB_FONT) ]; then cp $(GRUB_FONT) $(ISO_DIR)/boot/grub/font.pf2; fi
 	cp $(ROOTFS) $(ISO_DIR)/boot/rootfs.img
 	cp $(ESP_IMG) $(ISO_DIR)/boot/esp.img
 	grub-mkrescue -o $@ $(ISO_DIR)
