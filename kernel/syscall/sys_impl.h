@@ -235,7 +235,7 @@ uint64_t sys_blkdev_io(uint64_t arg1, uint64_t arg2, uint64_t arg3,
 uint64_t sys_gpt_rescan(uint64_t arg1);
 uint64_t sys_fb_map(uint64_t arg1);
 
-/* ── memfd / ftruncate (sys_socket.c) ──────────────────────────────────── */
+/* ── memfd / ftruncate (sys_memory.c) ──────────────────────────────────── */
 uint64_t sys_memfd_create(uint64_t name, uint64_t flags);
 uint64_t sys_ftruncate(uint64_t fd, uint64_t length);
 
