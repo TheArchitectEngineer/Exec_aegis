@@ -1,5 +1,10 @@
 /* sys_signal.c — Signal handling syscalls */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "signal.h"
+#include "tty.h"
+#include "kbd.h"
 
 /*
  * sys_rt_sigaction — syscall 13

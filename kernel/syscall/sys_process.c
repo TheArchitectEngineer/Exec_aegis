@@ -1,8 +1,16 @@
 /* sys_process.c — Process lifecycle syscalls: exit, fork, clone, waitpid */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "signal.h"
+#include "vfs.h"
+#include "vmm.h"
+#include "kva.h"
+#include "tty.h"
+#include "printk.h"
+#include "arch.h"
 #include "futex.h"
 #include "vma.h"
-#include "tty.h"
 
 static uint32_t s_fork_count = 1;  /* starts at 1 for init */
 

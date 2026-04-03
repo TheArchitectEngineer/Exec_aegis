@@ -1,11 +1,13 @@
 #include "sys_impl.h"
-#include "cap.h"
-#include "uaccess.h"
+#include "sched.h"
+#include "proc.h"
+#include "vfs.h"
+#include "vmm.h"
 #include "printk.h"
+#include "cap.h"
 #include "blkdev.h"
 #include "gpt.h"
 #include "fb.h"
-#include "vmm.h"
 #include "spinlock.h"
 #include <stdint.h>
 

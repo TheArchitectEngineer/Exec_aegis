@@ -1,5 +1,7 @@
 /* sys_cap.c — Capability syscalls: auth_session, grant_runtime, query */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
 
 /*
  * sys_auth_session — syscall 364

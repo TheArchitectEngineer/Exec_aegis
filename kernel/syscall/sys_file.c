@@ -1,7 +1,15 @@
 /* sys_file.c — File and filesystem syscalls */
 #include "sys_impl.h"
-#include "pty.h"
+#include "sched.h"
+#include "proc.h"
+#include "vfs.h"
+#include "ext2.h"
+#include "pipe.h"
+#include "kbd_vfs.h"
 #include "tty.h"
+#include "kva.h"
+#include "socket.h"
+#include "pty.h"
 
 /*
  * sys_open — syscall 2

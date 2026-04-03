@@ -1,5 +1,11 @@
 /* sys_socket.c — POSIX socket API syscalls */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "vfs.h"
+#include "socket.h"
+#include "epoll.h"
+#include "arch.h"
 #include "netdev.h"
 #include "eth.h"
 #include "udp.h"

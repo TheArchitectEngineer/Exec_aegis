@@ -1,7 +1,19 @@
 /* sys_exec.c — exec-related syscalls: execve, spawn */
 #include "sys_impl.h"
-#include "vma.h"
+#include "sched.h"
+#include "proc.h"
+#include "signal.h"
+#include "vfs.h"
+#include "initrd.h"
+#include "ext2.h"
+#include "elf.h"
+#include "vmm.h"
+#include "pmm.h"
+#include "kva.h"
 #include "tty.h"
+#include "arch.h"
+#include "random.h"
+#include "vma.h"
 
 /*
  * sys_execve — syscall 59

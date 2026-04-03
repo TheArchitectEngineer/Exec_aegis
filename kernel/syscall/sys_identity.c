@@ -1,5 +1,10 @@
 /* sys_identity.c — Identity, info, session, and resource syscalls */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "arch.h"
+#include "ext2.h"
+#include "printk.h"
 #include "acpi.h"
 
 uint64_t

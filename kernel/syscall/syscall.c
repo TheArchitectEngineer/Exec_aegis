@@ -2,6 +2,10 @@
  * Implementation split into sys_io.c, sys_memory.c, sys_process.c,
  * sys_file.c, sys_signal.c. */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "signal.h"
+#include "printk.h"
 
 uint64_t
 syscall_dispatch(syscall_frame_t *frame, uint64_t num,

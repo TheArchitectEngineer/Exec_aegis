@@ -1,5 +1,8 @@
 /* sys_time.c — Time-related syscalls: nanosleep, clock_gettime, clock_settime */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "arch.h"
 
 /*
  * sys_nanosleep — syscall 35

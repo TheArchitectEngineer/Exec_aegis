@@ -1,5 +1,10 @@
 /* sys_memory.c — Memory management syscalls: brk, mmap, munmap, mprotect */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "vmm.h"
+#include "pmm.h"
+#include "vfs.h"
 #include "vma.h"
 #include "memfd.h"
 

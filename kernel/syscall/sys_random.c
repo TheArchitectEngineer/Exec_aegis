@@ -1,5 +1,7 @@
 /* sys_random.c — getrandom(2) syscall implementation. */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
 #include "random.h"
 
 #define GRND_NONBLOCK 0x0001u

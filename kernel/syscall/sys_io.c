@@ -1,5 +1,8 @@
 /* sys_io.c — I/O syscall implementations: read, write, writev, close */
 #include "sys_impl.h"
+#include "sched.h"
+#include "proc.h"
+#include "vfs.h"
 
 #ifndef EISDIR
 #define EISDIR 21
