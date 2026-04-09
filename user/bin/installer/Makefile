@@ -1,11 +1,18 @@
-MUSL_DIR = ../../../build/musl-dynamic
-CC = $(MUSL_DIR)/usr/bin/musl-gcc
-CFLAGS = -O2 -fno-pie -no-pie -Wl,--build-id=none
+MUSL_DIR    = ../../../build/musl-dynamic
+CC          = $(MUSL_DIR)/usr/bin/musl-gcc
+CFLAGS      = -O2 -fno-pie -no-pie -Wl,--build-id=none -Wall \
+              -I../../lib/libinstall
+TARGET      = installer.elf
+LIBINSTALL  = ../../lib/libinstall/libinstall.a
 
-all: installer.elf
+all: $(TARGET)
 
-installer.elf: main.c
-	$(CC) $(CFLAGS) -lcrypt -o $@ $<
+$(TARGET): main.c $(LIBINSTALL)
+	$(CC) $(CFLAGS) -o $@ main.c \
+	    -L../../lib/libinstall -linstall -lcrypt
+
+$(LIBINSTALL):
+	$(MAKE) -C ../../lib/libinstall
 
 clean:
-	rm -f *.elf
+	rm -f $(TARGET)

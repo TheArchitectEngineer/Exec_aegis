@@ -181,7 +181,7 @@ build-musl: $(MUSL_BUILT)
 SIMPLE_USER_PROGS = \
     ls cat echo pwd uname clear true false wc grep sort \
     mkdir touch rm cp mv whoami ln chmod chown readlink \
-    shutdown reboot login stsh httpd installer
+    shutdown reboot login stsh httpd
 
 # Generate rules: user/bin/foo/foo.elf depends on musl, built via sub-make
 define SIMPLE_USER_RULE
@@ -217,12 +217,18 @@ user/lib/libauth/libauth.a: user/lib/libauth/auth.c user/lib/libauth/auth.h
 user/lib/citadel/libcitadel.a: $(wildcard user/lib/citadel/*.c user/lib/citadel/*.h) user/lib/glyph/libglyph.a $(MUSL_BUILT)
 	$(MAKE) -C user/lib/citadel
 
+user/lib/libinstall/libinstall.a: $(wildcard user/lib/libinstall/*.c user/lib/libinstall/*.h) $(MUSL_BUILT)
+	$(MAKE) -C user/lib/libinstall
+
 # Programs with extra library dependencies
 user/bin/lumen/lumen.elf: $(wildcard user/bin/lumen/*.c user/bin/lumen/*.h) user/lib/glyph/libglyph.a user/lib/citadel/libcitadel.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/lumen
 
 user/bin/bastion/bastion.elf: user/bin/bastion/main.c user/lib/glyph/libglyph.a user/lib/libauth/libauth.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/bastion
+
+user/bin/installer/installer.elf: user/bin/installer/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/installer
 
 # BearSSL + curl (external builds)
 build/bearssl-install/lib/libbearssl.a:
