@@ -509,8 +509,12 @@ sys_fork(syscall_frame_t *frame)
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
 
-    /* 4. Copy parent user pages into child PML4 */
-    if (vmm_copy_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
+    /* 4. Share parent user pages into child PML4 via copy-on-write.
+     * Writable pages become RO+COW in both parent and child; the first
+     * write to any such page in either process takes a fault which
+     * vmm_cow_fault_handle resolves by allocating a fresh frame and
+     * copying just that one page. */
+    if (vmm_cow_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
         vmm_free_user_pml4(child->pml4_phys);
         kva_free_pages(child->fd_table, 1);
         vma_clear(child);

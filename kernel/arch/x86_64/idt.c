@@ -10,6 +10,10 @@
 #include "printk.h"
 #include "arch.h"
 #include "fb.h"
+#include "signal.h"
+#include "sched.h"
+#include "proc.h"
+#include "vmm.h"
 
 /* 256 entries: full IDT covering all x86-64 interrupt vectors */
 static aegis_idt_gate_t s_idt[256];
@@ -126,14 +130,66 @@ void __attribute__((used))
 isr_dispatch(cpu_state_t *s)
 {
     if (s->vector < 32) {
-        /* CPU exception: print and halt */
+        /* Ring-3 (userspace) exception: deliver signal instead of panicking */
+        if (s->cs == ARCH_USER_CS) {
+            /* Copy-on-write fast path for #PF (vector 14).
+             * error_code bit 0 = P (1 = protection violation)
+             * error_code bit 1 = W/R (1 = write access)
+             * error_code bit 2 = U/S (1 = user mode)
+             * A write protection violation from user mode to a present
+             * page might be a COW fault. vmm_cow_fault_handle checks
+             * the PTE for VMM_FLAG_COW and handles it if so. */
+            if (s->vector == 14 && (s->error_code & 0x7) == 0x7) {
+                aegis_task_t *cur0 = sched_current();
+                if (cur0 && cur0->is_user) {
+                    aegis_process_t *proc0 = (aegis_process_t *)cur0;
+                    uint64_t cr2;
+                    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+                    int cow_rc = vmm_cow_fault_handle(proc0->pml4_phys, cr2);
+                    if (cow_rc == 0)
+                        return;   /* handled — iretq to retry */
+                    if (cow_rc == -2) {
+                        /* OOM resolving COW — deliver SIGBUS */
+                        proc0->pending_signals |= (1ULL << (uint32_t)SIGBUS);
+                        return;
+                    }
+                    /* -1: not a COW page — fall through to SIGSEGV. */
+                }
+            }
+
+            int signum;
+            switch (s->vector) {
+            case 0:  signum = SIGFPE;  break;
+            case 4:
+            case 5:  signum = SIGSEGV; break;
+            case 6:  signum = SIGILL;  break;
+            case 11:
+            case 12: signum = SIGBUS;  break;
+            default: signum = SIGSEGV; break;
+            }
+            aegis_task_t *cur = sched_current();
+            if (cur && cur->is_user) {
+                aegis_process_t *proc = (aegis_process_t *)cur;
+                if (s->vector == 14) {
+                    uint64_t cr2;
+                    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+                    printk("[FAULT] pid %u: exception %lu at RIP=0x%lx CR2=0x%lx — signal %d\n",
+                           proc->pid, s->vector, s->rip, cr2, signum);
+                } else {
+                    printk("[FAULT] pid %u: exception %lu at RIP=0x%lx — signal %d\n",
+                           proc->pid, s->vector, s->rip, signum);
+                }
+                proc->pending_signals |= (1ULL << (uint32_t)signum);
+                return;
+            }
+        }
+
+        /* Kernel-mode exception: always fatal */
         printk("[PANIC] exception %lu at RIP=0x%lx error=0x%lx CS=0x%lx\n",
                s->vector, s->rip, s->error_code, s->cs);
-        /* For #PF: print CR2 and key registers */
         if (s->vector == 14) {
             uint64_t cr2, fsbase;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-            /* IA32_FS_BASE MSR = 0xC0000100 */
             uint32_t fs_lo, fs_hi;
             __asm__ volatile("rdmsr" : "=a"(fs_lo), "=d"(fs_hi) : "c"(0xC0000100U));
             fsbase = ((uint64_t)fs_hi << 32) | fs_lo;
@@ -144,17 +200,12 @@ isr_dispatch(cpu_state_t *s)
             printk("[PANIC] #PF rsp=0x%lx ss=0x%lx fs_base=0x%lx\n",
                    s->rsp, s->ss, fsbase);
         }
-        /* For #GP at iretq: the original iretq frame overlaps cpu_state_t.rsp/ss.
-         * Print all 5 slots of the frame so we can see what iretq was trying to load. */
         if (s->vector == 13) {
             uint64_t *f = (uint64_t *)&s->rsp;
             printk("[PANIC] #GP iretq frame: RIP=%lx CS=%lx FL=%lx RSP=%lx SS=%lx\n",
                    f[0], f[1], f[2], f[3], f[4]);
         }
-        /* Print kernel backtrace for kernel-mode faults.
-         * For ring-3 faults (CS=ARCH_USER_CS) rbp is a user-space pointer — skip. */
-        if (s->cs == ARCH_KERNEL_CS)
-            panic_backtrace(s->rbp);
+        panic_backtrace(s->rbp);
         {
             uint64_t cr2_val = 0;
             if (s->vector == 14)

@@ -146,8 +146,31 @@ void vmm_zero_page(uint64_t phys);
  * For each present user leaf PTE in src_pml4: allocates a new frame via pmm,
  * copies contents via the two-window-slot mechanism, maps into dst_pml4.
  * Returns 0 on success, -1 on OOM.
- * Called by sys_fork to create the child address space. */
+ * Kept for reference / fallback; sys_fork uses vmm_cow_user_pages below. */
 int vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4);
+
+/* vmm_cow_user_pages — share user-half pages using copy-on-write (P1).
+ *
+ * Clears the W bit and sets VMM_FLAG_COW on every writable user page in
+ * both src_pml4 and dst_pml4, leaving them pointing at the same physical
+ * frames. Read-only pages are shared directly. Per-page refcounts are
+ * bumped via pmm_ref_page. The parent's TLB is invalidated for each
+ * modified page so subsequent writes take a fault and are handled by
+ * vmm_cow_fault_handle.
+ * Returns 0 on success, -1 on OOM. On failure the caller discards
+ * dst_pml4 via vmm_free_user_pml4 which will unref the partially
+ * populated pages.
+ */
+int vmm_cow_user_pages(uint64_t src_pml4, uint64_t dst_pml4);
+
+/* vmm_cow_fault_handle — resolve a COW page fault.
+ * pml4_phys: the faulting process's top-level page table.
+ * fault_va:  the faulting virtual address (CR2).
+ *
+ * Returns 0 if the fault was handled (retry the instruction), -1 if the
+ * target page is not COW (deliver SIGSEGV), -2 on OOM (deliver SIGBUS).
+ */
+int vmm_cow_fault_handle(uint64_t pml4_phys, uint64_t fault_va);
 
 /* vmm_free_user_pages — free all leaf physical frames mapped in user half
  * (PML4 entries 0-255) of pml4_phys. Does NOT free PT/PD/PDPT pages and

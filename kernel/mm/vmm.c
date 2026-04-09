@@ -890,6 +890,208 @@ vmm_copy_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
     return 0;
 }
 
+/* vmm_cow_user_pages — share user-half pages between src_pml4 and dst_pml4
+ * using copy-on-write semantics (P1 audit activation).
+ *
+ * For each present user leaf PTE in src_pml4:
+ *   - Writable pages: clear W bit and set COW bit in src PTE (parent now
+ *     can't write without taking a fault); clone the PTE into dst with
+ *     the same flags; pmm_ref_page the phys frame; arch_vmm_invlpg the
+ *     parent VA so its TLB entry picks up the new RO mapping.
+ *   - Read-only pages: share directly with no flag changes; pmm_ref_page
+ *     the frame. No invlpg needed since the mapping didn't change.
+ *   - MMIO pages (WC/UC-): skip — framebuffer and device memory are not
+ *     refcounted, and the child has no use for them.
+ *
+ * Returns 0 on success. On OOM during PT allocation, the partial state
+ * is rolled back by the caller via vmm_free_user_pml4 on dst_pml4.
+ */
+int
+vmm_cow_user_pages(uint64_t src_pml4, uint64_t dst_pml4)
+{
+    uint64_t pml4i, pdpti, pdi, pti;
+    uint32_t batch = 0;
+    #define COW_BATCH_SIZE 256
+
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
+    for (pml4i = 0; pml4i < 256; pml4i++) {
+        uint64_t *pml4 = vmm_window_map(src_pml4);
+        uint64_t pml4e = pml4[pml4i];
+        vmm_window_unmap();
+        if (!(pml4e & VMM_FLAG_PRESENT)) continue;
+
+        uint64_t pdpt_phys = ARCH_PTE_ADDR(pml4e);
+        for (pdpti = 0; pdpti < 512; pdpti++) {
+            uint64_t *pdpt = vmm_window_map(pdpt_phys);
+            uint64_t pdpte = pdpt[pdpti];
+            vmm_window_unmap();
+            if (!(pdpte & VMM_FLAG_PRESENT)) continue;
+
+            uint64_t pd_phys = ARCH_PTE_ADDR(pdpte);
+            for (pdi = 0; pdi < 512; pdi++) {
+                uint64_t *pd = vmm_window_map(pd_phys);
+                uint64_t pde = pd[pdi];
+                vmm_window_unmap();
+                if (!(pde & VMM_FLAG_PRESENT)) continue;
+
+                uint64_t pt_phys = ARCH_PTE_ADDR(pde);
+                for (pti = 0; pti < 512; pti++) {
+                    uint64_t *pgtbl = vmm_window_map(pt_phys);
+                    uint64_t pte = pgtbl[pti];
+                    vmm_window_unmap();
+                    if (!(pte & VMM_FLAG_PRESENT)) continue;
+                    if (!(pte & VMM_FLAG_USER)) continue;
+                    /* Skip MMIO (framebuffer, device memory). */
+                    if (pte & (VMM_FLAG_WC | VMM_FLAG_UCMINUS)) continue;
+
+                    uint64_t phys = pte & ~0x8000000000000FFFULL;
+                    uint64_t flags = pte & 0x8000000000000FFFULL;
+
+                    /* Reconstruct VA for the invlpg below. */
+                    uint64_t va = (pml4i << 39) | (pdpti << 30) |
+                                  (pdi   << 21) | (pti   << 12);
+
+                    if (flags & VMM_FLAG_WRITABLE) {
+                        /* Writable → RO + COW for both parent and child.
+                         * Write-protect the parent first so any concurrent
+                         * write from the parent will fault and either
+                         * complete the COW via the fault handler or block
+                         * on vmm_window_lock until we finish here. */
+                        uint64_t cow_flags =
+                            (flags & ~(uint64_t)VMM_FLAG_WRITABLE) | VMM_FLAG_COW;
+
+                        /* Update parent PTE: clear W, set COW. */
+                        uint64_t *src_pgtbl = vmm_window_map(pt_phys);
+                        src_pgtbl[pti] = phys | cow_flags;
+                        vmm_window_unmap();
+                        arch_vmm_invlpg(va);
+
+                        /* Install into child with same RO+COW flags. */
+                        if (vmm_map_user_page_nolock(dst_pml4, va, phys, cow_flags) < 0) {
+                            spin_unlock_irqrestore(&vmm_window_lock, fl);
+                            return -1;
+                        }
+                        /* Now the frame has two sharers. */
+                        pmm_ref_page(phys);
+                    } else {
+                        /* Read-only → share as-is. */
+                        if (vmm_map_user_page_nolock(dst_pml4, va, phys, flags) < 0) {
+                            spin_unlock_irqrestore(&vmm_window_lock, fl);
+                            return -1;
+                        }
+                        pmm_ref_page(phys);
+                    }
+
+                    /* Yield periodically to keep interrupts responsive. */
+                    if (++batch >= COW_BATCH_SIZE) {
+                        batch = 0;
+                        spin_unlock_irqrestore(&vmm_window_lock, fl);
+                        fl = spin_lock_irqsave(&vmm_window_lock);
+                    }
+                }
+            }
+        }
+    }
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
+    return 0;
+}
+
+/* vmm_cow_fault_handle — resolve a copy-on-write page fault.
+ *
+ * Called from the page fault handler when a write faults on a present,
+ * user, RO page in the current process. Walks the current PML4 to find
+ * the leaf PTE, verifies VMM_FLAG_COW is set, allocates a fresh frame,
+ * copies the old contents, and updates the PTE to point at the new
+ * frame with W set and COW cleared.
+ *
+ * Returns 0 if the fault was handled (caller should iretq back to
+ * retry the instruction), -1 if the page is not COW (caller should
+ * deliver SIGSEGV as usual), or -2 on OOM (caller should SIGBUS).
+ */
+int
+vmm_cow_fault_handle(uint64_t pml4_phys, uint64_t fault_va)
+{
+    uint64_t pml4i = (fault_va >> 39) & 0x1FF;
+    uint64_t pdpti = (fault_va >> 30) & 0x1FF;
+    uint64_t pdi   = (fault_va >> 21) & 0x1FF;
+    uint64_t pti   = (fault_va >> 12) & 0x1FF;
+
+    irqflags_t fl = spin_lock_irqsave(&vmm_window_lock);
+
+    /* Walk to the leaf PTE. */
+    uint64_t *pml4 = vmm_window_map(pml4_phys);
+    uint64_t pml4e = pml4[pml4i];
+    vmm_window_unmap();
+    if (!(pml4e & VMM_FLAG_PRESENT)) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        return -1;
+    }
+
+    uint64_t pdpt_phys = ARCH_PTE_ADDR(pml4e);
+    uint64_t *pdpt = vmm_window_map(pdpt_phys);
+    uint64_t pdpte = pdpt[pdpti];
+    vmm_window_unmap();
+    if (!(pdpte & VMM_FLAG_PRESENT)) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        return -1;
+    }
+
+    uint64_t pd_phys = ARCH_PTE_ADDR(pdpte);
+    uint64_t *pd = vmm_window_map(pd_phys);
+    uint64_t pde = pd[pdi];
+    vmm_window_unmap();
+    if (!(pde & VMM_FLAG_PRESENT)) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        return -1;
+    }
+
+    uint64_t pt_phys = ARCH_PTE_ADDR(pde);
+    uint64_t *pgtbl = vmm_window_map(pt_phys);
+    uint64_t pte = pgtbl[pti];
+    vmm_window_unmap();
+    if (!(pte & VMM_FLAG_PRESENT) ||
+        !(pte & VMM_FLAG_USER)     ||
+        !(pte & VMM_FLAG_COW)      ||
+         (pte & VMM_FLAG_WRITABLE)) {
+        /* Not a COW fault — real protection violation. */
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        return -1;
+    }
+
+    uint64_t old_phys = pte & ~0x8000000000000FFFULL;
+    uint64_t flags    = pte &  0x8000000000000FFFULL;
+
+    /* Allocate a fresh frame and copy.
+     * pmm_alloc_page sets refcount 1 for the new frame. */
+    uint64_t new_phys = pmm_alloc_page();
+    if (!new_phys) {
+        spin_unlock_irqrestore(&vmm_window_lock, fl);
+        return -2;   /* OOM */
+    }
+    void *src_va = vmm_window_map(old_phys);
+    void *dst_va = vmm_window_map2(new_phys);
+    __builtin_memcpy(dst_va, src_va, 4096);
+    vmm_window_unmap2();
+    vmm_window_unmap();
+
+    /* Update the PTE: new frame, W set, COW cleared. */
+    uint64_t new_flags =
+        (flags & ~(uint64_t)VMM_FLAG_COW) | VMM_FLAG_WRITABLE;
+    uint64_t *wpgtbl = vmm_window_map(pt_phys);
+    wpgtbl[pti] = new_phys | new_flags;
+    vmm_window_unmap();
+    arch_vmm_invlpg(fault_va);
+
+    spin_unlock_irqrestore(&vmm_window_lock, fl);
+
+    /* Drop the old frame's refcount. If we were the last sharer this
+     * frees it; otherwise (refcount was >= 2) the other sharers keep
+     * reading the unchanged contents. */
+    pmm_free_page(old_phys);
+    return 0;
+}
+
 /* vmm_write_user_bytes — copy len bytes from kernel src into user virtual
  * address range [va, va+len) within pml4_phys.  Handles writes crossing
  * page boundaries by splitting at each page boundary.  Uses the mapped-window
