@@ -77,19 +77,23 @@ async fn collect_until(
 
 /// Home the cursor to (0, 0) then move to (cx, cy).
 ///
-/// QEMU's HMP `mouse_move` delivers deltas to the guest as PS/2
+/// Lumen's compositor applies a **1.5× speed multiplier** to all
+/// mouse deltas via `cursor_x += dx + dx / 2` (see
+/// `user/bin/lumen/compositor.c:488`). To land the cursor at an
+/// absolute (cx, cy), we must send 2/3 of the desired delta so
+/// Lumen's 1.5× scaling brings it back to (cx, cy).
+///
+/// QEMU's HMP `mouse_move` also delivers deltas to the guest as PS/2
 /// mouse packets, and the guest needs time between packets to
-/// consume them. Large bursts drop events. Homing uses small hops
-/// (at most screen-sized) with a settle between each.
+/// consume them. Homing uses small hops with settles between each.
 async fn home_and_move(
     proc: &vortex::QemuProcess,
     cx: i32,
     cy: i32,
 ) -> Result<(), String> {
-    // Home in small hops with a settle between each. Three hops of
-    // (-700, -500) is enough to reach (0, 0) from anywhere on a
-    // 640x480 screen even if the cursor starts at the far corner,
-    // and each hop generates only ~7 PS/2 packets.
+    // Home in small hops. We deliberately send deltas larger than
+    // the screen divided by 1.5 so that after Lumen's scaling the
+    // cursor clamps to (0, 0) regardless of starting position.
     for _ in 0..3 {
         proc.mouse_move(-700, -500)
             .await
@@ -97,10 +101,12 @@ async fn home_and_move(
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    // Move to absolute target in a single delta (cursor is now at
-    // 0,0 after clamping). Long settle so Lumen fully consumes all
-    // the PS/2 packets this generates before the caller clicks.
-    proc.mouse_move(cx, cy)
+    // Compensate for Lumen's 1.5× scaling: send 2/3 of the target
+    // so the cursor lands at (cx, cy) after scaling. Using
+    // `(x * 2 + 1) / 3` rounds to nearest rather than toward zero.
+    let sent_dx = (cx * 2 + 1) / 3;
+    let sent_dy = (cy * 2 + 1) / 3;
+    proc.mouse_move(sent_dx, sent_dy)
         .await
         .map_err(|e| format!("move: {}", e))?;
     tokio::time::sleep(Duration::from_millis(600)).await;
