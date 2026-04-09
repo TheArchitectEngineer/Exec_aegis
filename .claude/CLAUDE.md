@@ -431,7 +431,6 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 ### SMP (Phase 38)
 
 - Single-core scheduling only. APs start but enter halt loops.
-- SWAPGS omitted from proc_enter_user (AMD Zen 2 workaround).
 - IOAPIC remapped PIC vectors 0xF0-0xFF have silent-drop ISR stubs.
 
 ### Kernel Limits
