@@ -57,6 +57,33 @@ pub fn aegis_q35() -> QemuOpts {
     }
 }
 
+/// Graphical q35 preset with framebuffer + monitor socket + PS/2 mouse.
+///
+/// Differs from `aegis_q35` in: uses virtio-vga instead of std VGA,
+/// enables `monitor_socket` so tests can drive HMP `screendump` /
+/// `mouse_move` / `mouse_button`, omits NVMe/virtio-net, does not add
+/// `usb-mouse` (q35 exposes a PS/2 i8042 AUX channel by default, and
+/// HMP mouse commands target that device). Intended for GUI tests
+/// that need to click and screenshot.
+pub fn aegis_q35_graphical_mouse() -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "vnc=127.0.0.1:17".into(),
+        devices: vec![
+            "virtio-vga".into(),
+            "qemu-xhci,id=xhci".into(),
+            "usb-kbd,bus=xhci.0".into(),
+        ],
+        drives: vec![],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
