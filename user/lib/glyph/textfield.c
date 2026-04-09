@@ -32,7 +32,7 @@ textfield_draw(glyph_widget_t *self, surface_t *surf, int ox, int oy)
     for (int i = 0; i < tf->len; i++) {
         if (tx + cw > ox + self->w - TF_PAD_X)
             break;
-        char tmp[2] = { tf->buf[i], '\0' };
+        char tmp[2] = { tf->mask_char ? tf->mask_char : tf->buf[i], '\0' };
         draw_text_ui(surf, tx, ty, tmp, TF_FG);
         tx += cw;
     }
@@ -149,5 +149,14 @@ glyph_textfield_set_text(glyph_textfield_t *tf, const char *text)
     tf->buf[len] = '\0';
     tf->len = len;
     tf->cursor_pos = len;
+    glyph_widget_mark_dirty(&tf->base);
+}
+
+void
+glyph_textfield_set_mask(glyph_textfield_t *tf, char mask_char)
+{
+    if (!tf)
+        return;
+    tf->mask_char = mask_char;
     glyph_widget_mark_dirty(&tf->base);
 }

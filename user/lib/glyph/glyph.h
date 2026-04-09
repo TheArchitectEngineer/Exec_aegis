@@ -206,12 +206,14 @@ typedef struct {
     int len;
     int cursor_pos;
     int width_chars;
+    char mask_char;  /* 0 = show text, non-zero = render as this char (password) */
     void (*on_change)(glyph_widget_t *self, const char *text);
 } glyph_textfield_t;
 
 glyph_textfield_t *glyph_textfield_create(int width_chars, void (*on_change)(glyph_widget_t *, const char *));
 const char *glyph_textfield_get_text(glyph_textfield_t *tf);
 void glyph_textfield_set_text(glyph_textfield_t *tf, const char *text);
+void glyph_textfield_set_mask(glyph_textfield_t *tf, char mask_char);
 
 /* ---- Checkbox ---- */
 
