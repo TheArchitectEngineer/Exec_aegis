@@ -315,9 +315,15 @@ sigusr1_handler(int sig)
 static pid_t
 spawn_lumen(void)
 {
-    /* Use fork+execve instead of sys_spawn.  Lumen works from CLI
-     * (fork+execve) but freezes from sys_spawn — likely a kernel bug
-     * in sys_spawn's session/TTY setup.  fork+execve is the workaround. */
+    /* Use fork+execve instead of sys_spawn.  The original "freeze" bug
+     * (pty_pool_lock recursive deadlock in try_acquire_ctty) was fixed
+     * on 2026-04-09 and Lumen DOES render via sys_spawn now.  We still
+     * prefer fork+execve because sys_spawn duplicates the parent's
+     * stdio_fd across child fd 0/1/2: bastion's fd 0 is the kbd TTY
+     * (read-only), so the child's stderr silently swallows all writes.
+     * fork+execve gives Lumen a full independent fd table with working
+     * stdin/stdout/stderr. A future sys_spawn API change (separate fd
+     * args for stdin/stdout/stderr) would let us switch. */
     pid_t pid = fork();
     if (pid == 0) {
         /* Child: grant caps AFTER fork (exec_caps not inherited by fork),
