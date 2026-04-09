@@ -91,11 +91,17 @@ async fn home_and_move(
     cx: i32,
     cy: i32,
 ) -> Result<(), String> {
-    // Home in small hops. We deliberately send deltas larger than
-    // the screen divided by 1.5 so that after Lumen's scaling the
-    // cursor clamps to (0, 0) regardless of starting position.
-    for _ in 0..3 {
-        proc.mouse_move(-700, -500)
+    // Home in hops sized to fully drain per QEMU PS/2 poll.
+    // Empirically, QEMU's PS/2 emulation + Aegis's driver deliver at
+    // most ~635 delta units per poll cycle; hops larger than that
+    // leave a residual in QEMU's accumulator that contaminates the
+    // next HMP command. -500 per axis fits comfortably below the
+    // limit and fully drains with a 200 ms settle. Four hops of
+    // (-500, -500) total (-2000, -2000) which, after Lumen's 1.5×
+    // scaling, is (-3000, -3000) — enough to clamp from any
+    // starting position on a 640×480 framebuffer.
+    for _ in 0..4 {
+        proc.mouse_move(-500, -500)
             .await
             .map_err(|e| format!("home: {}", e))?;
         tokio::time::sleep(Duration::from_millis(200)).await;
