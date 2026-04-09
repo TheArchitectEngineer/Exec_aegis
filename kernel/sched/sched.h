@@ -36,6 +36,10 @@ typedef struct aegis_task_t {
      * must call the _locked variants that also update the list. */
     struct aegis_task_t *next_run;
     struct aegis_task_t *prev_run;
+    /* wait-queue linkage (WQ audit item).
+     * Used by waitq_wait to link this task into a waitq_t's head list.
+     * NULL when the task is not currently blocked on any wait queue. */
+    struct aegis_task_t *wq_next;
 } aegis_task_t;
 
 /* Initialize the run queue. No tasks yet. */

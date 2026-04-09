@@ -81,7 +81,7 @@ MM_SRCS = \
     kernel/mm/kva.c \
     kernel/mm/vma.c
 
-SCHED_SRCS  = kernel/sched/sched.c
+SCHED_SRCS  = kernel/sched/sched.c kernel/sched/waitq.c
 SIGNAL_SRCS = kernel/signal/signal.c
 TTY_SRCS    = kernel/tty/tty.c kernel/tty/pty.c
 
