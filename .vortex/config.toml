@@ -1,0 +1,94 @@
+default_backend = "qemu"
+
+# ── aegis-pc ─────────────────────────────────────────────────────────────────
+# Base boot: kernel subsystems, no NVMe/USB/net.
+# Maps to the aegis_pc() Rust preset.
+
+[templates.aegis-pc]
+description = "Aegis base boot — kernel + subsystem tests"
+memory = 2048
+cpus = 1
+ports = []
+volumes = []
+
+[templates.aegis-pc.boot_source]
+type = "cdrom"
+iso = "build/aegis.iso"
+
+[templates.aegis-pc.qemu]
+machine = "pc"
+display = "none"
+serial_capture = true
+extra_args = ["-vga", "std", "-no-reboot", "-nodefaults",
+              "-cpu", "Broadwell",
+              "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]
+
+[[templates.aegis-pc.exit_mappings]]
+raw = 33
+meaning = "pass"
+
+[[templates.aegis-pc.exit_mappings]]
+raw = 35
+meaning = "fail"
+
+# ── aegis-q35 ────────────────────────────────────────────────────────────────
+# Full hardware stack: NVMe, xHCI, virtio-net.
+# Maps to the aegis_q35() Rust preset.
+
+[templates.aegis-q35]
+description = "Aegis q35 — NVMe, xHCI, virtio-net, network stack"
+memory = 2048
+cpus = 1
+ports = []
+volumes = []
+
+[templates.aegis-q35.boot_source]
+type = "cdrom"
+iso = "build/aegis.iso"
+
+[templates.aegis-q35.qemu]
+machine = "q35"
+display = "none"
+serial_capture = true
+devices = [
+  "qemu-xhci,id=xhci",
+  "usb-kbd,bus=xhci.0",
+  "usb-mouse,bus=xhci.0",
+  "nvme,drive=nvme0,serial=aegis0",
+  "virtio-net-pci,netdev=net0",
+]
+drives = ["file=build/disk.img,format=raw,if=none,id=nvme0"]
+extra_args = [
+  "-netdev", "user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80",
+  "-vga", "std",
+  "-cpu", "Broadwell",
+  "-no-reboot",
+  "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+]
+
+[[templates.aegis-q35.exit_mappings]]
+raw = 33
+meaning = "pass"
+
+[[templates.aegis-q35.exit_mappings]]
+raw = 35
+meaning = "fail"
+
+# ── aegis-install-test ───────────────────────────────────────────────────────
+# Multi-stage: boot ISO → installer writes to disk → reboot from NVMe → verify.
+# Run with: vortex stack up aegis-install-test
+
+[stacks.aegis-install-test]
+description = "Boot ISO, install to NVMe, reboot from disk, verify"
+
+[[stacks.aegis-install-test.vms]]
+name = "install"
+template = "aegis-q35"
+[stacks.aegis-install-test.vms.disks.rootdisk]
+size_mb = 512
+
+[[stacks.aegis-install-test.vms]]
+name = "verify"
+template = "aegis-q35"
+depends_on = ["install"]
+boot_disk = "install:rootdisk"
