@@ -315,20 +315,34 @@ sigusr1_handler(int sig)
 static pid_t
 spawn_lumen(void)
 {
-    /* Use fork+execve instead of sys_spawn.  Lumen works from CLI
-     * (fork+execve) but freezes from sys_spawn — likely a kernel bug
-     * in sys_spawn's session/TTY setup.  fork+execve is the workaround. */
+    /* Try sys_spawn first — avoids the fork page-copy stall.
+     * Historically this froze Lumen (Phase 46 memory note) due to a
+     * kernel bug in sys_spawn's session/TTY setup; with the post-Phase-46
+     * scheduler and signal fixes we are re-testing. If it still freezes,
+     * fall back to fork+execve. */
+    char *argv[] = { "lumen", NULL };
+    char *envp[] = {
+        "PATH=/bin",
+        "HOME=/root",
+        "TERM=dumb",
+        NULL
+    };
+    /* stdio_fd = 0 → child inherits fd 0/1/2 from parent's fd 0 (console). */
+    long rc = syscall(SYS_SPAWN, (long)"/bin/lumen", (long)argv, (long)envp,
+                      (long)0, (long)0);
+    if (rc > 0)
+        return (pid_t)rc;
+
+    /* Fallback: fork + execve */
     pid_t pid = fork();
     if (pid == 0) {
-        /* Child: grant caps AFTER fork (exec_caps not inherited by fork),
-         * then exec lumen. */
         auth_grant_shell_caps();
         setenv("PATH", "/bin", 1);
         setenv("HOME", "/root", 1);
         setenv("USER", s_username, 1);
         setenv("TERM", "dumb", 1);
-        char *argv[] = { "lumen", NULL };
-        execve("/bin/lumen", argv, environ);
+        char *argv2[] = { "lumen", NULL };
+        execve("/bin/lumen", argv2, environ);
         _exit(127);
     }
     return pid;
