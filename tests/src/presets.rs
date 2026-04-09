@@ -72,7 +72,10 @@ pub fn aegis_q35() -> QemuOpts {
 pub fn aegis_q35_graphical_mouse() -> QemuOpts {
     QemuOpts {
         machine: "q35".into(),
-        display: "vnc=127.0.0.1:17".into(),
+        // `to=99` lets QEMU walk forward from display :17 to :99 if a
+        // stale instance is still bound — avoids "Address already in
+        // use" when a prior test panicked before killing its child.
+        display: "vnc=127.0.0.1:17,to=99".into(),
         devices: vec!["virtio-vga".into()],
         drives: vec![],
         extra_args: vec![
