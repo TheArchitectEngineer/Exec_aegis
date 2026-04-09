@@ -1,19 +1,32 @@
 // Smoke test for monitor_socket + screendump.
 // Run: AEGIS_ISO=build/aegis.iso cargo test --manifest-path tests/Cargo.toml screendump -- --nocapture
 //
-// NOTE: screenshot trigger is [BASTION] greeter ready, emitted from
-// draw_form() after the first blit_to_fb(). This requires:
-//   1. boot=graphical in kernel cmdline (GRUB default entry)
-//   2. GRUB gfxmode=800x600x32 so the kernel gets a 32bpp VBE framebuffer
-//      (current ISO has gfxmode=auto which may fall back to text mode on pc)
-//   3. display = vnc=... (not none) so QEMU maintains a rendered surface
-//
-// Until a new ISO is built with gfxmode=800x600x32, this test is a
-// functional check that the monitor socket and screendump plumbing work;
-// the captured image will be black if sys_fb_map fails in the guest.
+// Machine config mirrors `make run-fb`: q35 + virtio-vga.
+// -machine pc / -vga std does NOT provide a usable linear framebuffer on QEMU —
+// GRUB can't set VBE mode and sys_fb_map returns -1. virtio-vga does.
 
-use aegis_tests::{aegis_pc, iso, wait_for_line, AegisHarness};
+use aegis_tests::{iso, AegisHarness};
 use std::time::Duration;
+use vortex::core::config::QemuOpts;
+
+fn graphical_opts() -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "vnc=127.0.0.1:15".into(), // headless but maintains render surface
+        devices: vec![
+            "virtio-vga".into(),
+            "qemu-xhci,id=xhci".into(),
+            "usb-kbd,bus=xhci.0".into(),
+        ],
+        drives: vec![],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
 
 #[tokio::test]
 async fn screendump_on_bastion_greeter() {
@@ -23,31 +36,43 @@ async fn screendump_on_bastion_greeter() {
         return;
     }
 
-    let mut opts = aegis_pc();
-    opts.monitor_socket = true;
-    // VNC backend renders the VGA surface headlessly; -display none skips it.
-    opts.display = "vnc=127.0.0.1:15".into();
-
-    let (mut stream, mut proc) = AegisHarness::boot_stream(opts, &iso)
+    let (mut stream, mut proc) = AegisHarness::boot_stream(graphical_opts(), &iso)
         .await
         .expect("QEMU failed to start");
 
-    // [BASTION] greeter ready fires from draw_form() after the first blit_to_fb().
-    // Falls back to timing out gracefully if the ISO predates this log line.
-    let triggered = wait_for_line(&mut stream, "[BASTION] greeter ready", Duration::from_secs(30))
-        .await
-        .is_ok();
-
-    if !triggered {
-        eprintln!("WARN: [BASTION] greeter ready not seen (old ISO or sys_fb_map failed)");
+    // Stream serial lines, taking screenshot when greeter is ready or on timeout.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut triggered = false;
+    loop {
+        match tokio::time::timeout_at(deadline, stream.next_line()).await {
+            Ok(Some(line)) => {
+                eprintln!("SERIAL: {}", line);
+                if line.contains("[BASTION] greeter ready") {
+                    eprintln!("trigger: [BASTION] greeter ready");
+                    triggered = true;
+                    // Give one extra frame to render.
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    break;
+                }
+            }
+            Ok(None) => {
+                eprintln!("WARN: serial stream closed (QEMU exited?)");
+                break;
+            }
+            Err(_) => {
+                eprintln!("WARN: timed out at 30s — screenshotting whatever is on screen");
+                break;
+            }
+        }
     }
+    let _ = triggered;
 
     let out = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("screenshots/bastion-greeter.ppm");
     proc.screendump(&out).await.expect("screendump failed");
     proc.kill().await.unwrap();
 
-    assert!(out.exists(), "screenshot file not created");
+    assert!(out.exists(), "screenshot file not created at {}", out.display());
     assert!(out.metadata().unwrap().len() > 0, "screenshot file is empty");
-    eprintln!("screenshot written to {} ({} bytes)", out.display(), out.metadata().unwrap().len());
+    eprintln!("screenshot: {} ({} bytes)", out.display(), out.metadata().unwrap().len());
 }

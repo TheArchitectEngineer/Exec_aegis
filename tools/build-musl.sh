@@ -17,10 +17,15 @@ MUSL_TAR="references/musl-${MUSL_VER}.tar.gz"
 MUSL_SRC="references/musl-${MUSL_VER}"
 DESTDIR="$(pwd)/build/musl-dynamic"
 
-# Skip if already built
+# Skip if already built AND correct architecture
 if [ -f "${DESTDIR}/usr/lib/libc.so" ]; then
-    echo "[build-musl] libc.so already exists, skipping."
-    exit 0
+    if file "${DESTDIR}/usr/lib/libc.so" | grep -q "x86-64"; then
+        echo "[build-musl] libc.so already exists (x86-64), skipping."
+        exit 0
+    else
+        echo "[build-musl] WARNING: libc.so exists but is NOT x86-64 — rebuilding!"
+        rm -rf "${DESTDIR}"
+    fi
 fi
 
 # Download if absent
@@ -34,8 +39,15 @@ if [ ! -d "${MUSL_SRC}" ]; then
     tar -xzf "${MUSL_TAR}" -C references/
 fi
 
-# Configure
+# Configure — nuke stale config.mak if it targets the wrong architecture
 cd "${MUSL_SRC}"
+if [ -f config.mak ]; then
+    if ! grep -q 'ARCH = x86_64' config.mak; then
+        echo "[build-musl] WARNING: config.mak targets wrong arch — reconfiguring!"
+        rm -f config.mak
+        rm -rf obj lib
+    fi
+fi
 if [ ! -f config.mak ]; then
     echo "[build-musl] Configuring..."
     ./configure \
