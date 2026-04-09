@@ -19,6 +19,7 @@ user/bin/bastion/bastion.elf    /bin/bastion
 user/bin/lumen/lumen.elf        /bin/lumen
 user/bin/stsh/stsh.elf          /bin/stsh
 user/bin/installer/installer.elf /bin/installer
+user/bin/gui-installer/gui-installer.elf /bin/gui-installer
 
 # Coreutils
 user/bin/ls/ls.elf              /bin/ls

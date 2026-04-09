@@ -230,6 +230,9 @@ user/bin/bastion/bastion.elf: user/bin/bastion/main.c user/lib/glyph/libglyph.a 
 user/bin/installer/installer.elf: user/bin/installer/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/installer
 
+user/bin/gui-installer/gui-installer.elf: user/bin/gui-installer/main.c user/lib/glyph/libglyph.a user/lib/libinstall/libinstall.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/gui-installer
+
 # BearSSL + curl (external builds)
 build/bearssl-install/lib/libbearssl.a:
 	bash tools/build-bearssl.sh
