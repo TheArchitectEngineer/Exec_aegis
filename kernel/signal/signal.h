@@ -171,6 +171,12 @@ int signal_deliver_sysret(struct syscall_frame *frame,
 /* Send signal to a process by PID. Safe from ISR context. */
 void signal_send_pid(uint32_t pid, int signum);
 
+/* Same as signal_send_pid, but caller already holds sched_lock.
+ * Calls sched_wake_locked / sched_resume_locked instead of the
+ * lock-acquiring variants.  Used by sched_exit to signal SIGCHLD
+ * to the parent while still holding sched_lock. */
+void signal_send_pid_locked(uint32_t pid, int signum);
+
 /* Send signal to all processes in a process group. */
 void signal_send_pgrp(uint32_t pgid, int signum);
 

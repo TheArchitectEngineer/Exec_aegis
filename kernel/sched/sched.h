@@ -22,7 +22,20 @@ typedef struct aegis_task_t {
     uint64_t             clear_child_tid;  /* user VA: write 0 + futex_wake on exit */
     uint64_t             sleep_deadline;   /* PIT tick when nanosleep expires; 0 = not sleeping */
     int                  read_nonblock;    /* 1 = current sys_read is O_NONBLOCK; per-task, not global */
-    struct aegis_task_t *next;             /* circular linked list */
+    struct aegis_task_t *next;             /* circular linked list (all tasks) */
+    /* RUNNING-only run queue (P3 audit fix).
+     *
+     * Separate circular doubly-linked list threaded through tasks whose
+     * state == TASK_RUNNING, anchored at a static sentinel in sched.c.
+     * sched_tick walks this list instead of the full `next` chain to avoid
+     * O(N) scans of blocked/zombie/stopped tasks.
+     *
+     * Invariant: a task is in the run list IFF state == TASK_RUNNING AND
+     * next_run != NULL.  next_run == NULL means "not currently in the list".
+     * Mutations (insert/remove) require sched_lock; state-flip-only helpers
+     * must call the _locked variants that also update the list. */
+    struct aegis_task_t *next_run;
+    struct aegis_task_t *prev_run;
 } aegis_task_t;
 
 /* Initialize the run queue. No tasks yet. */
@@ -63,10 +76,15 @@ sched_current(void)
  *            Guaranteed by task_idle which never blocks or exits. */
 void sched_block(void);
 
-/* sched_wake — mark task TASK_RUNNING and re-add to run queue.
- * Inserts before current so the woken task runs next tick.
- * Called from sched_exit when the parent is found waiting. IF=0. */
+/* sched_wake — mark task TASK_RUNNING and insert into the run queue.
+ * Acquires sched_lock internally; safe to call from any caller that does
+ * NOT already hold sched_lock (pipe/socket/futex/signal_send_pid paths).
+ * Use sched_wake_locked if the caller already holds sched_lock. */
 void sched_wake(aegis_task_t *task);
+
+/* sched_wake_locked — same as sched_wake but caller already holds sched_lock.
+ * Used by sched_exit -> signal_send_pid_locked -> sched_wake_locked. */
+void sched_wake_locked(aegis_task_t *task);
 
 /* sched_stop — transition a task to TASK_STOPPED.
  * If task == sched_current() (self-stop): mirrors sched_block exactly —

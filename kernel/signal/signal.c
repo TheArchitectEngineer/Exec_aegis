@@ -431,6 +431,32 @@ signal_send_pid(uint32_t pid, int signum)
 }
 
 void
+signal_send_pid_locked(uint32_t pid, int signum)
+{
+    /* Same as signal_send_pid but caller holds sched_lock.
+     * Used by sched_exit to notify parent of SIGCHLD without releasing
+     * sched_lock.  Calls sched_wake_locked so we do not attempt to
+     * re-acquire the lock recursively. */
+    if (pid == 0 || signum <= 0 || signum >= 64) return;
+
+    aegis_task_t *cur = sched_current();
+    if (!cur) return;
+    aegis_task_t *t = cur;
+    do {
+        if (t->is_user) {
+            aegis_process_t *p = (aegis_process_t *)t;
+            if (p->pid == pid) {
+                p->pending_signals |= (1ULL << (uint32_t)signum);
+                if (t->state == TASK_BLOCKED)
+                    sched_wake_locked(t);
+                return;
+            }
+        }
+        t = t->next;
+    } while (t != cur);
+}
+
+void
 signal_send_pgrp(uint32_t pgid, int signum)
 {
     if (pgid == 0 || signum <= 0 || signum >= 64) return;

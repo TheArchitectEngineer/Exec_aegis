@@ -26,12 +26,92 @@ static volatile int  s_sched_ready = 0;  /* set by sched_start; guards sched_tic
 
 spinlock_t sched_lock = SPINLOCK_INIT;
 
+/* RUNNING-only run queue sentinel (P3 audit fix).
+ *
+ * Circular doubly-linked list of tasks with state == TASK_RUNNING, threaded
+ * through aegis_task_t::next_run/prev_run.  The sentinel is a stable anchor:
+ * the list is always non-empty (sentinel is in the list even when there are
+ * no runnable tasks), so iteration and insertion never need a null check.
+ * The sentinel itself is never scheduled — sched_tick et al. skip it by
+ * testing `t == &s_run_sentinel`.
+ *
+ * All mutations (insert/remove) require sched_lock.  The atomic-release
+ * state flip from the M1 audit fix is preserved: it now happens under
+ * sched_lock alongside the list insert. */
+static aegis_task_t s_run_sentinel = {
+    .sp               = 0,
+    .stack_base       = 0,
+    .kernel_stack_top = 0,
+    .tid              = 0xFFFFFFFFu,
+    .is_user          = 0,
+    .stack_pages      = 0,
+    .state            = TASK_BLOCKED,   /* never picked by iteration */
+    .waiting_for      = 0,
+    .fs_base          = 0,
+    .clear_child_tid  = 0,
+    .sleep_deadline   = 0,
+    .read_nonblock    = 0,
+    .next             = 0,
+    .next_run         = &s_run_sentinel,
+    .prev_run         = &s_run_sentinel,
+};
+
+/* Insert task at the tail of the run list (just before the sentinel).
+ * Idempotent: if the task is already in the list, this is a no-op.
+ * Caller must hold sched_lock. */
+static void
+run_list_insert_locked(aegis_task_t *task)
+{
+    if (task->next_run != (aegis_task_t *)0)
+        return;   /* already in list */
+    aegis_task_t *tail = s_run_sentinel.prev_run;
+    task->prev_run          = tail;
+    task->next_run          = &s_run_sentinel;
+    tail->next_run          = task;
+    s_run_sentinel.prev_run = task;
+}
+
+/* Remove task from the run list.  Idempotent: if task is not in the list,
+ * this is a no-op.  Caller must hold sched_lock. */
+static void
+run_list_remove_locked(aegis_task_t *task)
+{
+    if (task->next_run == (aegis_task_t *)0)
+        return;   /* not in list */
+    task->prev_run->next_run = task->next_run;
+    task->next_run->prev_run = task->prev_run;
+    task->next_run = (aegis_task_t *)0;
+    task->prev_run = (aegis_task_t *)0;
+}
+
+/* Return the next RUNNING task after `cur` in the run list, skipping the
+ * sentinel.  Returns NULL if the list contains only the sentinel (no runnable
+ * tasks — should never happen in practice because task_idle is always
+ * RUNNING).  If `cur` is not in the list (e.g. just-blocked task), start
+ * from the sentinel head. */
+static aegis_task_t *
+run_list_next_locked(aegis_task_t *cur)
+{
+    aegis_task_t *start;
+    if (cur && cur->next_run)
+        start = cur->next_run;
+    else
+        start = s_run_sentinel.next_run;
+    if (start == &s_run_sentinel)
+        start = s_run_sentinel.next_run;   /* skip sentinel once */
+    if (start == &s_run_sentinel)
+        return (aegis_task_t *)0;          /* list empty */
+    return start;
+}
+
 void
 sched_init(void)
 {
     percpu_set_current((aegis_task_t *)0);
     s_next_tid   = 0;
     s_task_count = 0;
+    s_run_sentinel.next_run = &s_run_sentinel;
+    s_run_sentinel.prev_run = &s_run_sentinel;
 }
 
 void
@@ -91,6 +171,8 @@ sched_spawn(void (*fn)(void))
     task->stack_pages      = STACK_PAGES;
     task->state            = TASK_RUNNING;
     task->waiting_for      = 0;
+    task->next_run         = (aegis_task_t *)0;
+    task->prev_run         = (aegis_task_t *)0;
 
     /* Add to circular list */
     aegis_task_t *cur = sched_current();
@@ -103,6 +185,9 @@ sched_spawn(void (*fn)(void))
         cur->next  = task;
     }
 
+    /* Insert into the RUNNING-only run queue. */
+    run_list_insert_locked(task);
+
     s_task_count++;
 
     spin_unlock_irqrestore(&sched_lock, fl);
@@ -112,6 +197,8 @@ void
 sched_add(aegis_task_t *task)
 {
     irqflags_t fl = spin_lock_irqsave(&sched_lock);
+    task->next_run = (aegis_task_t *)0;
+    task->prev_run = (aegis_task_t *)0;
     aegis_task_t *cur = sched_current();
     if (!cur) {
         task->next = task;
@@ -120,6 +207,11 @@ sched_add(aegis_task_t *task)
         task->next = cur->next;
         cur->next  = task;
     }
+    /* Only insert into the run list if the task is actually runnable.
+     * proc_spawn may set state to TASK_BLOCKED for clone() threads that
+     * will be woken later — insert_if_running makes this explicit. */
+    if (task->state == TASK_RUNNING)
+        run_list_insert_locked(task);
     s_task_count++;
     spin_unlock_irqrestore(&sched_lock, fl);
 }
@@ -171,17 +263,23 @@ sched_exit(void)
         fd_table_unref(dying->fd_table);
         dying->fd_table = (fd_table_t *)0;
 
-        /* Mark self zombie — stays in run queue until waitpid reaps. */
+        /* Mark self zombie — stays in the full task list until waitpid
+         * reaps, but must be removed from the RUNNING-only run queue
+         * immediately so sched_tick does not schedule a dying task. */
         s_cur->state = TASK_ZOMBIE;
+        run_list_remove_locked(s_cur);
 
         /* Notify parent of child exit via SIGCHLD.
-         * signal_send_pid sets SIGCHLD pending on the parent and calls
-         * sched_wake() if the parent is TASK_BLOCKED (sigsuspend path or
-         * blocking waitpid path), transitioning it to TASK_RUNNING.
+         * signal_send_pid_locked sets SIGCHLD pending on the parent and
+         * calls sched_wake_locked() if the parent is TASK_BLOCKED
+         * (sigsuspend path or blocking waitpid path), transitioning it to
+         * TASK_RUNNING and inserting it into the run list.  We hold
+         * sched_lock here, so we must use the _locked variant to avoid
+         * recursive acquisition.
          * Must run before the woken_parent scan so the scan finds the
          * parent in TASK_RUNNING state. */
         if (dying->ppid != 0)
-            signal_send_pid(dying->ppid, SIGCHLD);
+            signal_send_pid_locked(dying->ppid, SIGCHLD);
 
         /* Find parent for direct ctx_switch (avoids PIT dependency).
          * signal_send_pid may have transitioned the parent BLOCKED→RUNNING;
@@ -258,6 +356,17 @@ sched_exit(void)
     aegis_task_t *dying_k = s_cur;
     aegis_task_t *next_k  = dying_k->next;
     prev->next            = next_k;
+
+    /* Remove from the RUNNING-only run queue as well.  Capture the next
+     * runnable task via the run list so we preserve round-robin order
+     * instead of following the full-list successor. */
+    aegis_task_t *next_run = dying_k->next_run;
+    run_list_remove_locked(dying_k);
+    if (next_run == (aegis_task_t *)0 || next_run == &s_run_sentinel)
+        next_run = s_run_sentinel.next_run;
+    if (next_run != (aegis_task_t *)0 && next_run != &s_run_sentinel)
+        next_k = next_run;
+
     s_task_count--;
 
     if (next_k == dying_k) {  /* last task — everything has exited */
@@ -292,26 +401,25 @@ sched_block(void)
 
     aegis_task_t *old = sched_current();
 
+    /* Capture the next runnable task BEFORE removing old from the run list,
+     * so round-robin order is preserved. */
+    aegis_task_t *next = old->next_run;
+
     old->state = TASK_BLOCKED;
+    run_list_remove_locked(old);
 
-    /* Leave old in the circular run queue with state=TASK_BLOCKED.
-     *
-     * Rationale: sched_exit's zombie-wakeup scan traverses the run queue
-     * looking for blocked parents (state==TASK_BLOCKED).  If sched_block
-     * removed the task from the queue, the scan could never find it and the
-     * parent would never be woken — the shell would stay blocked forever
-     * after the child exited.
-     *
-     * sched_tick and sched_yield_to_next already skip non-RUNNING tasks,
-     * so leaving BLOCKED tasks in the queue is safe.  sched_wake() simply
-     * transitions state back to TASK_RUNNING; no re-insertion is needed.
-     */
+    /* Note: the task remains in the FULL circular list (next/prev via `next`)
+     * so sched_exit's signal_send_pid scan and waitpid iteration can still
+     * find it by pid.  It is only removed from the RUNNING-only run queue. */
 
-    /* Advance past the blocked task; skip non-RUNNING tasks.
-     * task_idle guarantees the loop terminates. */
-    aegis_task_t *next = old->next;
-    while (next->state != TASK_RUNNING)
-        next = next->next;
+    if (next == (aegis_task_t *)0 || next == &s_run_sentinel)
+        next = s_run_sentinel.next_run;
+    if (next == &s_run_sentinel) {
+        /* Run list contains only the sentinel — no runnable tasks.
+         * task_idle always stays RUNNING, so this should never happen in
+         * practice. Panic if it does (corruption). */
+        panic_halt("[SCHED] FAIL: sched_block with empty run list");
+    }
     percpu_set_current(next);
 
     /* Update TSS RSP0 and percpu.kernel_stack for the incoming task
@@ -346,16 +454,31 @@ sched_block(void)
 }
 
 void
+sched_wake_locked(aegis_task_t *task)
+{
+    /* Caller holds sched_lock.  Flip state to TASK_RUNNING and insert the
+     * task into the RUNNING-only run queue if it is not already there.
+     *
+     * The atomic-release state write (M1 audit fix) is preserved: sched_tick
+     * reads task->state without the lock under some paths, and the release
+     * ordering makes the state flip visible to other CPUs along with any
+     * wake-up condition the caller arranged before invoking us. */
+    __atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE);
+    run_list_insert_locked(task);
+}
+
+void
 sched_wake(aegis_task_t *task)
 {
-    /* The task remains in the circular run queue (sched_block no longer
-     * removes it).  Simply transition state back to TASK_RUNNING so the
-     * scheduler's next pass will pick it up.  No list insertion needed.
-     * No lock needed: single-word state write, and callers may already
-     * hold sched_lock (e.g. sched_exit → signal_send_pid → sched_wake).
-     * Use atomic store with release semantics so the state write is visible
-     * to other CPUs (sched_tick reads state without holding sched_lock). */
-    __atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE);
+    /* Public entry — acquires sched_lock.  Most callers (pipe close,
+     * socket rx, futex wake, signal_send_pid outside sched_exit) do not
+     * hold sched_lock, so they use this variant.
+     *
+     * sched_exit → signal_send_pid_locked → sched_wake_locked takes the
+     * other path because sched_lock is already held there. */
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
+    sched_wake_locked(task);
+    spin_unlock_irqrestore(&sched_lock, fl);
 }
 
 void
@@ -365,21 +488,26 @@ sched_stop(aegis_task_t *task)
 
     aegis_task_t *cur = sched_current();
     if (task != cur) {
-        /* Stopping a different task: just flip state. */
+        /* Stopping a different task: flip state and remove from run list. */
         task->state = TASK_STOPPED;
+        run_list_remove_locked(task);
         spin_unlock_irqrestore(&sched_lock, fl);
         return;
     }
 
     /* Self-stop: mirrors sched_block exactly, but sets TASK_STOPPED. */
     aegis_task_t *old = cur;
-    old->state = TASK_STOPPED;
 
-    /* Advance past the stopped task; skip non-RUNNING tasks.
-     * task_idle guarantees the loop terminates. */
-    aegis_task_t *next = old->next;
-    while (next->state != TASK_RUNNING)
-        next = next->next;
+    /* Capture the next runnable task BEFORE removing old from the run list. */
+    aegis_task_t *next = old->next_run;
+
+    old->state = TASK_STOPPED;
+    run_list_remove_locked(old);
+
+    if (next == (aegis_task_t *)0 || next == &s_run_sentinel)
+        next = s_run_sentinel.next_run;
+    if (next == &s_run_sentinel)
+        panic_halt("[SCHED] FAIL: sched_stop with empty run list");
     percpu_set_current(next);
 
     arch_set_kernel_stack(next->kernel_stack_top);
@@ -403,12 +531,14 @@ sched_stop(aegis_task_t *task)
 void
 sched_resume(aegis_task_t *task)
 {
-    /* Mirrors sched_wake: flip state back to RUNNING.
-     * Works for both TASK_STOPPED and TASK_BLOCKED (SIGCONT while blocked
-     * on a read must also let the read return EINTR).
-     * No lock needed: single-word state write, callers may hold sched_lock.
-     * Use atomic store with release semantics for SMP visibility. */
+    /* Mirrors sched_wake: flip state back to RUNNING and insert the task
+     * into the run queue.  Works for both TASK_STOPPED and TASK_BLOCKED
+     * (SIGCONT while blocked on a read must also let the read return EINTR).
+     * Acquires sched_lock; no caller currently holds it when calling this. */
+    irqflags_t fl = spin_lock_irqsave(&sched_lock);
     __atomic_store_n(&task->state, TASK_RUNNING, __ATOMIC_RELEASE);
+    run_list_insert_locked(task);
+    spin_unlock_irqrestore(&sched_lock, fl);
 }
 
 void
@@ -417,10 +547,19 @@ sched_yield_to_next(void)
     irqflags_t fl = spin_lock_irqsave(&sched_lock);
 
     aegis_task_t *old = sched_current();
-    aegis_task_t *next = old;
-    do {
-        next = next->next;
-    } while (next->state != TASK_RUNNING);
+    /* old may or may not still be in the run list (zombie callers remove
+     * it before invoking us).  run_list_next_locked handles both. */
+    aegis_task_t *next = run_list_next_locked(old);
+    if (next == (aegis_task_t *)0)
+        panic_halt("[SCHED] FAIL: sched_yield_to_next with empty run list");
+    if (next == old) {
+        /* Only one runnable task (old itself) — nothing to switch to.
+         * Caller is expected to have removed old from the run list before
+         * calling; if we end up with old still as the only option, just
+         * return and let the original context continue. */
+        spin_unlock_irqrestore(&sched_lock, fl);
+        return;
+    }
     percpu_set_current(next);
     arch_set_kernel_stack(next->kernel_stack_top);
 
@@ -496,12 +635,16 @@ sched_tick(void)
     aegis_task_t *cur = sched_current();
     if (!cur)                              /* no tasks spawned yet */
         return;
-    if (cur->next == cur)                  /* single task: nowhere to switch */
-        return;
 
     spin_lock(&sched_lock);
 
-    /* Wake any tasks whose nanosleep deadline has passed. */
+    /* Wake any tasks whose nanosleep deadline has passed.
+     *
+     * We still need to iterate the FULL task list (`next`) here because
+     * sleeping tasks are TASK_BLOCKED and therefore NOT in the RUNNING-only
+     * run queue.  The run queue does not contain them, so we cannot use it
+     * to find them.  Once a sleeping task's deadline expires we flip its
+     * state to TASK_RUNNING and insert it into the run list. */
     {
         uint64_t now = arch_get_ticks();
         aegis_task_t *t = cur->next;
@@ -511,17 +654,27 @@ sched_tick(void)
                 now >= t->sleep_deadline) {
                 t->sleep_deadline = 0;
                 t->state = TASK_RUNNING;
+                run_list_insert_locked(t);
             }
             t = t->next;
         } while (t != stop);
     }
 
     aegis_task_t *old = cur;
-    /* Skip blocked/zombie tasks. task_idle guarantees termination. */
-    aegis_task_t *next = old;
-    do {
-        next = next->next;
-    } while (next->state != TASK_RUNNING);
+    /* Walk the RUNNING-only run queue — O(R) where R = runnable count.
+     * This is the whole point of the P3 audit fix: we no longer scan
+     * blocked/zombie/stopped tasks here.
+     *
+     * `old` should normally be in the run list (it is the currently
+     * running task, which is TASK_RUNNING).  If for some reason it is
+     * not (e.g. sched_tick fired while old was transitioning states),
+     * run_list_next_locked starts from the sentinel head. */
+    aegis_task_t *next = run_list_next_locked(old);
+    if (next == (aegis_task_t *)0 || next == old) {
+        /* Nothing else runnable — stay on `cur`. */
+        spin_unlock(&sched_lock);
+        return;
+    }
     percpu_set_current(next);
 
     arch_set_kernel_stack(next->kernel_stack_top);
