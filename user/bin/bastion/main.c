@@ -258,6 +258,11 @@ draw_form(void)
         draw_text_simple(cx - err_tw / 2, fy + FIELD_H + 16, s_error, 0x00FF4444);
     }
 
+    static int s_greeter_announced = 0;
+    if (!s_greeter_announced) {
+        dprintf(2, "[BASTION] greeter ready\n");
+        s_greeter_announced = 1;
+    }
     blit_to_fb();
 }
 
@@ -366,35 +371,46 @@ do_auth(void)
 /* ---- Main ------------------------------------------------------------- */
 
 int
-main(void)
+main(int argc, char **argv)
 {
-    /* Exit immediately unless booted in graphical mode.
+    /* Exit immediately unless booted in graphical mode or --force flag.
      * Bastion is graphical only — if /proc/cmdline doesn't contain
-     * "boot=graphical", exit immediately. */
+     * "boot=graphical", exit immediately (unless overridden for debugging). */
     {
         int graphical = 0;
-        int cfd = open("/proc/cmdline", O_RDONLY);
-        if (cfd >= 0) {
-            char cmd[128];
-            int cn = (int)read(cfd, cmd, sizeof(cmd) - 1);
-            close(cfd);
-            if (cn > 0) {
-                cmd[cn] = '\0';
-                if (strstr(cmd, "boot=graphical"))
-                    graphical = 1;
+        int i;
+        for (i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--force") == 0)
+                graphical = 1;
+        }
+        dprintf(2, "bastion: argc=%d force=%d\n", argc, graphical);
+        if (!graphical) {
+            int cfd = open("/proc/cmdline", O_RDONLY);
+            if (cfd >= 0) {
+                char cmd[128];
+                int cn = (int)read(cfd, cmd, sizeof(cmd) - 1);
+                close(cfd);
+                if (cn > 0) {
+                    cmd[cn] = '\0';
+                    if (strstr(cmd, "boot=graphical"))
+                        graphical = 1;
+                }
             }
         }
-        if (!graphical)
+        if (!graphical) {
+            dprintf(2, "bastion: not graphical, exiting\n");
             return 0;
+        }
     }
 
-    /* AUTH + FB + SETUID caps come from kernel policy table (service tier).
-     * No runtime cap request needed — bastion is listed in caps.d/bastion. */
+    dprintf(2, "bastion: mapping framebuffer...\n");
 
     /* Map framebuffer */
     memset(&s_fb_info, 0, sizeof(s_fb_info));
-    if (syscall(SYS_FB_MAP, &s_fb_info) < 0) {
-        dprintf(2, "bastion: sys_fb_map failed, sleeping 30s to avoid respawn storm\n");
+    long fb_rc = syscall(SYS_FB_MAP, &s_fb_info);
+    dprintf(2, "bastion: sys_fb_map returned %ld\n", fb_rc);
+    if (fb_rc < 0) {
+        dprintf(2, "bastion: sys_fb_map FAILED (%ld)\n", fb_rc);
         sleep(30);
         return 1;
     }
