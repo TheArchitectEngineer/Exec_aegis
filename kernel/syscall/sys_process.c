@@ -509,12 +509,24 @@ sys_fork(syscall_frame_t *frame)
         return (uint64_t)-(int64_t)12;           /* -ENOMEM */
     }
 
-    /* 4. Share parent user pages into child PML4 via copy-on-write.
-     * Writable pages become RO+COW in both parent and child; the first
-     * write to any such page in either process takes a fault which
-     * vmm_cow_fault_handle resolves by allocating a fresh frame and
-     * copying just that one page. */
-    if (vmm_cow_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
+    /* 4. Copy parent user pages into child PML4.
+     *
+     * A COW variant (vmm_cow_user_pages) is available but was measured
+     * to be a net regression on the current workload: Aegis's primary
+     * fork caller (Bastion spawning Lumen) immediately execves, which
+     * throws away the child's COW clone before touching most pages.
+     * Meanwhile the parent takes a #PF on every subsequent write to
+     * what used to be a plain writable page. That fault trip is more
+     * expensive than the eager 4 KB memcpy the copy path does.
+     *
+     * COW would win if we added vfork() semantics or if most forks ran
+     * long-lived children that share most pages with the parent. Neither
+     * is the current workload. Infrastructure (pmm refcounts, VMM_FLAG_COW,
+     * vmm_cow_user_pages, vmm_cow_fault_handle) remains in-tree so a
+     * future commit can re-enable COW behind a flag once the right
+     * heuristic is clear. (Audit item P1 — 2026-03-29, infrastructure
+     * landed, activation deferred.) */
+    if (vmm_copy_user_pages(parent->pml4_phys, child->pml4_phys) != 0) {
         vmm_free_user_pml4(child->pml4_phys);
         kva_free_pages(child->fd_table, 1);
         vma_clear(child);
