@@ -75,38 +75,49 @@ async fn collect_until(
     }
 }
 
-/// Home the cursor to (0, 0) by sending a large negative delta, then
-/// move to (cx, cy) as a second delta. Splits the homing motion into
-/// two hops to give Lumen time to consume PS/2 packets between them.
-async fn click_at(
+/// Home the cursor to (0, 0) then move to (cx, cy).
+///
+/// QEMU's HMP `mouse_move` delivers deltas to the guest as PS/2
+/// mouse packets, and the guest needs time between packets to
+/// consume them. Large bursts drop events. Homing uses small hops
+/// (at most screen-sized) with a settle between each.
+async fn home_and_move(
     proc: &vortex::QemuProcess,
     cx: i32,
     cy: i32,
 ) -> Result<(), String> {
-    // Home in two hops (QEMU packetizes large deltas into many PS/2 packets).
-    proc.mouse_move(-5000, -5000)
-        .await
-        .map_err(|e| format!("home1: {}", e))?;
-    tokio::time::sleep(Duration::from_millis(80)).await;
-    proc.mouse_move(-5000, -5000)
-        .await
-        .map_err(|e| format!("home2: {}", e))?;
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // Home in small hops with a settle between each. Three hops of
+    // (-700, -500) is enough to reach (0, 0) from anywhere on a
+    // 640x480 screen even if the cursor starts at the far corner,
+    // and each hop generates only ~7 PS/2 packets.
+    for _ in 0..3 {
+        proc.mouse_move(-700, -500)
+            .await
+            .map_err(|e| format!("home: {}", e))?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
-    // Move to absolute target (cursor is now at 0, 0 after clamping).
+    // Move to absolute target in a single delta (cursor is now at
+    // 0,0 after clamping). Long settle so Lumen fully consumes all
+    // the PS/2 packets this generates before the caller clicks.
     proc.mouse_move(cx, cy)
         .await
         .map_err(|e| format!("move: {}", e))?;
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    Ok(())
+}
 
-    // Press + release left button.
+/// Press + release left button with a visible gap so Lumen sees a
+/// discrete click, not a flutter.
+async fn left_click(proc: &vortex::QemuProcess) -> Result<(), String> {
     proc.mouse_button(1)
         .await
         .map_err(|e| format!("press: {}", e))?;
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
     proc.mouse_button(0)
         .await
         .map_err(|e| format!("release: {}", e))?;
+    tokio::time::sleep(Duration::from_millis(80)).await;
     Ok(())
 }
 
@@ -178,20 +189,35 @@ async fn dock_items_launch_apps() {
         let item = dock.get(*key).unwrap().clone();
         eprintln!("clicking {} at ({}, {})", key, item.cx, item.cy);
 
-        click_at(&proc, item.cx, item.cy)
+        // Phase 1: home and move to target.
+        home_and_move(&proc, item.cx, item.cy)
             .await
-            .unwrap_or_else(|e| panic!("click_at {}: {}", key, e));
+            .unwrap_or_else(|e| panic!("home_and_move {}: {}", key, e));
+
+        // Diagnostic: capture a frame after the cursor move but
+        // BEFORE the click, so we can see where the cursor actually
+        // landed.
+        let premove = screenshots_dir.join(format!("dock_{}_premove.ppm", key));
+        let _ = std::fs::remove_file(&premove);
+        if let Err(e) = proc.screendump(&premove).await {
+            eprintln!("  premove screendump failed: {}", e);
+        } else {
+            eprintln!("  premove screenshot: {}", premove.display());
+        }
+
+        // Phase 2: click.
+        left_click(&proc)
+            .await
+            .unwrap_or_else(|e| panic!("left_click {}: {}", key, e));
 
         // Diagnostic: capture a frame immediately after the click
-        // dispatch so we can see where the cursor actually landed
-        // and whether any visible change happened, regardless of
-        // whether the window_opened signal fired.
+        // dispatch so we can see whether any visible change happened.
         let diag = screenshots_dir.join(format!("dock_{}_postclick.ppm", key));
         let _ = std::fs::remove_file(&diag);
         if let Err(e) = proc.screendump(&diag).await {
-            eprintln!("  diagnostic screendump failed: {}", e);
+            eprintln!("  postclick screendump failed: {}", e);
         } else {
-            eprintln!("  diagnostic screenshot: {}", diag.display());
+            eprintln!("  postclick screenshot: {}", diag.display());
         }
 
         wait_for_line(
