@@ -406,6 +406,7 @@ main(void)
 
     /* Signal test harness: fade-in complete, desktop is on screen */
     dprintf(2, "[LUMEN] ready\n");
+    dock_emit_debug_lines();
 
     cursor_show(comp.cursor_x, comp.cursor_y);
 
@@ -687,8 +688,11 @@ next_poll:
 
                     /* Dock click */
                     if (dock_item >= 0) {
-                        if (dock_item == DOCK_ITEM_TERMINAL)
+                        if (dock_item == DOCK_ITEM_TERMINAL) {
                             spawn_terminal(&comp, fb_w, fb_h);
+                            dprintf(2, "[LUMEN] window_opened=%s\n",
+                                    dock_item_key(dock_item));
+                        }
                         else if (dock_item == DOCK_ITEM_WIDGETS) {
                             glyph_window_t *wt = widget_test_create();
                             if (wt) {
@@ -699,9 +703,11 @@ next_poll:
                                 comp.focused = wt;
                                 wt->focused_window = 1;
                                 glyph_window_mark_all_dirty(wt);
+                                dprintf(2, "[LUMEN] window_opened=%s\n",
+                                        dock_item_key(dock_item));
                             }
                         }
-                        /* Settings and Files are stubs */
+                        /* Settings and Files are stubs — no window_opened line */
                         comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
                         activity = 1;
                         goto after_mouse;
