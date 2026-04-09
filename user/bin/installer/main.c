@@ -22,6 +22,7 @@
 #include <termios.h>
 #include <crypt.h>
 #include <stdint.h>
+#include <errno.h>
 
 #ifndef O_TRUNC
 #define O_TRUNC 0x200
@@ -224,8 +225,20 @@ static int copy_blocks(const char *src_dev, const char *dst_dev,
     for (lba = 0; lba < count; lba += 8) {
         unsigned long long chunk = count - lba;
         if (chunk > 8) chunk = 8;
-        if (blkdev_io(src_dev, lba, chunk, buf, 0) < 0) return -1;
-        if (blkdev_io(dst_dev, lba, chunk, buf, 1) < 0) return -1;
+        errno = 0;
+        long r = blkdev_io(src_dev, lba, chunk, buf, 0);
+        if (r < 0) {
+            printf("\n  ERROR: read %s LBA %llu count %llu rc=%ld errno=%d\n",
+                   src_dev, lba, chunk, r, errno);
+            return -1;
+        }
+        errno = 0;
+        long w = blkdev_io(dst_dev, lba, chunk, buf, 1);
+        if (w < 0) {
+            printf("\n  ERROR: write %s LBA %llu count %llu rc=%ld errno=%d\n",
+                   dst_dev, lba, chunk, w, errno);
+            return -1;
+        }
         unsigned long long pct = (lba + chunk) * 100 / count;
         if (pct != last_pct && pct % 10 == 0) {
             printf("  %s: %llu%%\n", label, pct);
@@ -290,6 +303,10 @@ static int copy_rootfs(const char *dst_dev, unsigned long long dst_blocks)
         printf("ERROR: ramdisk0 not found\n");
         return -1;
     }
+    printf("  ramdisk0: %llu blocks (%llu MB)\n",
+           src_blocks, src_blocks * 512 / (1024*1024));
+    printf("  target:   %s %llu blocks (%llu MB)\n",
+           dst_dev, dst_blocks, dst_blocks * 512 / (1024*1024));
     if (src_blocks > dst_blocks) {
         printf("ERROR: rootfs (%llu blocks) > partition (%llu blocks)\n",
                src_blocks, dst_blocks);
@@ -302,7 +319,7 @@ static int copy_rootfs(const char *dst_dev, unsigned long long dst_blocks)
 
 static int write_grub_cfg(void)
 {
-    int fd = open("/boot/grub/grub.cfg", O_WRONLY | O_CREAT);
+    int fd = open("/boot/grub/grub.cfg", O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         printf("ERROR: cannot create /boot/grub/grub.cfg\n");
         return -1;
@@ -311,6 +328,9 @@ static int write_grub_cfg(void)
      * from the ext2 root partition.  rootfs.img/esp.img modules are
      * only needed on the live ISO (ramdisk), not the installed system
      * where ext2 is mounted directly from the NVMe partition. */
+    /* Installed-system grub.cfg — loaded by GRUB from ext2 root partition.
+     * Matches the ESP config (tools/grub-installed.cfg) in spirit but
+     * paths are relative to the ext2 root, not the ESP prefix. */
     const char *cfg =
         "set timeout=3\n"
         "set default=0\n"
@@ -318,8 +338,12 @@ static int write_grub_cfg(void)
         "insmod all_video\n"
         "insmod gfxterm\n"
         "insmod png\n"
+        "insmod font\n"
         "\n"
         "set gfxmode=1024x768x32,800x600x32,auto\n"
+        "if loadfont /boot/grub/font.pf2; then\n"
+        "    true\n"
+        "fi\n"
         "terminal_input console\n"
         "terminal_output gfxterm\n"
         "\n"
@@ -615,8 +639,17 @@ int main(void)
 
     printf("\nInstall to %s? [y/N] ", devs[target].name);
     fflush(stdout);
-    char ans = 0;
-    read(0, &ans, 1);
+    /* Read the full line so no leftover '\n' pollutes read_password(). */
+    char ansbuf[16] = {0};
+    {
+        int ai = 0;
+        char c;
+        while (ai < (int)sizeof(ansbuf) - 1 && read(0, &c, 1) == 1) {
+            if (c == '\n' || c == '\r') break;
+            ansbuf[ai++] = c;
+        }
+    }
+    char ans = ansbuf[0];
     printf("\n");
     if (ans != 'y' && ans != 'Y') {
         printf("Aborted.\n");

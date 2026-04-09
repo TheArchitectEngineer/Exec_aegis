@@ -34,6 +34,10 @@ typedef enum {
     GLYPH_WIDGET_TABS,
     GLYPH_WIDGET_HBOX,
     GLYPH_WIDGET_VBOX,
+    GLYPH_WIDGET_SLIDER,
+    GLYPH_WIDGET_RADIO,
+    GLYPH_WIDGET_SEPARATOR,
+    GLYPH_WIDGET_TOGGLE,
 } glyph_widget_type_t;
 
 /* ---- Forward declarations ---- */
@@ -89,7 +93,7 @@ void glyph_widget_set_window(glyph_widget_t *root, glyph_window_t *win);
 
 #define GLYPH_TITLEBAR_HEIGHT 30
 #define GLYPH_BORDER_WIDTH    1
-#define GLYPH_SHADOW_OFFSET   4
+#define GLYPH_SHADOW_OFFSET   0  /* no drop shadow — surface == window body */
 
 struct glyph_window {
     /* Position on screen (top-left of border) */
@@ -310,5 +314,57 @@ typedef struct {
 
 glyph_tabs_t *glyph_tabs_create(void (*on_change)(glyph_widget_t *, int));
 void glyph_tabs_add(glyph_tabs_t *tabs, const char *label, glyph_widget_t *panel);
+
+/* ---- Slider ---- */
+
+typedef struct {
+    glyph_widget_t base;
+    int min_val, max_val;
+    int value;
+    int dragging;
+    void (*on_change)(glyph_widget_t *self, int value);
+} glyph_slider_t;
+
+glyph_slider_t *glyph_slider_create(int width, int min_val, int max_val,
+                                    void (*on_change)(glyph_widget_t *, int));
+void glyph_slider_set_value(glyph_slider_t *sl, int value);
+
+/* ---- Radio group ---- */
+
+#define GLYPH_RADIO_MAX 12
+
+typedef struct {
+    glyph_widget_t base;
+    char labels[GLYPH_RADIO_MAX][64];
+    int count;
+    int selected;
+    int spacing;
+    void (*on_change)(glyph_widget_t *self, int index);
+} glyph_radio_t;
+
+glyph_radio_t *glyph_radio_create(const char **labels, int count,
+                                  void (*on_change)(glyph_widget_t *, int));
+void glyph_radio_set_selected(glyph_radio_t *rd, int index);
+
+/* ---- Separator ---- */
+
+typedef struct {
+    glyph_widget_t base;
+} glyph_separator_t;
+
+glyph_separator_t *glyph_separator_create(int width);
+
+/* ---- Toggle switch ---- */
+
+typedef struct {
+    glyph_widget_t base;
+    char label[64];
+    int on;
+    void (*on_change)(glyph_widget_t *self, int on);
+} glyph_toggle_t;
+
+glyph_toggle_t *glyph_toggle_create(const char *label,
+                                    void (*on_change)(glyph_widget_t *, int));
+void glyph_toggle_set(glyph_toggle_t *tg, int on);
 
 #endif /* GLYPH_H */

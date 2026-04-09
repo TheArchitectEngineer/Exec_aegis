@@ -88,7 +88,7 @@ static const char s_cap_httpd[]     = "service NET_SOCKET\n";
 static const char s_cap_dhcp[]      = "service NET_SOCKET NET_ADMIN\n";
 static const char s_cap_stsh[]      = "admin DISK_ADMIN POWER CAP_DELEGATE CAP_QUERY\nadmin PROC_READ\n";
 static const char s_cap_lumen[]     = "service FB THREAD_CREATE\n";
-static const char s_cap_installer[] = "admin DISK_ADMIN\n";
+static const char s_cap_installer[] = "admin DISK_ADMIN AUTH\n";
 
 /* Compile-time size constants for static string entries. */
 static const unsigned int s_hosts_size         = sizeof(s_hosts)         - 1;

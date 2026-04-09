@@ -133,11 +133,15 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     fb_check_amd();         /* warn if AMD GPU present but no UEFI fb tag    */
     nvme_init();            /* NVMe block device — [NVME] OK or silent skip  */
     gpt_scan("nvme0");      /* GPT partitions — [GPT] OK or silent (no NVMe) */
-    /* Mount ext2: prefer NVMe (installed system), fall back to ramdisk (live) */
-    if (ext2_mount("nvme0p1") != 0) {
-        if (blkdev_get("nvme0"))
-            printk("[VFS] WARN: NVMe present but no Aegis root partition — falling back to ramdisk (VOLATILE)\n");
+    /* Mount ext2 root filesystem.
+     * If a ramdisk module is present (live USB/CDROM boot), ALWAYS use it —
+     * never silently pick up an NVMe install which may be stale or broken.
+     * Only mount NVMe when no ramdisk exists (installed system booting
+     * from its own disk without GRUB modules). */
+    if (blkdev_get("ramdisk0")) {
         ext2_mount("ramdisk0");
+    } else if (ext2_mount("nvme0p1") != 0) {
+        printk("[VFS] WARN: no ramdisk and no Aegis root on NVMe — running from initrd only\n");
     }
     cap_policy_load();      /* load /etc/aegis/caps.d/ — must be after ext2  */
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */

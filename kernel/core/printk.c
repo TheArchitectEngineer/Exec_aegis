@@ -22,6 +22,34 @@
 static spinlock_t printk_lock = SPINLOCK_INIT;
 static int printk_quiet = 0;  /* 1 = suppress VGA+FB in printk, serial only */
 
+/* ── Kernel log ring buffer ─────────────────────────────────────────────
+ * 64KB circular buffer; oldest data silently overwritten when full.
+ * Written under printk_lock so no separate lock needed.
+ * klog_read() copies the entire contents in order (oldest → newest). */
+#define KLOG_SIZE  (64u * 1024u)
+static char     klog_buf[KLOG_SIZE];
+static uint32_t klog_head = 0;   /* next write position */
+static uint32_t klog_used = 0;   /* bytes in buffer (capped at KLOG_SIZE) */
+
+static void
+klog_putc(char c)
+{
+    klog_buf[klog_head] = c;
+    klog_head = (klog_head + 1u) % KLOG_SIZE;
+    if (klog_used < KLOG_SIZE)
+        klog_used++;
+}
+
+uint32_t
+klog_read(char *buf, uint32_t bufsz)
+{
+    uint32_t len = klog_used < bufsz ? klog_used : bufsz;
+    uint32_t start = (KLOG_SIZE + klog_head - klog_used) % KLOG_SIZE;
+    for (uint32_t i = 0; i < len; i++)
+        buf[i] = klog_buf[(start + i) % KLOG_SIZE];
+    return len;
+}
+
 void
 printk_set_quiet(int q)
 {
@@ -38,9 +66,7 @@ printk_get_quiet(void)
 static void
 emit_char(char c)
 {
-    /* serial_write_string with a 2-byte buf avoids a dependency on
-     * serial_write_char being declared in arch.h.  Both paths below
-     * go through the string variants which are already declared. */
+    klog_putc(c);
     char buf[2];
     buf[0] = c;
     buf[1] = '\0';

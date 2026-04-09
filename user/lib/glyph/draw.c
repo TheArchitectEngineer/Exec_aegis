@@ -293,6 +293,76 @@ void draw_rounded_rect(surface_t *s, int x, int y, int w, int h,
     }
 }
 
+/* Alpha-blended horizontal line (for rounded shadow) */
+static void blend_hline(surface_t *s, int x0, int x1, int y,
+                        uint32_t color, int alpha)
+{
+    if (y < 0 || y >= s->h) return;
+    if (x0 > x1) { int tmp = x0; x0 = x1; x1 = tmp; }
+    if (x0 < 0) x0 = 0;
+    if (x1 >= s->w) x1 = s->w - 1;
+    int inv = 255 - alpha;
+    uint32_t cr = (color >> 16) & 0xFF;
+    uint32_t cg = (color >> 8) & 0xFF;
+    uint32_t cb = color & 0xFF;
+    for (int i = x0; i <= x1; i++) {
+        uint32_t bg = s->buf[y * s->pitch + i];
+        uint32_t br = (bg >> 16) & 0xFF;
+        uint32_t bg2 = (bg >> 8) & 0xFF;
+        uint32_t bb = bg & 0xFF;
+        uint32_t r = (cr * (unsigned)alpha + br * (unsigned)inv) / 255;
+        uint32_t g = (cg * (unsigned)alpha + bg2 * (unsigned)inv) / 255;
+        uint32_t b = (cb * (unsigned)alpha + bb * (unsigned)inv) / 255;
+        s->buf[y * s->pitch + i] = (r << 16) | (g << 8) | b;
+    }
+}
+
+void draw_blend_rounded_rect(surface_t *s, int x, int y, int w, int h,
+                             int r, uint32_t color, int alpha)
+{
+    if (alpha <= 0 || w <= 0 || h <= 0) return;
+    if (alpha > 255) alpha = 255;
+    if (r < 0) r = 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+
+    /* Interior: three non-overlapping strips so no pixel is double-blended.
+     * Top strip of corners is [y, y+r), middle is [y+r, y+h-r), bottom is [y+h-r, y+h). */
+    /* Center column — full width minus corners, full height */
+    draw_blend_rect(s, x + r, y, w - 2 * r, h, color, alpha);
+    /* Left strip — only the middle vertical range (corners handled below) */
+    draw_blend_rect(s, x, y + r, r, h - 2 * r, color, alpha);
+    /* Right strip */
+    draw_blend_rect(s, x + w - r, y + r, r, h - 2 * r, color, alpha);
+
+    /* Quarter-circle corners — fill scanlines from the edge of the circle
+     * to the edge of the center column (x+r or x+w-r-1), avoiding overlap. */
+    int cx_tl = x + r, cy_tl = y + r;
+    int cx_tr = x + w - r - 1, cy_tr = y + r;
+    int cx_bl = x + r, cy_bl = y + h - r - 1;
+    int cx_br = x + w - r - 1, cy_br = y + h - r - 1;
+    int bx = r, by = 0, d = 1 - r;
+
+    while (bx >= by) {
+        /* Each hline goes from the circle edge to the column boundary.
+         * Top-left: rightward to cx_tl-1 (center column starts at cx_tl) */
+        blend_hline(s, cx_tl - bx, cx_tl - 1, cy_tl - by, color, alpha);
+        blend_hline(s, cx_tl - by, cx_tl - 1, cy_tl - bx, color, alpha);
+        /* Top-right: leftward from cx_tr+1 */
+        blend_hline(s, cx_tr + 1, cx_tr + bx, cy_tr - by, color, alpha);
+        blend_hline(s, cx_tr + 1, cx_tr + by, cy_tr - bx, color, alpha);
+        /* Bottom-left */
+        blend_hline(s, cx_bl - bx, cx_bl - 1, cy_bl + by, color, alpha);
+        blend_hline(s, cx_bl - by, cx_bl - 1, cy_bl + bx, color, alpha);
+        /* Bottom-right */
+        blend_hline(s, cx_br + 1, cx_br + bx, cy_br + by, color, alpha);
+        blend_hline(s, cx_br + 1, cx_br + by, cy_br + bx, color, alpha);
+        by++;
+        if (d <= 0) d += 2 * by + 1;
+        else { bx--; d += 2 * (by - bx) + 1; }
+    }
+}
+
 void draw_blit_scaled(surface_t *dst, int dx, int dy, int dw, int dh,
                       const uint32_t *src, int sw, int sh)
 {
