@@ -132,31 +132,10 @@ isr_dispatch(cpu_state_t *s)
     if (s->vector < 32) {
         /* Ring-3 (userspace) exception: deliver signal instead of panicking */
         if (s->cs == ARCH_USER_CS) {
-            /* Copy-on-write fast path for #PF (vector 14).
-             * error_code bit 0 = P (1 = protection violation)
-             * error_code bit 1 = W/R (1 = write access)
-             * error_code bit 2 = U/S (1 = user mode)
-             * A write protection violation from user mode to a present
-             * page might be a COW fault. vmm_cow_fault_handle checks
-             * the PTE for VMM_FLAG_COW and handles it if so. */
-            if (s->vector == 14 && (s->error_code & 0x7) == 0x7) {
-                aegis_task_t *cur0 = sched_current();
-                if (cur0 && cur0->is_user) {
-                    aegis_process_t *proc0 = (aegis_process_t *)cur0;
-                    uint64_t cr2;
-                    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-                    int cow_rc = vmm_cow_fault_handle(proc0->pml4_phys, cr2);
-                    if (cow_rc == 0)
-                        return;   /* handled — iretq to retry */
-                    if (cow_rc == -2) {
-                        /* OOM resolving COW — deliver SIGBUS */
-                        proc0->pending_signals |= (1ULL << (uint32_t)SIGBUS);
-                        return;
-                    }
-                    /* -1: not a COW page — fall through to SIGSEGV. */
-                }
-            }
-
+            /* COW fault dispatch was wired here briefly as part of the
+             * P1 audit activation; reverted because the activation was
+             * a net regression on Aegis's workload. vmm_cow_fault_handle
+             * remains in vmm.c for future re-enable work. */
             int signum;
             switch (s->vector) {
             case 0:  signum = SIGFPE;  break;
