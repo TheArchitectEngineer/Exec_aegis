@@ -427,7 +427,6 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 - **Baseline** (hardcoded, all processes): VFS_OPEN, VFS_READ, VFS_WRITE, IPC, PROC_READ(read), THREAD_CREATE.
 - **Retired syscalls**: `sys_cap_grant_exec` (361) and `sys_cap_grant_runtime` (363) removed. capd daemon eliminated. Vigil `exec_caps` mechanism eliminated.
 - No cap revocation. Restart process to reset caps.
-- `ls /` OOM is pre-existing since Phase 45.
 
 ### SMP (Phase 38)
 
