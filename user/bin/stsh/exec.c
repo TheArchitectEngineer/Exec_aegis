@@ -121,10 +121,16 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
                 close(pipes[j][1]);
             }
 
+            /* Put child in its own process group for TTY job control.
+             * Parent also calls setpgid as a race guard. */
+            setpgid(0, 0);
             exec_cmd(&cmds[i], envp);
             _exit(127);
         }
 
+        /* Race guard: parent also sets child's pgid in case the
+         * child hasn't run yet when we reach sys_setfg below. */
+        setpgid(pid, pid);
         pids[i] = pid;
     }
 
