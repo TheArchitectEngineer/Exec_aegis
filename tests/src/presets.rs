@@ -117,6 +117,33 @@ pub fn aegis_q35_installer(disk_path: &std::path::Path) -> QemuOpts {
     }
 }
 
+/// q35 preset for GUI installer tests: ISO + NVMe drive + virtio-vga + monitor socket.
+///
+/// Differs from `aegis_q35_installer` in that it uses `virtio-vga`
+/// instead of `-vga std` so that Aegis's `sys_fb_map` syscall can
+/// actually map a framebuffer — the GUI installer refuses to start
+/// otherwise. Same nvme0 drive, same monitor socket, no usb-kbd
+/// (HMP `sendkey` must reach the PS/2 keyboard driver).
+pub fn aegis_q35_gui_installer(disk_path: &std::path::Path) -> QemuOpts {
+    QemuOpts {
+        machine: "q35".into(),
+        display: "vnc=127.0.0.1:19,to=99".into(),
+        devices: vec![
+            "virtio-vga".into(),
+            "nvme,drive=nvme0,serial=aegis0".into(),
+        ],
+        drives: vec![
+            format!("file={},if=none,id=nvme0,format=raw", disk_path.display()),
+        ],
+        extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
+            "-no-reboot".into(),
+        ],
+        serial_capture: true,
+        monitor_socket: true,
+    }
+}
+
 /// q35 preset for post-installer boot: NVMe drive only, no ISO, OVMF UEFI firmware.
 ///
 /// Used for Boot 2 of the installer test to verify the installed
