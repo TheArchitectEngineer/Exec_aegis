@@ -18,6 +18,8 @@ pub fn aegis_pc() -> QemuOpts {
         devices: vec![],
         drives: vec![],
         extra_args: vec![
+            "-nodefaults".into(),
+            "-cpu".into(), "Broadwell".into(),
             "-vga".into(), "std".into(),
             "-no-reboot".into(),
             "-device".into(), "isa-debug-exit,iobase=0xf4,iosize=0x04".into(),
@@ -41,6 +43,7 @@ pub fn aegis_q35() -> QemuOpts {
             format!("file={},format=raw,if=none,id=nvme0", disk().display()),
         ],
         extra_args: vec![
+            "-cpu".into(), "Broadwell".into(),
             "-netdev".into(),
             "user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::8080-:80".into(),
             "-vga".into(), "std".into(),
@@ -99,5 +102,25 @@ mod tests {
         let opts = aegis_q35();
         assert!(!opts.drives.is_empty(), "q35 must have at least one drive");
         assert!(opts.drives[0].contains("nvme0"), "drive must be named nvme0");
+    }
+
+    #[test]
+    fn pc_preset_has_nodefaults() {
+        let opts = aegis_pc();
+        assert!(opts.extra_args.contains(&"-nodefaults".to_string()));
+    }
+
+    #[test]
+    fn pc_preset_has_broadwell_cpu() {
+        let opts = aegis_pc();
+        let args = opts.extra_args.join(" ");
+        assert!(args.contains("-cpu Broadwell"), "missing -cpu Broadwell in: {args}");
+    }
+
+    #[test]
+    fn q35_preset_has_broadwell_cpu() {
+        let opts = aegis_q35();
+        let args = opts.extra_args.join(" ");
+        assert!(args.contains("-cpu Broadwell"), "missing -cpu Broadwell in: {args}");
     }
 }
