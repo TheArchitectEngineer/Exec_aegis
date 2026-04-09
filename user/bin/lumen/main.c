@@ -715,9 +715,6 @@ next_poll:
                 }
 
                 comp_handle_mouse(&comp, final_buttons, total_dx, total_dy);
-                dprintf(2, "[LUMEN] mouse dx=%d dy=%d buttons=0x%x -> cursor=%d,%d\n",
-                        total_dx, total_dy, final_buttons,
-                        comp.cursor_x, comp.cursor_y);
                 /* If no buttons pressed/released and no drag, this is
                  * mouse-only movement — skip full composite */
                 if (!activity && !(final_buttons & 1) && !comp.dragging)
