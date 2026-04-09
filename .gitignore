@@ -5,6 +5,13 @@ kernel/cap/target/
 *.elf
 .worktrees/
 reference/
+
+# musl build artifacts — NEVER track these.
+# A stale config.mak (e.g., from macOS ARM) silently builds ARM musl
+# on x86 servers, producing broken userspace binaries.
+references/musl-*/config.mak
+references/musl-*/obj/
+references/musl-*/lib/
 kernel/*_bin.c
 kernel/*_blob.c
 .init_stamp_*
@@ -27,3 +34,4 @@ user/mmap_test/mmap_test
 user/proc_test/proc_test
 user/pty_test/pty_test
 user/dynlink_test/dynlink_test
+tests/target/
