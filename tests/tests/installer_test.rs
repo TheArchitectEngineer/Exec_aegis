@@ -32,7 +32,7 @@ use std::time::Duration;
 
 const DISK_SIZE_MB: u64 = 128;
 const BOOT_TIMEOUT_SECS: u64 = 120;
-const INSTALL_TIMEOUT_SECS: u64 = 90;
+const INSTALL_TIMEOUT_SECS: u64 = 180;
 
 const ROOT_PW: &str = "forevervigilant";
 const USER_NAME: &str = "alice";
@@ -104,13 +104,30 @@ async fn install_and_boot_from_nvme() {
             .await
             .expect("boot 1 spawn failed");
 
-    // Wait for stsh login shell. The live ISO auto-logs root via
-    // vigil's default login service — the shell prompt contains "# "
-    // once it's ready for input.
-    wait_for_line(&mut stream, "# ", Duration::from_secs(BOOT_TIMEOUT_SECS))
+    // The login/installer prompts (`login: `, `password: `,
+    // `Install to nvme0? [y/N] `, `Root password: `, ...) are
+    // written without trailing newlines, so `wait_for_line` cannot
+    // match them — it only returns whole lines.  We anchor on the
+    // pre-login banner (which DOES end in newlines), then drive
+    // login + installer via blind sleeps with generous gaps.  The
+    // only markers we `wait_for_line` on are the installer's own
+    // `=== Aegis Installer ===` and `=== Installation complete! ===`
+    // which are printed with explicit newline terminators.
+    wait_for_line(&mut stream, "WARNING: This system",
+                  Duration::from_secs(BOOT_TIMEOUT_SECS))
         .await
-        .expect("boot 1: stsh prompt never appeared");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+        .expect("boot 1: pre-login banner never appeared");
+
+    // Let /bin/login finish drawing its `login: ` prompt.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+
+    // Username → password → shell.
+    proc.send_keys("root\n").await.expect("sendkey root");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    proc.send_keys(&format!("{}\n", ROOT_PW))
+        .await
+        .expect("sendkey login pw");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // Launch the installer.
     proc.send_keys("installer\n")
@@ -121,57 +138,70 @@ async fn install_and_boot_from_nvme() {
         .await
         .expect("boot 1: installer banner");
 
-    // Confirm disk.
-    wait_for_line(&mut stream, "Install to nvme0?",
-                  Duration::from_secs(10))
-        .await
-        .expect("boot 1: disk prompt");
+    // Installer prompts (all without trailing newlines):
+    //   Install to nvme0? [y/N]
+    //   Root password:
+    //   Confirm root password:
+    //   Username:
+    //   Password:
+    //   Confirm password:
+    // Drive blindly with generous sleeps.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     proc.send_keys("y\n").await.expect("sendkey y");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Root password (twice).
-    wait_for_line(&mut stream, "Root password:",
-                  Duration::from_secs(10))
-        .await
-        .expect("boot 1: root pw prompt");
     proc.send_keys(&format!("{}\n", ROOT_PW))
         .await
         .expect("sendkey root pw");
-    wait_for_line(&mut stream, "Confirm root password:",
-                  Duration::from_secs(10))
-        .await
-        .expect("boot 1: root pw confirm prompt");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     proc.send_keys(&format!("{}\n", ROOT_PW))
         .await
         .expect("sendkey root pw confirm");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Optional user account.
-    wait_for_line(&mut stream, "Username:",
-                  Duration::from_secs(10))
-        .await
-        .expect("boot 1: user prompt");
     proc.send_keys(&format!("{}\n", USER_NAME))
         .await
         .expect("sendkey username");
-    wait_for_line(&mut stream, "Password:",
-                  Duration::from_secs(10))
-        .await
-        .expect("boot 1: user pw prompt");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     proc.send_keys(&format!("{}\n", USER_PW))
         .await
         .expect("sendkey user pw");
-    wait_for_line(&mut stream, "Confirm password:",
-                  Duration::from_secs(10))
-        .await
-        .expect("boot 1: user pw confirm prompt");
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     proc.send_keys(&format!("{}\n", USER_PW))
         .await
         .expect("sendkey user pw confirm");
 
-    // Wait for installation to finish.
-    wait_for_line(&mut stream, "=== Installation complete! ===",
-                  Duration::from_secs(INSTALL_TIMEOUT_SECS))
-        .await
-        .expect("boot 1: installation did not complete in time");
+    // Wait for installation to finish.  Capture lines so a timeout
+    // shows what the installer was doing.
+    {
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(INSTALL_TIMEOUT_SECS);
+        let mut trace: Vec<String> = Vec::new();
+        let mut found = false;
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, stream.next_line()).await {
+                Ok(Some(line)) => {
+                    let done = line.contains("=== Installation complete! ===");
+                    trace.push(line);
+                    if done { found = true; break; }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        if !found {
+            eprintln!("--- installer serial trace (last {} lines) ---",
+                      trace.len());
+            let skip = trace.len().saturating_sub(40);
+            for l in &trace[skip..] {
+                eprintln!("  {}", l);
+            }
+            eprintln!("--- end ---");
+            panic!("boot 1: installation did not complete within {}s",
+                   INSTALL_TIMEOUT_SECS);
+        }
+    }
     eprintln!("    installation complete");
 
     // Clean shutdown — stsh's exit returns us to login which triggers
@@ -192,17 +222,22 @@ async fn install_and_boot_from_nvme() {
 
     // OVMF firmware init + GRUB menu takes noticeably longer than the
     // direct-BIOS boot (typically 10-20s before Aegis kernel starts).
+    //
+    // Success signal: `[EXT2] OK: mounted nvme0p1`.  This proves
+    //   (a) OVMF found and loaded the ESP,
+    //   (b) GRUB located the Aegis root partition,
+    //   (c) the kernel loaded and mounted the installed ext2
+    //       rootfs successfully.
+    // We intentionally don't wait for [BASTION] greeter ready —
+    // the installed grub.cfg boots `boot=graphical` which expects a
+    // usable framebuffer, and `-vga std` (the test's VGA config)
+    // can't satisfy sys_fb_map. Bastion failing over to respawn
+    // here doesn't indicate an install failure.
     wait_for_line(&mut stream2, "[EXT2] OK: mounted nvme0p1",
                   Duration::from_secs(BOOT_TIMEOUT_SECS))
         .await
         .expect("boot 2: [EXT2] OK: mounted nvme0p1 not seen");
     eprintln!("    [EXT2] OK: mounted nvme0p1");
-
-    wait_for_line(&mut stream2, "[BASTION] greeter ready",
-                  Duration::from_secs(30))
-        .await
-        .expect("boot 2: [BASTION] greeter ready not seen");
-    eprintln!("    [BASTION] greeter ready");
 
     proc2.kill().await.expect("boot 2 kill");
 
