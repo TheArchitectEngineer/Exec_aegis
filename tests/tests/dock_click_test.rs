@@ -182,6 +182,18 @@ async fn dock_items_launch_apps() {
             .await
             .unwrap_or_else(|e| panic!("click_at {}: {}", key, e));
 
+        // Diagnostic: capture a frame immediately after the click
+        // dispatch so we can see where the cursor actually landed
+        // and whether any visible change happened, regardless of
+        // whether the window_opened signal fired.
+        let diag = screenshots_dir.join(format!("dock_{}_postclick.ppm", key));
+        let _ = std::fs::remove_file(&diag);
+        if let Err(e) = proc.screendump(&diag).await {
+            eprintln!("  diagnostic screendump failed: {}", e);
+        } else {
+            eprintln!("  diagnostic screenshot: {}", diag.display());
+        }
+
         wait_for_line(
             &mut stream,
             &format!("[LUMEN] window_opened={}", key),
@@ -190,8 +202,9 @@ async fn dock_items_launch_apps() {
         .await
         .unwrap_or_else(|_| {
             panic!(
-                "clicked {} at ({},{}) but no window opened within 5s",
-                key, item.cx, item.cy
+                "clicked {} at ({},{}) but no window opened within 5s (see {})",
+                key, item.cx, item.cy,
+                diag.display()
             )
         });
 
