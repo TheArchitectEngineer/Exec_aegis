@@ -20,8 +20,20 @@ void pmm_init(void);
 uint64_t pmm_alloc_page(void);
 
 /* Free a page previously returned by pmm_alloc_page().
- * addr must be PAGE_SIZE-aligned. Panics on double-free or bad address. */
+ * addr must be PAGE_SIZE-aligned.
+ *
+ * Refcount semantics (COW fork infrastructure): pmm_free_page decrements
+ * the page's refcount and only clears the bitmap bit when refcount reaches
+ * zero. Every allocation starts at refcount 1, so today every free is the
+ * final one and the behavior matches a plain bitmap free. Once sys_fork
+ * is updated to share pages via pmm_ref_page, the non-final decrements
+ * become meaningful. */
 void pmm_free_page(uint64_t addr);
+
+/* Increment refcount of an already-allocated page (COW fork).
+ * Panics if the page isn't allocated or if the refcount would overflow
+ * (max 255 sharers). */
+void pmm_ref_page(uint64_t addr);
 
 /* pmm_total_pages — return total managed physical pages. */
 uint64_t pmm_total_pages(void);

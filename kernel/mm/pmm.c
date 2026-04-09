@@ -47,6 +47,27 @@ static char *append_str(char *dst, const char *src)
 /* 0 = free, 1 = allocated. Start fully reserved; pmm_init frees usable pages. */
 static uint8_t pmm_bitmap[PMM_MAX_PAGES / 8];
 
+/*
+ * Per-page refcount for COW fork (P1 audit infrastructure).
+ *
+ * Every allocated page has a refcount. pmm_alloc_page sets it to 1.
+ * pmm_ref_page (new) increments it — used by future COW fork to mark
+ * pages as shared. pmm_free_page decrements it and only actually frees
+ * the page when it reaches 0.
+ *
+ * Today all callers alloc-then-free with refcount == 1 the entire time
+ * (no sharing), so the observable behavior is identical to a simple
+ * bitmap allocator. When sys_fork is updated to mark writable pages as
+ * shared (refcount > 1), this array begins tracking sharers and the
+ * page fault handler's COW path is the only code that can drive a
+ * page's refcount back to 1 on write.
+ *
+ * Size: 1 MB (1M pages × 1 byte). Fits comfortably within the 6 MB
+ * kernel BSS budget. Max refcount is 255 — panic on overflow; in
+ * practice a single page never has more than a handful of sharers.
+ */
+static uint8_t pmm_refcount[PMM_MAX_PAGES];
+
 static uint64_t s_total_usable_bytes;
 
 static spinlock_t pmm_lock = SPINLOCK_INIT;
@@ -151,15 +172,46 @@ uint64_t pmm_alloc_page(void)
         for (int bit = 0; bit < 8; bit++) {
             if (!(pmm_bitmap[i] & (1U << bit))) {
                 pmm_bitmap[i] |= (uint8_t)(1U << bit);
-                uint64_t result = (i * 8 + (uint64_t)bit) * PAGE_SIZE;
+                uint64_t pg = i * 8 + (uint64_t)bit;
+                /* Fresh allocation: exactly one owner. */
+                pmm_refcount[pg] = 1;
                 spin_unlock_irqrestore(&pmm_lock, fl);
-                return result;
+                return pg * PAGE_SIZE;
             }
         }
     }
     spin_unlock_irqrestore(&pmm_lock, fl);
     printk("[PMM] WARN: out of physical memory\n");
     return 0;   /* OOM — 0 is always reserved, unambiguous sentinel */
+}
+
+/*
+ * pmm_ref_page — increment refcount of an already-allocated page.
+ *
+ * Used by the (future) COW fork path to share a page between parent
+ * and child. Panics if the page is not currently allocated (refcount
+ * == 0) or if refcount would overflow (>= 255).
+ */
+void pmm_ref_page(uint64_t addr)
+{
+    if (addr & (PAGE_SIZE - 1))
+        panic_halt("[PMM] FAIL: pmm_ref_page called with unaligned addr");
+    uint64_t idx = addr / PAGE_SIZE;
+    if (idx >= PMM_MAX_PAGES)
+        return;    /* MMIO / outside PMM-managed RAM — refcounting N/A */
+
+    irqflags_t fl = spin_lock_irqsave(&pmm_lock);
+    uint8_t rc = pmm_refcount[idx];
+    if (rc == 0) {
+        spin_unlock_irqrestore(&pmm_lock, fl);
+        panic_halt("[PMM] FAIL: pmm_ref_page on unallocated page");
+    }
+    if (rc == 255) {
+        spin_unlock_irqrestore(&pmm_lock, fl);
+        panic_halt("[PMM] FAIL: pmm_ref_page refcount overflow");
+    }
+    pmm_refcount[idx] = (uint8_t)(rc + 1);
+    spin_unlock_irqrestore(&pmm_lock, fl);
 }
 
 void pmm_free_page(uint64_t addr)
@@ -191,7 +243,22 @@ void pmm_free_page(uint64_t addr)
         spin_unlock_irqrestore(&pmm_lock, fl);
         return;
     }
-    pmm_bitmap[idx / 8] &= (uint8_t)~bit;
+    /* Refcount semantics: decrement and only clear the bitmap bit when
+     * the last sharer releases the page. Today every page has refcount
+     * 1 for its entire lifetime (no COW yet), so this is always a 1→0
+     * transition and behaves identically to the old free-immediately
+     * path. When sys_fork is updated to mark shared pages refcount > 1,
+     * the non-final decrements will preserve the page for other owners. */
+    uint8_t rc = pmm_refcount[idx];
+    if (rc == 0) {
+        /* Already free — treat as double-free (same as the bitmap check
+         * above would have caught). Silently skip for MMIO compatibility. */
+        spin_unlock_irqrestore(&pmm_lock, fl);
+        return;
+    }
+    pmm_refcount[idx] = (uint8_t)(rc - 1);
+    if (pmm_refcount[idx] == 0)
+        pmm_bitmap[idx / 8] &= (uint8_t)~bit;
     spin_unlock_irqrestore(&pmm_lock, fl);
 }
 

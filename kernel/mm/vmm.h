@@ -27,6 +27,22 @@
  * through as-is to hardware. */
 #define VMM_FLAG_WC       (1UL << 3)   /* Write-Combining  (PWT=1, PCD=0) → PA1 */
 #define VMM_FLAG_UCMINUS  (1UL << 4)   /* UC-weak          (PWT=0, PCD=1) → PA2 */
+/*
+ * Copy-on-write marker (P1 audit infrastructure).
+ *
+ * On x86-64 this maps to PTE bit 9, which is one of the three OS-available
+ * bits (9/10/11) that the MMU ignores. The kernel uses it to remember
+ * that a page fault on a present + user + read-only page should be
+ * handled by allocating a fresh frame and copying, rather than by
+ * delivering SIGSEGV.
+ *
+ * Today nothing sets this bit — it is infrastructure for the eventual
+ * sys_fork rewrite that will mark writable user pages as RO+COW and
+ * defer the frame copy until the first write fault.
+ *
+ * arch_pte_from_flags must forward this bit into the emitted PTE.
+ */
+#define VMM_FLAG_COW      (1UL << 9)
 #define VMM_FLAG_NX       (1UL << 63)
 
 /* vmm_init — build the initial higher-half page tables and activate them.
