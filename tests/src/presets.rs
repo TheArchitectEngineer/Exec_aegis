@@ -25,6 +25,7 @@ pub fn aegis_pc() -> QemuOpts {
             "-device".into(), "isa-debug-exit,iobase=0xf4,iosize=0x04".into(),
         ],
         serial_capture: true,
+        monitor_socket: false,
     }
 }
 
@@ -52,6 +53,7 @@ pub fn aegis_q35() -> QemuOpts {
             "-device".into(), "isa-debug-exit,iobase=0xf4,iosize=0x04".into(),
         ],
         serial_capture: true,
+        monitor_socket: false,
     }
 }
 

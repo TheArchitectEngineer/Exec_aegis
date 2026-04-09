@@ -8,3 +8,4 @@ pub use assert::{
 };
 pub use harness::{AegisHarness, HarnessError};
 pub use presets::{aegis_pc, aegis_q35, disk, iso};
+pub use vortex::QemuProcess;
