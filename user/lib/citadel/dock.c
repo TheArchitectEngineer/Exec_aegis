@@ -4,10 +4,21 @@
 #include <font.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static int s_dock_x, s_dock_y, s_dock_w;
 static int s_screen_w, s_screen_h;
 static int s_hover_item = -1;
+
+/* Keys used by the GUI test harness to identify dock items by string
+ * rather than by raw integer index. Order must match the DOCK_ITEM_*
+ * defines in dock.h. */
+static const char *s_dock_item_keys[DOCK_ITEM_COUNT] = {
+    [DOCK_ITEM_SETTINGS] = "settings",
+    [DOCK_ITEM_FILES]    = "files",
+    [DOCK_ITEM_TERMINAL] = "terminal",
+    [DOCK_ITEM_WIDGETS]  = "widgets",
+};
 
 void
 dock_init(int screen_w, int screen_h)
@@ -263,4 +274,28 @@ dock_get_rect(int *x, int *y, int *w, int *h)
     *y = s_dock_y;
     *w = s_dock_w;
     *h = DOCK_HEIGHT;
+}
+
+const char *
+dock_item_key(int item)
+{
+    if (item < 0 || item >= DOCK_ITEM_COUNT)
+        return "unknown";
+    return s_dock_item_keys[item];
+}
+
+void
+dock_emit_debug_lines(void)
+{
+    for (int i = 0; i < DOCK_ITEM_COUNT; i++) {
+        int ix, iy;
+        dock_item_rect(i, &ix, &iy);
+        int cx = ix + DOCK_ICON_SIZE / 2;
+        int cy = iy + DOCK_ICON_SIZE / 2;
+        int hw = DOCK_ICON_SIZE / 2;
+        int hh = DOCK_ICON_SIZE / 2;
+        dprintf(2, "[DOCK] item=%s idx=%d cx=%d cy=%d hw=%d hh=%d\n",
+                s_dock_item_keys[i], i, cx, cy, hw, hh);
+    }
+    dprintf(2, "[DOCK] ready\n");
 }
