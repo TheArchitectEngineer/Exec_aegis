@@ -155,15 +155,24 @@ pty_slave_poll_raw(tty_t *tty, char *out)
 /* ── Controlling terminal helper ──────────────────────────────────── */
 
 /*
- * try_acquire_ctty -- if the current process is a session leader with
- * no controlling terminal (sid == pid && no tty has this session_id),
+ * try_acquire_ctty_locked -- if the current process is a session leader
+ * with no controlling terminal (sid == pid && no tty has this session_id),
  * claim this PTY's tty as the controlling terminal.
+ *
+ * CALLER MUST HOLD pty_pool_lock.  This function scans the PTY pool
+ * directly instead of calling tty_find_controlling (which would call
+ * pty_find_by_session, which would attempt to re-acquire pty_pool_lock
+ * and deadlock).  Bug discovered 2026-04-09: sys_spawn creates a new
+ * session leader, which is precisely when this code path was exercised —
+ * so the deadlock only manifested when callers switched from fork+execve
+ * (session inherited, sid != pid, early return) to sys_spawn.
  */
 static void
-try_acquire_ctty(pty_pair_t *pair)
+try_acquire_ctty_locked(pty_pair_t *pair)
 {
 	aegis_task_t *t = sched_current();
 	aegis_process_t *proc;
+	uint32_t j;
 
 	if (!t || !t->is_user)
 		return;
@@ -171,9 +180,20 @@ try_acquire_ctty(pty_pair_t *pair)
 	/* Only session leaders acquire a ctty */
 	if (proc->sid != proc->pid)
 		return;
-	/* Already have a ctty? */
-	if (tty_find_controlling(proc->sid))
-		return;
+	/* Check the console TTY (singleton, no separate lock).  If the
+	 * caller's session already owns the console, don't take a PTY too. */
+	{
+		tty_t *console = tty_console();
+		if (console && console->session_id == proc->sid)
+			return;
+	}
+	/* Inline PTY pool scan — we already hold pty_pool_lock, so we
+	 * must NOT call pty_find_by_session (which re-acquires it). */
+	for (j = 0; j < PTY_MAX_PAIRS; j++) {
+		if (s_pty_pool[j].in_use &&
+		    s_pty_pool[j].tty.session_id == proc->sid)
+			return;   /* session already has a PTY ctty */
+	}
 	pair->tty.session_id = proc->sid;
 	pair->tty.fg_pgrp = proc->pgid;
 }
@@ -436,7 +456,7 @@ ptmx_open(int flags, vfs_file_t *out)
 	pair->tty.poll_raw  = pty_slave_poll_raw;
 	pair->tty.ctx       = pair;
 
-	try_acquire_ctty(pair);
+	try_acquire_ctty_locked(pair);
 	spin_unlock_irqrestore(&pty_pool_lock, fl);
 
 	out->ops    = &s_master_ops;
@@ -469,7 +489,7 @@ pts_open(uint32_t index, int flags, vfs_file_t *out)
 
 	pair->slave_open = 1;
 	pair->slave_refs = 1;
-	try_acquire_ctty(pair);
+	try_acquire_ctty_locked(pair);
 	spin_unlock_irqrestore(&pty_pool_lock, fl);
 
 	out->ops    = &s_slave_ops;
