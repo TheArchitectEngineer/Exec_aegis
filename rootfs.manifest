@@ -46,6 +46,7 @@ user/bin/readlink/readlink.elf  /bin/readlink
 
 # Network / services
 user/bin/httpd/httpd.elf        /bin/httpd
+user/bin/nettest/nettest.elf    /bin/nettest
 user/bin/dhcp/dhcp              /bin/dhcp
 user/bin/chronos/chronos        /bin/chronos
 build/curl/curl                 /bin/curl

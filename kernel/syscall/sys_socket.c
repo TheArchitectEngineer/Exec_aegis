@@ -980,10 +980,12 @@ uint64_t
 sys_netcfg(uint64_t op, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
     aegis_process_t *proc = (aegis_process_t *)sched_current();
-    if (cap_check(proc->caps, CAP_TABLE_SIZE, CAP_KIND_NET_ADMIN, CAP_RIGHTS_WRITE) != 0)
-        return (uint64_t)-(int64_t)130;  /* ENOCAP */
 
     if (op == 0) {
+        /* op=0 (set IP/mask/gw) is privileged — requires NET_ADMIN. */
+        if (cap_check(proc->caps, CAP_TABLE_SIZE,
+                      CAP_KIND_NET_ADMIN, CAP_RIGHTS_WRITE) != 0)
+            return (uint64_t)-(int64_t)130;  /* ENOCAP */
         /* Set IP/mask/gw */
         net_set_config((ip4_addr_t)arg1, (ip4_addr_t)arg2, (ip4_addr_t)arg3);
 
