@@ -102,12 +102,14 @@ enum {
 #define DESC_FIRST_FRAG  (1u << 29)
 #define DESC_LAST_FRAG   (1u << 28)
 
-/* RxConfig bits */
+/* RxConfig bits — 8168c family uses different layout from old 8169 */
 #define RX_DMA_BURST_UNLIMITED  (7u << 8)
-#define RX_FIFO_THRESH_NONE     (7u << 13)
-#define RX_ACCEPT_PHYS          (1u << 1)  /* AcceptMyPhys */
-#define RX_ACCEPT_MULTI         (1u << 2)  /* AcceptMulticast */
-#define RX_ACCEPT_BCAST         (1u << 3)  /* AcceptBroadcast */
+#define RX_MULTI_EN             (1u << 14)  /* 8168c+ */
+#define RX128_INT_EN            (1u << 15)  /* 8168c+ */
+#define RX_ACCEPT_PHYS          (1u << 1)   /* AcceptMyPhys */
+#define RX_ACCEPT_MULTI         (1u << 2)   /* AcceptMulticast */
+#define RX_ACCEPT_BCAST         (1u << 3)   /* AcceptBroadcast */
+#define RX_ACCEPT_MASK          (0x3F)      /* low 6 bits = accept mask */
 
 /* TxConfig bits */
 #define TX_DMA_BURST_1024       (6u << 8)  /* 6 = 1024 bytes */
@@ -430,29 +432,26 @@ rtl8169_init(void)
     s_priv.rx_head = 0;
     arch_wmb();
 
-    /* 10. Configure registers and enable RX/TX. */
+    /* 10. Configure registers and enable RX/TX.
+     *
+     * The order matches Linux's rtl_hw_start():
+     *   unlock → CPlusCmd → RxMaxSize → ring base addrs → lock
+     *   → ChipCmd RxEnb|TxEnb → RxConfig (chip-bits) → TxConfig
+     *   → RxConfig (accept mask) → multicast filter
+     *
+     * Writing RxConfig BEFORE enabling CmdRxEnb leaves it in an
+     * intermediate state on 8168 chips that prevents both TX and RX
+     * from working properly. */
     wr8(REG_CFG9346, CFG_UNLOCK);
 
-    /* TxConfig: standard IFG, 1024-byte max DMA burst */
-    wr32(REG_TX_CONFIG, TX_IFG_STD | TX_DMA_BURST_1024);
+    /* CPlusCmd — preserve existing chip-set bits (RxChkSum/Vlan etc.) */
+    wr16(REG_CPLUS_CMD, rd16(REG_CPLUS_CMD));
 
-    /* RxConfig: AcceptPhys+Bcast+Multi, no FIFO threshold, unlimited DMA burst */
-    wr32(REG_RX_CONFIG,
-         RX_FIFO_THRESH_NONE | RX_DMA_BURST_UNLIMITED |
-         RX_ACCEPT_PHYS | RX_ACCEPT_BCAST | RX_ACCEPT_MULTI);
-
-    /* Accept all multicast for now (no filter) */
-    wr32(REG_MAR0 + 0, 0xFFFFFFFFu);
-    wr32(REG_MAR0 + 4, 0xFFFFFFFFu);
-
-    /* RxMaxSize: largest frame we'll accept (1522 = 1500 MTU + 14 hdr + 4 vlan + 4 fcs) */
+    /* RxMaxSize: largest frame we'll accept (1500 MTU + headers + FCS) */
     wr16(REG_RX_MAXSIZE, 1538);
 
-    /* Max TX packet size — 8064 / 128 = 63. Default is fine but be explicit. */
+    /* Max TX packet size — 8064 / 128 = 63 */
     wr8(REG_MAX_TX_PKT, 63);
-
-    /* CPlusCmd — leave RX checksum off (we ignore opts2 anyway) */
-    wr16(REG_CPLUS_CMD, rd16(REG_CPLUS_CMD));
 
     /* Write descriptor ring base addresses (high BEFORE low — Linux comment
      * says some chips latch on the low write, so high must be set first). */
@@ -463,23 +462,35 @@ rtl8169_init(void)
 
     wr8(REG_CFG9346, CFG_LOCK);
 
-    /* Disable IRQs (we poll), clear any pending status bits. */
-    wr16(REG_INTR_MASK, 0);
-    wr16(REG_INTR_STAT, 0xFFFF);
-
     /* Clear RXDV_GATED_EN in MISC register (8168e+).
      * Without this, the chip silently drops all RX from the PHY even
-     * though the descriptor ring is configured and CmdRxEnb is set.
-     * Linux r8169 does this in rtl_set_rx_max_size's neighborhood for
-     * the affected MAC versions. We do it unconditionally — the bit is
-     * reserved on older chips. */
+     * though the descriptor ring is configured and CmdRxEnb is set. */
     {
         uint32_t misc = rd32(REG_MISC);
         wr32(REG_MISC, misc & ~MISC_RXDV_GATED_EN);
     }
 
-    /* Go: enable RX + TX. */
+    /* Disable IRQs (we poll), clear any pending status bits. */
+    wr16(REG_INTR_MASK, 0);
+    wr16(REG_INTR_STAT, 0xFFFF);
+
+    /* Enable RX + TX FIRST, before final RxConfig write (Linux order). */
     wr8(REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
+
+    /* Now write RxConfig with the chip bits for the 8168 family
+     * (RX128_INT_EN | RX_MULTI_EN | RX_DMA_BURST). The accept mask
+     * gets ORed in below. */
+    wr32(REG_RX_CONFIG,
+         RX128_INT_EN | RX_MULTI_EN | RX_DMA_BURST_UNLIMITED |
+         RX_ACCEPT_PHYS | RX_ACCEPT_BCAST | RX_ACCEPT_MULTI);
+
+    /* TxConfig: standard IFG, 1024-byte max DMA burst */
+    wr32(REG_TX_CONFIG, TX_IFG_STD | TX_DMA_BURST_1024);
+
+    /* Accept all multicast (no hash filter for now) */
+    wr32(REG_MAR0 + 0, 0xFFFFFFFFu);
+    wr32(REG_MAR0 + 4, 0xFFFFFFFFu);
+
     arch_wmb();
 
     /* 11. Register netdev. */

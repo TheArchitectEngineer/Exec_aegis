@@ -169,3 +169,23 @@ udp_bind(uint16_t port, uint32_t sock_id)
     spin_unlock_irqrestore(&udp_lock, fl);
     return -1;
 }
+
+/* udp_unbind: release the binding table entry for `port`.
+ * Called from sock_vfs_close so a subsequent bind() to the same port
+ * doesn't fail with EADDRINUSE. Without this, every UDP socket that
+ * gets closed leaks its port binding (DHCP retry was the symptom that
+ * exposed it: second bind to port 68 failed). */
+void
+udp_unbind(uint16_t port)
+{
+    if (port == 0) return;
+    irqflags_t fl = spin_lock_irqsave(&udp_lock);
+    uint32_t i;
+    for (i = 0; i < UDP_BINDINGS_MAX; i++) {
+        if (s_udp[i].port == port) {
+            s_udp[i].port    = 0;
+            s_udp[i].sock_id = 0;
+        }
+    }
+    spin_unlock_irqrestore(&udp_lock, fl);
+}

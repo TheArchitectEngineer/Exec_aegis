@@ -4,6 +4,7 @@
 #include "vfs.h"
 #include "printk.h"
 #include "tcp.h"
+#include "udp.h"
 #include "sched.h"
 #include "uaccess.h"
 #include "spinlock.h"
@@ -104,6 +105,13 @@ static int sock_vfs_write(void *priv, const void *buf, uint64_t len)
 static void sock_vfs_close(void *priv)
 {
     uint32_t sock_id = (uint32_t)(uintptr_t)priv;
+    /* Release the UDP port binding (if any) before freeing the slot.
+     * Without this, every closed UDP socket leaks its port forever and
+     * the next bind() to the same port returns EADDRINUSE. The DHCP
+     * client retry loop was the symptom that caught this. */
+    sock_t *s = sock_get(sock_id);
+    if (s && s->type == SOCK_TYPE_DGRAM && s->local_port != 0)
+        udp_unbind(s->local_port);
     sock_free(sock_id);
 }
 

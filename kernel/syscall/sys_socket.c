@@ -398,7 +398,14 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
             if (has_timeout && (uint32_t)arch_get_ticks() >= deadline)
                 return (uint64_t)-(int64_t)110;  /* ETIMEDOUT */
             s->waiter_task = (aegis_task_t *)sched_current();
+            /* If a timeout is set, arm the scheduler's sleep_deadline so
+             * sched_tick auto-wakes us at the deadline even if no data
+             * arrives. Without this, sched_block() waits forever. */
+            if (has_timeout)
+                sched_current()->sleep_deadline = deadline;
             sched_block();
+            if (has_timeout)
+                sched_current()->sleep_deadline = 0;
         }
     }
 
@@ -432,7 +439,13 @@ sys_recvfrom(uint64_t fd, uint64_t buf, uint64_t len,
         if (has_timeout && (uint32_t)arch_get_ticks() >= deadline)
             return (uint64_t)-(int64_t)110;  /* ETIMEDOUT */
         s->waiter_task = (aegis_task_t *)sched_current();
+        /* Same sleep_deadline trick as the TCP path above — without it
+         * sched_block() waits forever and the deadline check never fires. */
+        if (has_timeout)
+            sched_current()->sleep_deadline = deadline;
         sched_block();
+        if (has_timeout)
+            sched_current()->sleep_deadline = 0;
     }
 }
 

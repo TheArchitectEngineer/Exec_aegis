@@ -31,4 +31,9 @@ void udp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
 /* udp_bind: register sock_id for dst_port. Returns 0 on success, -1 if already bound. */
 int udp_bind(uint16_t port, uint32_t sock_id);
 
+/* udp_unbind: free the binding table entry for port. Called from socket
+ * close path so that the next bind() to the same port doesn't fail with
+ * EADDRINUSE. No-op if port == 0 or no entry exists. */
+void udp_unbind(uint16_t port);
+
 #endif /* UDP_H */
