@@ -59,6 +59,14 @@ static const char s_sc_upper[] = {
 static void
 buf_push(char c)
 {
+    /* DEBUG: trace every keystroke that reaches the ring buffer.
+     * Distinguishes printable / control / escape so we can see exactly
+     * what userspace will read from /dev/kbd. */
+    if (c >= ' ' && c < 127)
+        printk("[KBD] push '%c' (0x%x)\n", (unsigned)(uint8_t)c, (unsigned)(uint8_t)c);
+    else
+        printk("[KBD] push 0x%x (ctrl)\n", (unsigned)(uint8_t)c);
+
     irqflags_t fl = spin_lock_irqsave(&kbd_lock);
     uint32_t next = (s_head + 1) & (KBD_BUF_SIZE - 1);
     if (next != s_tail) {   /* drop if full */
@@ -84,6 +92,9 @@ void
 kbd_handler(void)
 {
     uint8_t sc = inb(KBD_DATA);
+    /* DEBUG: trace every PS/2 scan code from the i8042 controller.
+     * Includes break codes (bit 7 set) and E0 prefix bytes. */
+    printk("[KBD] ps2 sc=0x%x\n", (unsigned)sc);
     random_add_interrupt_entropy();  /* keyboard timing is excellent entropy */
 
     /* Extended key prefix — set flag, handle next byte */

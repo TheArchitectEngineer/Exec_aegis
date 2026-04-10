@@ -1,5 +1,6 @@
 /* usb_hid.c — USB HID boot-protocol keyboard driver */
 #include "usb_hid.h"
+#include "printk.h"
 
 /* Forward declaration — implemented in kbd.c (Phase 22 Task 4) */
 void kbd_usb_inject(uint8_t ascii);
@@ -60,6 +61,13 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
     shift = (report->modifier & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) != 0;
     ctrl  = (report->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  != 0;
 
+    /* DEBUG: dump every HID boot keyboard report. */
+    printk("[KBD] hid mod=0x%x k=%x %x %x %x %x %x\n",
+           (unsigned)report->modifier,
+           (unsigned)report->keys[0], (unsigned)report->keys[1],
+           (unsigned)report->keys[2], (unsigned)report->keys[3],
+           (unsigned)report->keys[4], (unsigned)report->keys[5]);
+
     /* Find newly pressed keys (in current report but not in previous) */
     for (i = 0; i < 6; i++) {
         uint8_t key = report->keys[i];
@@ -75,6 +83,26 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
         }
         if (already_pressed) continue;
 
+        /* DEBUG: report every newly-pressed key (HID usage code). */
+        printk("[KBD] hid newkey=0x%x shift=%u ctrl=%u\n",
+               (unsigned)key, (unsigned)shift, (unsigned)ctrl);
+
+        /* Arrow keys → emit ANSI ESC [ A/B/C/D triplet
+         * (matches PS/2 driver's handling of E0-prefixed arrows). */
+        char arrow = 0;
+        switch (key) {
+        case 0x4F: arrow = 'C'; break;  /* right arrow */
+        case 0x50: arrow = 'D'; break;  /* left arrow  */
+        case 0x51: arrow = 'B'; break;  /* down arrow  */
+        case 0x52: arrow = 'A'; break;  /* up arrow    */
+        }
+        if (arrow) {
+            kbd_usb_inject(0x1B);
+            kbd_usb_inject('[');
+            kbd_usb_inject((uint8_t)arrow);
+            continue;
+        }
+
         /* New key press — translate to ASCII */
         char ascii = 0;
         if (ctrl && key >= 0x04 && key <= 0x1D) {
@@ -86,6 +114,8 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
 
         if (ascii != 0) {
             kbd_usb_inject((uint8_t)ascii);
+        } else {
+            printk("[KBD] hid drop key=0x%x (no ascii mapping)\n", (unsigned)key);
         }
     }
 

@@ -47,8 +47,13 @@ void usb_mouse_process_report(const uint8_t *data, uint32_t len);
  * xHCI DCI for EP1 IN = 2 * ep_number + direction(IN=1) = 2*1+1 = 3. */
 #define XHCI_EP1_IN_DCI      3u
 
-/* Input Context entry size (bytes per context slot). */
-#define XHCI_CTX_ENTRY_SIZE  32u
+/* Input Context entry size (bytes per context slot).
+ * Determined at init from HCCPARAMS1.CSZ (bit 2):
+ *   0 = 32-byte contexts (xHCI 0.96/1.0 baseline)
+ *   1 = 64-byte contexts (most actual implementations including qemu-xhci)
+ * Stored in s_ctx_entry_size during xhci_init. */
+static uint32_t s_ctx_entry_size = 32u;
+#define XHCI_CTX_ENTRY_SIZE  s_ctx_entry_size
 
 /* USB speed values in Slot Context speed field [PORTSC bits 13:10]. */
 #define XHCI_SPEED_FS        1u   /* Full Speed  (12  Mbit/s) */
@@ -227,17 +232,28 @@ ring_cmd_doorbell(void)
     db[0] = 0;
 }
 
-/* update_erdp — write current event dequeue pointer to interrupter 0. */
+/* update_erdp — write current event dequeue pointer to interrupter 0.
+ * ERDP is at runtime_base + 0x20 (interrupter 0) + 0x18 (ERDP within
+ * interrupter register set), and it must hold a PHYSICAL address — the
+ * controller uses it for DMA. The previous version wrote a kernel virtual
+ * address AND used the wrong offset (0x10 instead of 0x18, which would
+ * land in ERSTBA). */
 static void
 update_erdp(void)
 {
     uint8_t *rts = s_bar0_va + s_cap->rtsoff;
     volatile uint64_t *erdp =
-        (volatile uint64_t *)(rts + 0x20u + 0x10u);
-    *erdp = (uint64_t)(uintptr_t)(&s_evt_ring[s_evt_dequeue]);
+        (volatile uint64_t *)(rts + 0x20u + 0x18u);
+    /* s_evt_ring is at the start of an alloc_page'd region; the page's
+     * physical base is captured at init time as evt_ring_phys.  We don't
+     * store it as a per-driver field, so recompute via kva_page_phys
+     * (cheap walk of the kernel page tables). */
+    *erdp = kva_page_phys((void *)&s_evt_ring[s_evt_dequeue]);
 }
 
 /* poll_cmd_completion — wait for a CMD_COMPLETION event on the event ring.
+ * Skips any other event types (Port Status Change, Transfer events) that
+ * may have been posted before the command completion arrives.
  * Returns the slot_id from bits [31:24] of the event control field on
  * success (TRB_COMPLETION_SUCCESS, cc=1), or 0 on timeout/error. */
 static uint8_t
@@ -249,23 +265,31 @@ poll_cmd_completion(void)
         /* SAFETY: trb is a volatile pointer into a kva-mapped page; the
          * volatile qualifier ensures each cycle-bit read goes to memory. */
         uint32_t ctrl = trb->control;
-        if ((ctrl & 1u) == (uint32_t)s_evt_cycle) {
-            uint32_t trb_type = (ctrl >> 10) & 0x3Fu;
-            uint8_t  slot_id  = (uint8_t)((ctrl >> 24) & 0xFFu);
-            uint8_t  cc       = (uint8_t)((trb->status >> 24) & 0xFFu);
+        if ((ctrl & 1u) != (uint32_t)s_evt_cycle)
+            continue;   /* no new event yet */
 
-            s_evt_dequeue++;
-            if (s_evt_dequeue >= XHCI_EVT_RING_SIZE) {
-                s_evt_dequeue = 0;
-                s_evt_cycle  ^= 1;
-            }
-            update_erdp();
+        uint32_t trb_type = (ctrl >> 10) & 0x3Fu;
+        uint8_t  slot_id  = (uint8_t)((ctrl >> 24) & 0xFFu);
+        uint8_t  cc       = (uint8_t)((trb->status >> 24) & 0xFFu);
 
-            if (trb_type == XHCI_TRB_CMD_COMPLETION && cc == 1u)
+        s_evt_dequeue++;
+        if (s_evt_dequeue >= XHCI_EVT_RING_SIZE) {
+            s_evt_dequeue = 0;
+            s_evt_cycle  ^= 1;
+        }
+        update_erdp();
+
+        if (trb_type == XHCI_TRB_CMD_COMPLETION) {
+            if (cc == 1u)
                 return slot_id;
+            printk("[XHCI] cmd_completion fail: cc=%u slot=%u\n",
+                   (unsigned)cc, (unsigned)slot_id);
             return 0;
         }
+        /* Other event types (port status change, etc.) — skip and keep
+         * looking for the CMD_COMPLETION we issued. */
     }
+    printk("[XHCI] cmd_completion TIMEOUT\n");
     return 0;
 }
 
@@ -302,22 +326,65 @@ issue_address_device(uint8_t slot_id, uint8_t port_num, uint8_t speed)
     ((volatile uint32_t *)ictx)[0] = 0u;
     ((volatile uint32_t *)ictx)[1] = 0x3u;
 
-    /* Slot Context at offset 1 * XHCI_CTX_ENTRY_SIZE = 32 */
+    /* Slot Context (xHCI 1.0 §6.2.2):
+     *   dword0: Route[19:0], Speed[23:20], MTT[25], Hub[26], ContextEntries[31:27]
+     *   dword1: MaxExitLatency[15:0], RootHubPortNumber[23:16], NumberOfPorts[31:24]
+     *   dword2: ParentHubSlotID[7:0], ParentPortNumber[15:8], TTThinkTime[17:16],
+     *           InterrupterTarget[31:22]
+     *   dword3: DeviceAddress[7:0], SlotState[31:27] (read-only)
+     *
+     * Previously wrote RootHubPortNumber to dword2[23:16] (wrong) instead
+     * of dword1[23:16] — controller saw RootHubPortNumber=0 and treated
+     * port_num as a Parent Hub address, returning cc=5 TRB Error. */
     {
         uint8_t *sc = ictx + XHCI_CTX_ENTRY_SIZE;
-        /* dword0: Speed[23:20], ContextEntries[31:27]=1 */
         ((volatile uint32_t *)sc)[0] =
-            ((uint32_t)speed << 20) | (1u << 27);
-        /* dword2: RootHubPortNumber[23:16] */
-        ((volatile uint32_t *)sc)[2] = (uint32_t)port_num << 16;
+            ((uint32_t)speed << 20) | (1u << 27);   /* speed + ContextEntries=1 */
+        ((volatile uint32_t *)sc)[1] =
+            (uint32_t)port_num << 16;               /* RootHubPortNumber */
     }
 
-    /* EP0 Context at offset 2 * XHCI_CTX_ENTRY_SIZE = 64 */
+    /* EP0 Context at offset 2 * XHCI_CTX_ENTRY_SIZE.
+     *
+     * Endpoint Context layout (xHCI 1.0 §6.2.3):
+     *   dword0: EPState[2:0] / Mult / MaxPStreams / LSA / Interval / MaxESITPayloadHi
+     *   dword1: CErr[2:1], EPType[5:3], HID[7], MaxBurstSize[15:8], MaxPacketSize[31:16]
+     *   dword2: DCS[0], reserved[3:1], TR Dequeue Pointer Lo[31:4]
+     *   dword3: TR Dequeue Pointer Hi[31:0]
+     *   dword4: AverageTRBLength[15:0], MaxESITPayloadLo[31:16]
+     *
+     * MaxPacketSize0 is speed-dependent per xHCI spec §4.3.4:
+     *   LS=8, FS=8 (later updated), HS=64, SS=512.
+     *
+     * The previous version set ONLY dword1, leaving the TR Dequeue
+     * Pointer at zero — Address Device "succeeded" structurally but
+     * subsequent control transfers timed out because the controller
+     * had no transfer ring to read commands from. */
     {
+        uint16_t max_packet_size_0;
+        uint64_t tr_phys;
+        switch (speed) {
+        case XHCI_SPEED_LS: max_packet_size_0 = 8;   break;
+        case XHCI_SPEED_FS: max_packet_size_0 = 8;   break;
+        case XHCI_SPEED_HS: max_packet_size_0 = 64;  break;
+        case XHCI_SPEED_SS: max_packet_size_0 = 512; break;
+        default:            max_packet_size_0 = 8;   break;
+        }
+        tr_phys = s_xfer_ring_phys[slot_id];
+
         uint8_t *ep0 = ictx + 2u * XHCI_CTX_ENTRY_SIZE;
-        /* dword1: CErr[2:1]=3, EPType[5:3]=Control(4), MaxPacketSize[31:16]=8 */
+        /* dword1: CErr=3, EPType=Control(4), MaxPacketSize */
         ((volatile uint32_t *)ep0)[1] =
-            (3u << 1) | (XHCI_EP_TYPE_CTRL << 3) | (8u << 16);
+            (3u << 1) | (XHCI_EP_TYPE_CTRL << 3) |
+            ((uint32_t)max_packet_size_0 << 16);
+        /* dword2: TR Dequeue Pointer Lo | DCS (= initial cycle = 1) */
+        ((volatile uint32_t *)ep0)[2] =
+            (uint32_t)(tr_phys & 0xFFFFFFF0u) |
+            (uint32_t)s_xfer_cycle[slot_id];
+        /* dword3: TR Dequeue Pointer Hi */
+        ((volatile uint32_t *)ep0)[3] = (uint32_t)(tr_phys >> 32);
+        /* dword4: Average TRB Length = 8 (control transfers are small) */
+        ((volatile uint32_t *)ep0)[4] = 8u;
     }
 
     /* Clear DCBAA entry — Address Device will populate device context PA */
@@ -357,15 +424,17 @@ issue_configure_ep(uint8_t slot_id, uint8_t port_num, uint8_t speed)
     ((volatile uint32_t *)ictx)[0] = 0u;
     ((volatile uint32_t *)ictx)[1] = 0x9u;
 
-    /* Slot Context: ContextEntries=3 (highest DCI in use is 3 = EP1 IN) */
+    /* Slot Context: ContextEntries=3 (highest DCI in use is 3 = EP1 IN).
+     * RootHubPortNumber goes in dword1[23:16], NOT dword2 (same fix as
+     * issue_address_device — see comment there). */
     {
         uint8_t *sc = ictx + XHCI_CTX_ENTRY_SIZE;
         ((volatile uint32_t *)sc)[0] =
             ((uint32_t)speed << 20) | (3u << 27);
-        ((volatile uint32_t *)sc)[2] = (uint32_t)port_num << 16;
+        ((volatile uint32_t *)sc)[1] = (uint32_t)port_num << 16;
     }
 
-    /* EP1 IN Context at byte offset (DCI+1) * 32 = 4 * 32 = 128 */
+    /* EP1 IN Context at byte offset (DCI+1) * ctx_size = 4 * ctx_size */
     {
         uint8_t *ep1in = ictx + 4u * XHCI_CTX_ENTRY_SIZE;
         /* dword0: Interval[23:16] = 0xA (2^10 microframes ≈ 128ms for HS) */
@@ -493,7 +562,10 @@ issue_control_transfer(uint8_t slot_id, uint64_t setup_pkt, int has_data_in)
     arch_wmb();
     db[slot_id] = 1u;   /* DCI=1 for EP0 */
 
-    /* Poll for Transfer Event completion */
+    /* Poll for Transfer Event completion. Skip non-transfer events
+     * (port status changes, leftover CMD_COMPLETIONs from earlier
+     * commands, etc.) instead of bailing — same fix as
+     * poll_cmd_completion's PSC skip. */
     timeout = 2000000u;
     while (timeout--) {
         evt = &s_evt_ring[s_evt_dequeue];
@@ -513,16 +585,21 @@ issue_control_transfer(uint8_t slot_id, uint64_t setup_pkt, int has_data_in)
             }
             update_erdp();
 
-            if (etype == XHCI_TRB_TRANSFER_EVENT &&
-                (cc == 1u || cc == 13u)) {
-                /* cc=1: Success, cc=13: Short Packet (normal for descriptors) */
-                return (int)((uint32_t)wlen - residual);
+            if (etype == XHCI_TRB_TRANSFER_EVENT) {
+                if (cc == 1u || cc == 13u) {
+                    /* cc=1: Success, cc=13: Short Packet (normal) */
+                    return (int)((uint32_t)wlen - residual);
+                }
+                printk("[XHCI] ctrl_xfer transfer event cc=%u\n",
+                       (unsigned)cc);
+                return -1;
             }
-            /* Unexpected event — error */
-            return -1;
+            /* Other event types (PSC, leftover CMD_COMPLETION) — skip */
+            printk("[XHCI] ctrl_xfer skip etype=%u\n", (unsigned)etype);
         }
     }
-    return -1;   /* timeout */
+    printk("[XHCI] ctrl_xfer TIMEOUT\n");
+    return -1;
 }
 
 /* detect_hid_protocol — issue GET_DESCRIPTOR(Configuration) and walk the
@@ -545,10 +622,17 @@ detect_hid_protocol(uint8_t slot_id)
     int off;
 
     got = issue_control_transfer(slot_id, setup, 1);
+    printk("[XHCI] slot %u GET_DESCRIPTOR(Config) got=0x%x\n",
+           (unsigned)slot_id, (unsigned)got);
     if (got < 4)
         return 0;
 
     buf = s_hid_buf[slot_id];
+    printk("[XHCI] slot %u config desc head: %x %x %x %x %x %x %x %x %x\n",
+           (unsigned)slot_id,
+           (unsigned)buf[0], (unsigned)buf[1], (unsigned)buf[2],
+           (unsigned)buf[3], (unsigned)buf[4], (unsigned)buf[5],
+           (unsigned)buf[6], (unsigned)buf[7], (unsigned)buf[8]);
 
     /* Walk the descriptor chain */
     off = 0;
@@ -604,6 +688,11 @@ enumerate_port(uint32_t port_num)
     uint32_t t;
 
     portsc = *portsc_reg;
+    printk("[XHCI] enum port %u portsc=0x%x ccs=%u pr=%u prc=%u\n",
+           (unsigned)port_num, (unsigned)portsc,
+           (portsc & XHCI_PORTSC_CCS) ? 1u : 0u,
+           (portsc & XHCI_PORTSC_PR)  ? 1u : 0u,
+           (portsc & XHCI_PORTSC_PRC) ? 1u : 0u);
     if (!(portsc & XHCI_PORTSC_CCS))
         return;   /* nothing connected */
 
@@ -611,6 +700,8 @@ enumerate_port(uint32_t port_num)
     speed = (uint8_t)((portsc >> 10) & 0xFu);
     if (speed == 0)
         speed = XHCI_SPEED_HS;
+    printk("[XHCI] port %u speed=%u (1=FS,2=LS,3=HS,4=SS)\n",
+           (unsigned)port_num, (unsigned)speed);
 
     /* Port Reset: set PR bit (bit 4), clear PRC (RW1C bit 21 — writing 1
      * to other RW1C bits must be avoided; preserve the port value and only
@@ -631,8 +722,28 @@ enumerate_port(uint32_t port_num)
     /* Clear PRC by writing 1 to it (RW1C) */
     *portsc_reg = (*portsc_reg & ~0u) | XHCI_PORTSC_PRC;
 
+    /* Pre-Enable-Slot diagnostic dump */
+    {
+        uint32_t usbsts = op_read32(XHCI_OP_USBSTS_OFF);
+        uint32_t usbcmd = op_read32(XHCI_OP_USBCMD_OFF);
+        printk("[XHCI] before EnableSlot: usbcmd=0x%x usbsts=0x%x s_cmd_enq=%u s_cmd_cyc=%u s_evt_deq=%u s_evt_cyc=%u\n",
+               (unsigned)usbcmd, (unsigned)usbsts,
+               (unsigned)s_cmd_enqueue, (unsigned)s_cmd_cycle,
+               (unsigned)s_evt_dequeue, (unsigned)s_evt_cycle);
+    }
+
     /* Enable Slot */
     slot_id = issue_enable_slot();
+
+    /* Post-Enable-Slot diagnostic dump */
+    {
+        uint32_t usbsts = op_read32(XHCI_OP_USBSTS_OFF);
+        printk("[XHCI] after EnableSlot: slot_id=%u usbsts=0x%x evt_ring[0].ctrl=0x%x evt_ring[0].status=0x%x\n",
+               (unsigned)slot_id, (unsigned)usbsts,
+               (unsigned)s_evt_ring[0].control,
+               (unsigned)s_evt_ring[0].status);
+    }
+
     if (slot_id == 0 || slot_id >= XHCI_MAX_SLOTS) {
         if (!s_post_boot)
             printk("[XHCI] port %u: Enable Slot failed\n", (unsigned)port_num);
@@ -664,6 +775,7 @@ enumerate_port(uint32_t port_num)
                    (unsigned)port_num);
         return;
     }
+    printk("[XHCI] slot %u Address Device OK\n", (unsigned)slot_id);
 
     /* Configure EP1 IN */
     if (issue_configure_ep(slot_id, (uint8_t)port_num, speed) != 0) {
@@ -672,10 +784,13 @@ enumerate_port(uint32_t port_num)
                    (unsigned)port_num);
         return;
     }
+    printk("[XHCI] slot %u Configure EP OK\n", (unsigned)slot_id);
 
     /* Detect HID device type via Configuration Descriptor */
     {
         uint8_t proto = detect_hid_protocol(slot_id);
+        printk("[XHCI] slot %u detect_hid_protocol returned %u\n",
+               (unsigned)slot_id, (unsigned)proto);
 
         if (proto == 1) {
             issue_set_protocol(slot_id);
@@ -695,6 +810,8 @@ enumerate_port(uint32_t port_num)
     /* Schedule the first interrupt IN transfer */
     xhci_schedule_interrupt_in(slot_id, XHCI_EP1_IN_DCI,
                                s_hid_buf_phys[slot_id], 8u);
+    printk("[XHCI] slot %u HID kbd ready, first interrupt-in scheduled\n",
+           (unsigned)slot_id);
 }
 
 /* -------------------------------------------------------------------------
@@ -741,6 +858,11 @@ xhci_init(void)
     s_max_slots = (s_cap->hcsparams1)       & 0xFFu;
     s_max_ports = (s_cap->hcsparams1 >> 24) & 0xFFu;
 
+    /* HCCPARAMS1.CSZ (bit 2) — 0 = 32-byte contexts, 1 = 64-byte. */
+    s_ctx_entry_size = (s_cap->hccparams1 & (1u << 2)) ? 64u : 32u;
+    printk("[XHCI] hccparams1=0x%x ctx_size=%u\n",
+           (unsigned)s_cap->hccparams1, (unsigned)s_ctx_entry_size);
+
     /* Step 3: Stop controller — clear USBCMD.RS, wait for USBSTS.HCH.
      * Use op_read32/op_write32 to avoid packed-member address errors. */
     op_write32(XHCI_OP_USBCMD_OFF,
@@ -750,6 +872,10 @@ xhci_init(void)
         return;
     }
 
+    printk("[XHCI] pre-HCRST usbsts=0x%x usbcmd=0x%x\n",
+           (unsigned)op_read32(XHCI_OP_USBSTS_OFF),
+           (unsigned)op_read32(XHCI_OP_USBCMD_OFF));
+
     /* Step 4: Reset controller — set USBCMD.HCRST, wait for it to clear. */
     op_write32(XHCI_OP_USBCMD_OFF,
                op_read32(XHCI_OP_USBCMD_OFF) | XHCI_CMD_HCRST);
@@ -757,13 +883,23 @@ xhci_init(void)
         printk("[XHCI] FAIL: controller reset timeout\n");
         return;
     }
-    /* xHCI spec: wait ≥1ms after reset before accessing operational registers.
-     * A short spin is sufficient here (no interrupt mechanism available). */
-    {
-        volatile uint32_t delay = 100000u;
-        while (delay--)
-            ;
+    printk("[XHCI] post-HCRST usbsts=0x%x\n",
+           (unsigned)op_read32(XHCI_OP_USBSTS_OFF));
+
+    /* xHCI spec §4.2: software shall not write any operational/runtime
+     * register (other than USBSTS) until USBSTS.CNR is '0'. */
+    if (op_spin_until_clear(XHCI_OP_USBSTS_OFF, XHCI_STS_CNR) != 0) {
+        printk("[XHCI] FAIL: CNR did not clear after reset\n");
+        return;
     }
+    printk("[XHCI] post-CNR-clear usbsts=0x%x\n",
+           (unsigned)op_read32(XHCI_OP_USBSTS_OFF));
+
+    /* Clear any sticky RW1C bits in USBSTS so we start with a clean slate. */
+    op_write32(XHCI_OP_USBSTS_OFF,
+               XHCI_STS_HSE | XHCI_STS_EINT | XHCI_STS_HCE);
+    printk("[XHCI] post-RW1C-clear usbsts=0x%x\n",
+           (unsigned)op_read32(XHCI_OP_USBSTS_OFF));
 
     /* Step 5: Allocate DCBAA (Device Context Base Address Array).
      * DCBAA[0] is reserved (must be 0); slots are 1..MaxSlots. */
@@ -822,18 +958,24 @@ xhci_init(void)
         erst[0] = evt_ring_phys;
         erst[1] = XHCI_EVT_RING_SIZE;   /* low 32-bit count; high 32=0 */
 
-        /* Interrupter 0: rts_base + 0x20
-         *   ERSTSZ  at +0x00 (32-bit): number of ERST entries = 1
-         *   ERSTBA  at +0x08 (64-bit): PA of ERST
-         *   ERDP    at +0x10 (64-bit): initial event dequeue pointer */
+        /* Interrupter 0 register set (xHCI 1.0 §5.5.2):
+         *   IMAN   at +0x00 (32-bit) — Interrupter Management
+         *   IMOD   at +0x04 (32-bit) — Interrupter Moderation
+         *   ERSTSZ at +0x08 (32-bit) — Event Ring Segment Table Size
+         *   (reserved at +0x0C)
+         *   ERSTBA at +0x10 (64-bit) — Event Ring Segment Table Base Address
+         *   ERDP   at +0x18 (64-bit) — Event Ring Dequeue Pointer
+         *
+         * The interrupter registers begin at runtime_base + 0x20 (the first
+         * 0x20 bytes are MFINDEX + reserved). */
         rts = s_bar0_va + s_cap->rtsoff;
         {
             volatile uint32_t *erstsz =
-                (volatile uint32_t *)(rts + 0x20u + 0x00u);
+                (volatile uint32_t *)(rts + 0x20u + 0x08u);
             volatile uint64_t *erstba =
-                (volatile uint64_t *)(rts + 0x20u + 0x08u);
-            volatile uint64_t *erdp =
                 (volatile uint64_t *)(rts + 0x20u + 0x10u);
+            volatile uint64_t *erdp =
+                (volatile uint64_t *)(rts + 0x20u + 0x18u);
 
             *erstsz = 1u;
             *erstba = erst_phys;
@@ -854,6 +996,15 @@ xhci_init(void)
     if (op_spin_until_clear(XHCI_OP_USBSTS_OFF, XHCI_STS_HCH) != 0) {
         printk("[XHCI] FAIL: controller did not start\n");
         return;
+    }
+    {
+        uint32_t usbsts = op_read32(XHCI_OP_USBSTS_OFF);
+        uint32_t usbcmd = op_read32(XHCI_OP_USBCMD_OFF);
+        volatile uint64_t *crcr =
+            (volatile uint64_t *)((volatile uint8_t *)s_op + 0x18u);
+        printk("[XHCI] running: usbcmd=0x%x usbsts=0x%x crcr=0x%x cmd_ring_phys=0x%x\n",
+               (unsigned)usbcmd, (unsigned)usbsts,
+               (unsigned)*crcr, (unsigned)s_cmd_ring_phys);
     }
 
     /* Step 12: Enumerate ports */

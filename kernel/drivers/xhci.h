@@ -71,8 +71,11 @@ typedef struct __attribute__((packed)) {
 #define XHCI_CMD_INTE              (1u << 2)
 
 /* USBSTS bits */
-#define XHCI_STS_HCH               (1u << 0)
-#define XHCI_STS_EINT              (1u << 3)
+#define XHCI_STS_HCH               (1u << 0)   /* Host Controller Halted */
+#define XHCI_STS_HSE               (1u << 2)   /* Host System Error */
+#define XHCI_STS_EINT              (1u << 3)   /* Event Interrupt */
+#define XHCI_STS_CNR               (1u << 11)  /* Controller Not Ready */
+#define XHCI_STS_HCE               (1u << 12)  /* Host Controller Error */
 
 /* PORTSC bits */
 #define XHCI_PORTSC_CCS            (1u << 0)
