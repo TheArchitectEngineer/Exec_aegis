@@ -66,13 +66,23 @@ enum {
     REG_TX_CONFIG  = 0x40,
     REG_RX_CONFIG  = 0x44,
     REG_CFG9346    = 0x50,    /* config register lock */
+    REG_PHYAR      = 0x60,    /* 32-bit MII access — phy reg + data */
     REG_PHY_STATUS = 0x6C,    /* 8-bit */
     REG_RX_MAXSIZE = 0xDA,    /* 16-bit */
     REG_CPLUS_CMD  = 0xE0,    /* 16-bit */
     REG_RX_LOW     = 0xE4,
     REG_RX_HIGH    = 0xE8,
     REG_MAX_TX_PKT = 0xEC,    /* 8-bit, units of 128 bytes */
+    REG_MISC       = 0xF0,    /* 32-bit, 8168e+: RXDV_GATED_EN at bit 19 */
 };
+
+#define MISC_RXDV_GATED_EN  (1u << 19)
+
+/* MII PHY register addresses (standard IEEE 802.3 clause 22) */
+#define MII_BMCR        0x00    /* Basic Mode Control Register */
+#define MII_BMCR_RESET    0x8000
+#define MII_BMCR_ANEG_EN  0x1000
+#define MII_BMCR_ANEG_RST 0x0200
 
 /* ChipCmd bits */
 #define CMD_RESET        0x10
@@ -150,6 +160,10 @@ typedef struct {
     /* Ring head pointers (driver-side) */
     uint16_t    tx_head;       /* next slot to fill */
     uint16_t    rx_head;       /* next slot to drain */
+
+    /* Debug: last-seen PHY status, dump on change */
+    uint8_t     last_phy;
+    uint32_t    poll_tick;
 } rtl_priv_t;
 
 static rtl_priv_t s_priv;
@@ -201,6 +215,38 @@ busy_wait_us(uint32_t us)
     volatile uint32_t i;
     for (i = 0; i < us * 100u; i++)
         __asm__ volatile("pause");
+}
+
+/* MII (PHY) register access via PHYAR.
+ * Linux convention: write = 0x80000000 | (reg<<16) | val, then poll
+ * bit 31 to clear. Read = (reg<<16), then poll bit 31 to set, then
+ * read low 16 bits. ~25 iterations × 20us = 500us max wait. */
+static void
+mdio_write(uint8_t reg, uint16_t value)
+{
+    wr32(REG_PHYAR, 0x80000000u | ((uint32_t)(reg & 0x1f) << 16) | value);
+    int i;
+    for (i = 0; i < 100; i++) {
+        if ((rd32(REG_PHYAR) & 0x80000000u) == 0)
+            break;
+        busy_wait_us(20);
+    }
+    busy_wait_us(20);   /* mandatory post-write delay per spec */
+}
+
+static uint16_t
+mdio_read(uint8_t reg)
+{
+    wr32(REG_PHYAR, ((uint32_t)(reg & 0x1f) << 16));
+    int i;
+    for (i = 0; i < 100; i++) {
+        if (rd32(REG_PHYAR) & 0x80000000u)
+            break;
+        busy_wait_us(20);
+    }
+    uint16_t v = (uint16_t)(rd32(REG_PHYAR) & 0xFFFFu);
+    busy_wait_us(20);
+    return v;
 }
 
 /* Walk PCI capability list looking for the Power Management capability.
@@ -322,6 +368,20 @@ rtl8169_init(void)
         s_dev.mac[5] = (uint8_t)(hi >>  8);
     }
 
+    /* 6b. Reset PHY and restart auto-negotiation.
+     * The MAC reset (CmdReset) doesn't touch the PHY. If the previous
+     * driver (e.g. Linux r8169) put the PHY into ALDPS power-down or
+     * left auto-neg disabled, we'd see "link down" forever. Writing
+     * BMCR=0x9200 forces a PHY reset, enables auto-neg, and restarts
+     * negotiation. The actual link-up happens 3-5 seconds later. */
+    mdio_write(MII_BMCR,
+               MII_BMCR_RESET | MII_BMCR_ANEG_EN | MII_BMCR_ANEG_RST);
+    /* Optional sanity: read it back to confirm MDIO is reachable. */
+    {
+        uint16_t bmcr = mdio_read(MII_BMCR);
+        printk("[RTL8169] phy bmcr after reset = 0x%x\n", (unsigned)bmcr);
+    }
+
     /* 7. Allocate descriptor rings (1 page each = 4096B = 256 × 16B). */
     {
         uint64_t  pa;
@@ -407,6 +467,17 @@ rtl8169_init(void)
     wr16(REG_INTR_MASK, 0);
     wr16(REG_INTR_STAT, 0xFFFF);
 
+    /* Clear RXDV_GATED_EN in MISC register (8168e+).
+     * Without this, the chip silently drops all RX from the PHY even
+     * though the descriptor ring is configured and CmdRxEnb is set.
+     * Linux r8169 does this in rtl_set_rx_max_size's neighborhood for
+     * the affected MAC versions. We do it unconditionally — the bit is
+     * reserved on older chips. */
+    {
+        uint32_t misc = rd32(REG_MISC);
+        wr32(REG_MISC, misc & ~MISC_RXDV_GATED_EN);
+    }
+
     /* Go: enable RX + TX. */
     wr8(REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
     arch_wmb();
@@ -450,6 +521,14 @@ rtl8169_send(netdev_t *dev, const void *pkt, uint16_t len)
     if (p->tx_ring[slot].opts1 & DESC_OWN)
         return -1;
 
+    {
+        const uint8_t *b = (const uint8_t *)pkt;
+        printk("[RTL8169] TX slot=%u len=%u dst=%x:%x:%x:%x:%x:%x type=%x%x\n",
+               (unsigned)slot, (unsigned)len,
+               b[0],b[1],b[2],b[3],b[4],b[5],
+               b[12],b[13]);
+    }
+
     /* Copy frame into bounce buffer. */
     _memcpy(p->tx_buf_va[slot], pkt, len);
 
@@ -477,8 +556,30 @@ rtl8169_poll(netdev_t *dev)
 {
     rtl_priv_t *p = (rtl_priv_t *)dev->priv;
 
+    /* Debug: report PHY status changes (e.g. auto-neg completion). */
+    p->poll_tick++;
+    {
+        uint8_t phys = rd8(REG_PHY_STATUS);
+        if (phys != p->last_phy) {
+            printk("[RTL8169] phy_status: 0x%x -> 0x%x %s\n",
+                   (unsigned)p->last_phy, (unsigned)phys,
+                   (phys & PHY_LINK_STS) ? "LINK_UP" : "link_down");
+            p->last_phy = phys;
+        }
+    }
+
+    /* Debug: every 500 polls (~5s) dump rx_head + first descriptor state */
+    if ((p->poll_tick % 500) == 0) {
+        uint32_t opts1 = p->rx_ring[p->rx_head & (NUM_RX_DESC - 1)].opts1;
+        uint16_t intr  = rd16(REG_INTR_STAT);
+        printk("[RTL8169] tick=%u rx_head=%u rx[head].opts1=0x%x intr=0x%x\n",
+               (unsigned)p->poll_tick, (unsigned)p->rx_head,
+               (unsigned)opts1, (unsigned)intr);
+    }
+
     /* Drain the RX ring until we hit a descriptor still owned by the chip. */
     int budget;
+    int delivered = 0;
     for (budget = 0; budget < NUM_RX_DESC; budget++) {
         uint16_t slot  = (uint16_t)(p->rx_head & (NUM_RX_DESC - 1));
         uint32_t opts1 = p->rx_ring[slot].opts1;
@@ -487,6 +588,16 @@ rtl8169_poll(netdev_t *dev)
             break;  /* nothing more to deliver this tick */
 
         uint16_t rlen = (uint16_t)(opts1 & 0x3FFFu);
+
+        if (delivered == 0) {
+            const uint8_t *b = p->rx_buf_va[slot];
+            printk("[RTL8169] RX slot=%u opts1=0x%x len=%u "
+                   "dst=%x:%x:%x:%x:%x:%x src=%x:%x:%x:%x:%x:%x type=%x%x\n",
+                   (unsigned)slot, (unsigned)opts1, (unsigned)rlen,
+                   b[0],b[1],b[2],b[3],b[4],b[5],
+                   b[6],b[7],b[8],b[9],b[10],b[11],
+                   b[12],b[13]);
+        }
 
         /* RTL includes the trailing 4-byte FCS in the length. Strip it. */
         if (rlen >= 18)  /* 14 hdr + 4 fcs */
@@ -503,5 +614,6 @@ rtl8169_poll(netdev_t *dev)
         arch_wmb();
 
         p->rx_head++;
+        delivered++;
     }
 }
