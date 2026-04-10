@@ -19,6 +19,7 @@
 #include "xhci.h"
 #include "ps2_mouse.h"
 #include "virtio_net.h"
+#include "rtl8169.h"
 #include "fb.h"
 #include "ramdisk.h"
 #include "ip.h"
@@ -146,6 +147,7 @@ kernel_main(uint32_t mb_magic, void *mb_info)
     cap_policy_load();      /* load /etc/aegis/caps.d/ — must be after ext2  */
     xhci_init();            /* xHCI USB host — [XHCI] OK or silent skip     */
     virtio_net_init();      /* virtio-net NIC — [NET] OK or silent skip      */
+    rtl8169_init();         /* RTL8168/8169 NIC — [NET] OK or silent skip   */
     net_init();             /* Phase 25: protocol stack init + ICMP self-test ping */
     smp_start_aps();        /* wake APs via INIT-SIPI-SIPI — [SMP] OK       */
     sched_init();           /* init run queue (no tasks yet)                 */
