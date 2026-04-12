@@ -898,3 +898,102 @@ Phase B4+ work item: RP1 PCIe + USB XHCI + Ethernet + GPIO. Tracked but not bloc
 - Pi 5 DTS — `arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-b.dts` in https://github.com/raspberrypi/linux
 - Pi 5 config.txt reference — https://www.raspberrypi.com/documentation/computers/config_txt.html
 - RP1 peripherals — https://datasheets.raspberrypi.com/rp1/rp1-peripherals.pdf
+
+---
+
+## 18. Building a Raspberry Pi 5 SD-card boot directory
+
+`tools/build-pi5-image.sh` packages the ARM64 kernel and Pi 5 firmware
+blobs into a ready-to-flash directory. It does not touch block devices,
+does not need root, and caches firmware blobs in
+`references/pi-firmware/` so repeat runs are offline.
+
+### Build
+
+```
+make -C kernel/arch/arm64 image      # -> kernel/arch/arm64/build/aegis.img
+bash tools/build-pi5-image.sh        # -> build/pi5-image/
+```
+
+### Output layout
+
+`build/pi5-image/` after a successful run:
+
+| File | Source | Purpose |
+|------|--------|---------|
+| `bootcode.bin` | raspberrypi/firmware | legacy early bootloader (Pi 5 ROM ignores but harmless) |
+| `start4.elf` | raspberrypi/firmware | Pi 4/5 GPU firmware, main stage |
+| `fixup4.dat` | raspberrypi/firmware | memory pre-load config for `start4.elf` |
+| `start.elf` | raspberrypi/firmware | legacy GPU firmware fallback |
+| `fixup.dat` | raspberrypi/firmware | legacy memory config fallback |
+| `bcm2712-rpi-5-b.dtb` | raspberrypi/firmware | Pi 5 device tree, parsed by `arch_mm.c` |
+| `config.txt` | generated inline | Aegis boot config (see §17.3 for layout) |
+| `kernel8.img` | `kernel/arch/arm64/build/aegis.img` | the Aegis ARM64 kernel, Linux Image format |
+
+The script refuses to run if `aegis.img` is missing and prints a clear
+pointer to the build command. Firmware files that are zero-sized in the
+cache trigger a re-download; failed downloads leave no partial `.tmp`
+behind.
+
+### Flashing to an SD card
+
+1. Format the SD card as FAT32 (single MBR partition covering the card).
+   - macOS: `diskutil eraseDisk FAT32 AEGISBOOT MBRFormat /dev/diskN`
+   - Linux: `parted /dev/sdX mklabel msdos && parted /dev/sdX mkpart primary fat32 1MiB 100% && mkfs.vfat -F 32 -n AEGISBOOT /dev/sdX1`
+2. Copy every file from `build/pi5-image/` to the SD card root. `cp -v build/pi5-image/* /Volumes/AEGISBOOT/` on macOS.
+3. Eject the card cleanly and insert into the Pi 5.
+
+### USB-TTL serial hookup
+
+Use any 3.3V USB-TTL adapter (CP2102, FT232, CH340). **Do not connect
+the 5V/3.3V red wire** — the Pi is self-powered through USB-C.
+
+```
+Pi 5 GPIO header (pins 1-10, top-left corner of the board):
+
+  pin  1  3.3V       pin  2  5V
+  pin  3  GPIO 2     pin  4  5V
+  pin  5  GPIO 3     pin  6  GND        <-- adapter GND  (black)
+  pin  7  GPIO 4     pin  8  GPIO 14    <-- adapter RXD  (Pi TX -> cable RX)
+  pin  9  GND        pin 10  GPIO 15    <-- adapter TXD  (Pi RX -> cable TX)
+```
+
+Open a 115200 8N1 terminal before powering the Pi:
+
+```
+screen /dev/tty.usbserial-* 115200     # macOS
+screen /dev/ttyUSB0 115200             # Linux
+minicom -b 115200 -o -D /dev/ttyUSB0   # Linux alternative
+```
+
+Expected boot trace on hardware (when the GICv3 driver is in place):
+
+```
+Raspberry Pi ... firmware banner ...
+[SERIAL] OK: PL011 UART initialized
+[PMM] OK: ...
+[GIC] OK: GICv3 initialized
+[TIMER] OK: ...
+[SCHED] OK: scheduler started, N tasks
+vigil: starting
+...
+```
+
+### Known caveats (2026-04-12)
+
+- **Pi 5 hardware boot is untested.** All existing bringup work has been
+  on QEMU virt. The GICv3 driver (§17.2) is in progress in parallel;
+  until it lands, booting the current GICv2-only kernel on Pi 5 silicon
+  will reach `[SERIAL] OK` + `[PMM] OK` and freeze at `[GIC] OK: GICv2
+  initialized` because GIC-600 is not GICv2-compatible.
+- **RP1 south bridge is not driven** (§17.6). Debug UART on GPIO 14/15
+  still lives on the legacy BCM peripheral base (`0xFE201000`) so it
+  works without RP1 code, but USB, Ethernet, and most GPIO are unavailable
+  on first boot.
+- **No block device.** The SD card exposes only a FAT32 boot partition —
+  Aegis ignores it after the firmware hands off, and the kernel boots
+  to the in-memory initrd. Persistent rootfs on Pi 5 is future work.
+- **Single-binary image.** The same `build/aegis.img` also boots QEMU
+  virt GICv2 and GICv3 (see §17.5). Swapping in a GICv3-capable
+  `aegis.img` is a one-file replacement of `kernel8.img` in the output
+  directory; no other file in `build/pi5-image/` needs to change.

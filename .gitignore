@@ -1,4 +1,6 @@
 build/
+build/pi5-image/
+references/pi-firmware/
 kernel/cap/target/
 /tmp/aegis_serial.txt
 *.o
