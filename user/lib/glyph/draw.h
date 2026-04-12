@@ -65,7 +65,7 @@ void draw_text_ui(surface_t *s, int x, int y, const char *str, uint32_t fg);
 #define C_ACCENT    0x004488CC
 #define C_SUBTLE    0x00808898
 #define C_SHADOW    0x00080810
-#define C_TERM_FG   0x0040FF40
+#define C_TERM_FG   0x00E0E0E0
 #define C_TERM_BG   0x000A0A14
 /* Widget-specific dark-mode colors */
 #define C_INPUT_BG  0x001A2030   /* text field / list background */
