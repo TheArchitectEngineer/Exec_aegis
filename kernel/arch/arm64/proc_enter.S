@@ -81,8 +81,9 @@ fork_child_return:
     ldr     x12,       [sp, #(33*8)]
     msr     sp_el0,    x10
     msr     elr_el1,   x11
-    /* Validate SPSR */
-    and     x12, x12, #0xF0000000
+    /* Validate SPSR: force M[4:0]=0 (EL0t) while preserving NZCV, DIT,
+     * PAN, SS, DAIF. Matches RESTORE_ALL_EL0 in vectors.S. */
+    and     x12, x12, #~0x1fUL      /* clear M[4:0] */
     msr     spsr_el1,  x12
     ldp     x0,  x1,  [sp, #(0*8)]
     ldp     x2,  x3,  [sp, #(2*8)]

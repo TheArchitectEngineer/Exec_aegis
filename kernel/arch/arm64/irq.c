@@ -64,13 +64,21 @@ syscall_debug(uint64_t num, uint64_t a1, uint64_t a2)
 void
 exc_sync_el0_handler(void *frame)
 {
-    uint64_t esr, elr, far;
-    (void)frame;
+    uint64_t esr, elr, far, spsr, sp_el0, ttbr0;
     __asm__ volatile("mrs %0, esr_el1" : "=r"(esr));
     __asm__ volatile("mrs %0, elr_el1" : "=r"(elr));
     __asm__ volatile("mrs %0, far_el1" : "=r"(far));
-    printk("[PANIC] user at ELR=0x%lx FAR=0x%lx ESR=0x%lx EC=0x%x\n",
+    __asm__ volatile("mrs %0, spsr_el1" : "=r"(spsr));
+    __asm__ volatile("mrs %0, sp_el0" : "=r"(sp_el0));
+    __asm__ volatile("mrs %0, ttbr0_el1" : "=r"(ttbr0));
+    uint64_t *f = (uint64_t *)frame;
+    printk("[PANIC] user ELR=0x%lx FAR=0x%lx ESR=0x%lx EC=0x%x\n",
            elr, far, esr, (uint32_t)(esr >> 26));
+    printk("[PANIC] SPSR=0x%lx SP0=0x%lx TTBR0=0x%lx\n",
+           spsr, sp_el0, ttbr0);
+    printk("[PANIC] frame x0=%lx x8=%lx usp=%lx elr=%lx spsr=%lx\n",
+           (unsigned long)f[0], (unsigned long)f[8],
+           (unsigned long)f[31], (unsigned long)f[32], (unsigned long)f[33]);
     for (;;)
         __asm__ volatile("wfi");
 }

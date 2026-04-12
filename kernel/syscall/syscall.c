@@ -47,8 +47,10 @@ syscall_dispatch(syscall_frame_t *frame, uint64_t num,
     case  94: num = 231; break;  /* exit_group */
     case  96: num = 218; break;  /* set_tid_address */
     case  99: num = 273; break;  /* set_robust_list */
+    case 101: num = 35;  break;  /* nanosleep */
     case 112: num = 227; break;  /* clock_settime */
     case 113: num = 228; break;  /* clock_gettime */
+    case 115: num = 35; arg1 = arg3; arg2 = arg4; break; /* clock_nanosleep → nanosleep (skip clk_id+flags) */
     case 124: num = 35;  break;  /* sched_yield → nanosleep(0) */
     case 129: num = 62;  break;  /* kill */
     case 130: num = 130; break;  /* rt_sigsuspend */
