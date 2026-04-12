@@ -14,6 +14,7 @@
 #include "console.h"
 #include "cap.h"
 #include "random.h"
+#include "smp.h"
 
 /* From gic.c */
 void gic_init(void);
@@ -48,6 +49,7 @@ void
 kernel_main(uint64_t dtb_phys)
 {
     arch_init();
+    smp_percpu_init_bsp();    /* TPIDR_EL1 — must precede any sched_current() */
     printk("[SERIAL] OK: PL011 UART initialized\n");
 
     /* Convert DTB physical address to TTBR1 VA.

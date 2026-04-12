@@ -10,6 +10,35 @@
 #include <stddef.h>
 #include "arch.h"  /* for arch_set_fs_base */
 #include "printk.h"
+#include "smp.h"
+
+/* ── Per-CPU storage ──────────────────────────────────────────────────
+ * percpu_t g_percpu[MAX_CPUS] is the per-CPU data area. TPIDR_EL1 on each
+ * CPU points at its slot. On ARM64 we currently run single-core so only
+ * g_percpu[0] is used. Must be initialized before any sched_current()
+ * call — percpu_current() reads the pointer out of TPIDR_EL1 and will
+ * dereference garbage otherwise. */
+percpu_t g_percpu[MAX_CPUS];
+uint32_t g_cpu_count = 1;
+volatile uint8_t g_ap_online[MAX_CPUS];
+
+void
+smp_percpu_init_bsp(void)
+{
+    percpu_t *p = &g_percpu[0];
+    p->self = p;
+    p->cpu_id = 0;
+    p->affinity_id = 0;
+    p->current_task = (struct aegis_task_t *)0;
+    p->kernel_stack = 0;
+    p->user_sp_scratch = 0;
+    p->ticks = 0;
+    p->prev_dying_tcb = (void *)0;
+    p->prev_dying_stack = (void *)0;
+    p->prev_dying_stack_pages = 0;
+    __asm__ volatile("msr tpidr_el1, %0" : : "r"(p));
+    __asm__ volatile("isb");
+}
 
 /* GCC emits calls to memcpy/memset even with -ffreestanding.
  * Provide minimal implementations. */
