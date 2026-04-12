@@ -10,10 +10,17 @@
  * be 0x11 for a real PL011). The first hit wins.
  *
  *   QEMU virt:        PA 0x09000000
- *   Raspberry Pi 4/5: PA 0xFE201000 (legacy BCM peripheral base)
+ *   BCM2712 (Pi 5):   PA 0x10_7D00_1000 — the internal debug UART
+ *                     on the RP1-less MMIO bank. Pre-initialised by
+ *                     the Pi firmware at 115200 8N1 from a 48 MHz
+ *                     clock, so no re-init is needed here — we just
+ *                     latch onto it. NOT 0xFE201000: that was the Pi
+ *                     4 legacy peripheral window and does not exist
+ *                     on BCM2712.
  *
- * Both addresses are below 1 GiB so the early TTBR1 block mapping
- * (0xFFFF000000000000 + 1 GiB device memory) covers them.
+ * The QEMU base is in the first 1 GiB device block mapped by
+ * mmu_early.c (kern_l1[0]); the Pi 5 base sits inside kern_l1[4]'s
+ * device block at 0x1_0000_0000..0x1_4000_0000.
  *
  * PL011 register map (offsets from base):
  *   0x000  UARTDR   — data register (write: TX, read: RX)
@@ -55,20 +62,25 @@ uart_w32(uint32_t off, uint32_t val)
  * neither responds (since we're writing to device memory either way,
  * a bad fallback just means no visible output — boot will hang
  * earlier than the kernel banner). */
+#define PL011_QEMU_PA  0x09000000UL
+#define PL011_PI5_PA   0x107D001000UL
+
 void
 uart_init(void)
 {
     volatile uint32_t *qemu =
-        (volatile uint32_t *)(0x09000000UL + KERN_VA_OFFSET);
-    volatile uint32_t *pi =
-        (volatile uint32_t *)(0xFE201000UL + KERN_VA_OFFSET);
+        (volatile uint32_t *)(PL011_QEMU_PA + KERN_VA_OFFSET);
+    volatile uint32_t *pi5 =
+        (volatile uint32_t *)(PL011_PI5_PA  + KERN_VA_OFFSET);
 
     if (qemu[UART_OFF_PERIPHID0 / 4] == 0x11) {
         s_uart_base = qemu;
-    } else if (pi[UART_OFF_PERIPHID0 / 4] == 0x11) {
-        s_uart_base = pi;
+    } else if (pi5[UART_OFF_PERIPHID0 / 4] == 0x11) {
+        s_uart_base = pi5;
     } else {
-        /* Neither probe matched — fall back to QEMU. */
+        /* Neither probe matched — fall back to QEMU. If we're actually
+         * on hardware this will just mean no visible output; the boot
+         * will hang before the banner and the bug will be obvious. */
         s_uart_base = qemu;
     }
 }
