@@ -267,6 +267,7 @@ static const vfs_ops_t initrd_ops = {
     .readdir = (void *)0,
     .dup     = (void *)0,
     .stat    = initrd_stat_fn,
+    .poll    = (void *)0,
 };
 
 /* ── Directory entry type and static directory listings ────────────────── */
@@ -351,6 +352,7 @@ static const vfs_ops_t dir_ops = {
     .readdir = dir_readdir_fn,
     .dup     = (void *)0,
     .stat    = dir_stat_fn,
+    .poll    = (void *)0,
 };
 
 /* ── /dev/urandom VFS device ────────────────────────────────────────────── */
@@ -400,6 +402,7 @@ static const vfs_ops_t s_urandom_ops = {
     .readdir = (void *)0,
     .dup     = (void *)0,
     .stat    = urandom_stat_fn,
+    .poll    = (void *)0,
 };
 
 static vfs_file_t s_urandom_file = {
@@ -460,6 +463,7 @@ static const vfs_ops_t s_mouse_ops = {
     .readdir = (void *)0,
     .dup     = (void *)0,
     .stat    = mouse_stat_fn,
+    .poll    = (void *)0,
 };
 
 static vfs_file_t s_mouse_file = {

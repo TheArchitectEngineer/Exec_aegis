@@ -27,6 +27,7 @@ const vfs_ops_t g_pipe_read_ops = {
     .readdir = (void *)0,
     .dup     = pipe_dup_read_fn,
     .stat    = pipe_stat_fn,
+    .poll    = (void *)0,
 };
 
 const vfs_ops_t g_pipe_write_ops = {
@@ -36,6 +37,7 @@ const vfs_ops_t g_pipe_write_ops = {
     .readdir = (void *)0,
     .dup     = pipe_dup_write_fn,
     .stat    = pipe_stat_fn,
+    .poll    = (void *)0,
 };
 
 /*

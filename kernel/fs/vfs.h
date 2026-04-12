@@ -73,6 +73,11 @@ typedef struct {
      * NULL = driver has no stat; sys_fstat synthesizes a minimal stat.
      * Returns 0 on success. */
     int (*stat)(void *priv, k_stat_t *st);
+    /* poll -- report current readiness events for this fd.
+     * Returns a bitmask of POLLIN/POLLOUT/POLLHUP/POLLERR.
+     * Called from sys_poll / epoll_wait with no locks held.
+     * NULL = fd does not support polling (caller assumes POLLIN|POLLOUT). */
+    uint16_t (*poll)(void *priv);
 } vfs_ops_t;
 
 /* Open file descriptor. Stored in fd_table_t.fds[].

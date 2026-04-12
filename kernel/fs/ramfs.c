@@ -128,6 +128,7 @@ static const vfs_ops_t s_ramfs_ops = {
     .readdir = 0,   /* files are not directories */
     .dup     = 0,
     .stat    = ramfs_stat_fn,
+    .poll    = 0,
 };
 
 /* ── vfs_ops_t callbacks (directory handles — priv is ramfs_t *) ─────── */
@@ -157,6 +158,7 @@ static const vfs_ops_t s_ramfs_dir_ops = {
     .readdir = ramfs_dir_readdir_fn,
     .dup     = 0,
     .stat    = 0,
+    .poll    = 0,
 };
 
 /* ── Public API ─────────────────────────────────────────────────────────── */

@@ -64,6 +64,7 @@ static const vfs_ops_t s_master_ops = {
 	.readdir = (void *)0,
 	.dup     = master_dup_fn,
 	.stat    = master_stat_fn,
+	.poll    = (void *)0,
 };
 
 static const vfs_ops_t s_slave_ops = {
@@ -73,6 +74,7 @@ static const vfs_ops_t s_slave_ops = {
 	.readdir = (void *)0,
 	.dup     = slave_dup_fn,
 	.stat    = slave_stat_fn,
+	.poll    = (void *)0,
 };
 
 /* ── TTY backend callbacks for the slave side ─────────────────────── */

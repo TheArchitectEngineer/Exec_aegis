@@ -28,6 +28,7 @@ static const vfs_ops_t s_sock_ops = {
     .readdir = (void *)0,
     .dup     = sock_vfs_dup,
     .stat    = sock_vfs_stat,
+    .poll    = (void *)0,
 };
 
 static int sock_vfs_read(void *priv, void *buf, uint64_t off, uint64_t len)

@@ -143,4 +143,5 @@ const vfs_ops_t s_ext2_ops = {
     .readdir = ext2_vfs_readdir_fn,
     .dup     = ext2_vfs_dup_fn,
     .stat    = ext2_vfs_stat_fn,
+    .poll    = (void *)0,
 };

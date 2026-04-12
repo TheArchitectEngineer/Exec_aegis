@@ -81,6 +81,7 @@ static const vfs_ops_t s_console_ops = {
     .readdir = (void *)0,
     .dup     = (void *)0,
     .stat    = console_stat_fn,
+    .poll    = (void *)0,
 };
 
 static vfs_file_t s_console_file = {

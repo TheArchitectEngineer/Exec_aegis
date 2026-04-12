@@ -152,6 +152,7 @@ const vfs_ops_t g_unix_sock_ops = {
     .readdir = (void *)0,
     .dup     = unix_vfs_dup,
     .stat    = unix_vfs_stat,
+    .poll    = (void *)0,
 };
 
 /* ── Alloc / Get / Free ────────────────────────────────────────────────── */

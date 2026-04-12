@@ -114,6 +114,7 @@ static const vfs_ops_t s_kbd_ops = {
 	.readdir = (void *)0,
 	.dup     = (void *)0,
 	.stat    = kbd_stat_fn,
+	.poll    = (void *)0,
 };
 
 static vfs_file_t s_kbd_file = {

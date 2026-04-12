@@ -23,6 +23,7 @@ static const vfs_ops_t s_epoll_ops = {
     .readdir = (void *)0,
     .dup     = (void *)0,
     .stat    = (void *)0,
+    .poll    = (void *)0,
 };
 
 /* ── Public API ─────────────────────────────────────────────────────────── */

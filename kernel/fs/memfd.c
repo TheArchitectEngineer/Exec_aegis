@@ -135,6 +135,7 @@ const vfs_ops_t g_memfd_ops = {
     .readdir = (void *)0,
     .dup     = memfd_vfs_dup,
     .stat    = memfd_vfs_stat,
+    .poll    = (void *)0,
 };
 
 /* ── Alloc / Get ───────────────────────────────────────────────────────── */

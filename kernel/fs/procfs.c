@@ -395,6 +395,7 @@ static const vfs_ops_t s_procfs_file_ops = {
     .readdir = 0,
     .dup     = 0,
     .stat    = procfs_file_stat,
+    .poll    = 0,
 };
 
 /* ── VFS ops for directory listings ────────────────────────────────────── */
@@ -518,6 +519,7 @@ static const vfs_ops_t s_procfs_dir_ops = {
     .readdir = procfs_dir_readdir,
     .dup     = 0,
     .stat    = procfs_dir_stat,
+    .poll    = 0,
 };
 
 /* ── path helpers ──────────────────────────────────────────────────────── */
