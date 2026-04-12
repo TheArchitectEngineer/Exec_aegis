@@ -831,6 +831,7 @@ typedef struct {
 #define POLLOUT  0x0004
 #define POLLERR  0x0008
 #define POLLHUP  0x0010
+#define POLLNVAL 0x0020
 
 uint64_t
 sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
@@ -855,6 +856,7 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
             pfd.revents = 0;
             uint32_t sid = sock_id_from_fd(pfd.fd, proc);
             if (sid != SOCK_NONE) {
+                /* Socket fd — use existing socket poll logic */
                 sock_t *s = sock_get(sid);
                 if (s) {
                     if (s->type == SOCK_TYPE_STREAM && s->state == SOCK_CONNECTED) {
@@ -879,6 +881,19 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
                             pfd.revents |= POLLOUT;
                     }
                 }
+            } else if (pfd.fd >= 0 && (uint32_t)pfd.fd < PROC_MAX_FDS &&
+                       proc->fd_table->fds[pfd.fd].ops) {
+                /* VFS fd — use .poll callback */
+                const vfs_ops_t *ops = proc->fd_table->fds[pfd.fd].ops;
+                if (ops->poll) {
+                    uint16_t r = ops->poll(proc->fd_table->fds[pfd.fd].priv);
+                    pfd.revents = r & (pfd.events | POLLERR | POLLHUP);
+                } else {
+                    /* No .poll — permissive default */
+                    pfd.revents = pfd.events & (POLLIN | POLLOUT);
+                }
+            } else {
+                pfd.revents = POLLNVAL;
             }
             if (pfd.revents) ready++;
             /* revents already counted in ready above */
