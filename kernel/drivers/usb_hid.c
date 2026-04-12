@@ -20,7 +20,7 @@ static const char hid_to_ascii[128] = {
     [0x1E] = '1', [0x1F] = '2', [0x20] = '3', [0x21] = '4',
     [0x22] = '5', [0x23] = '6', [0x24] = '7', [0x25] = '8',
     [0x26] = '9', [0x27] = '0',
-    [0x28] = '\n',  /* Enter */
+    [0x28] = '\r',  /* Enter */
     [0x29] = 0x1B,  /* Escape */
     [0x2A] = '\b',  /* Backspace */
     [0x2B] = '\t',  /* Tab */
@@ -42,7 +42,7 @@ static const char hid_to_ascii_shift[128] = {
     [0x1E] = '!', [0x1F] = '@', [0x20] = '#', [0x21] = '$',
     [0x22] = '%', [0x23] = '^', [0x24] = '&', [0x25] = '*',
     [0x26] = '(', [0x27] = ')',
-    [0x28] = '\n', [0x29] = 0x1B, [0x2A] = '\b', [0x2B] = '\t',
+    [0x28] = '\r', [0x29] = 0x1B, [0x2A] = '\b', [0x2B] = '\t',
     [0x2C] = ' ',
     [0x2D] = '_', [0x2E] = '+', [0x2F] = '{', [0x30] = '}',
     [0x31] = '|', [0x33] = ':', [0x34] = '"', [0x35] = '~',
@@ -61,13 +61,6 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
     shift = (report->modifier & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) != 0;
     ctrl  = (report->modifier & (HID_MOD_LCTRL  | HID_MOD_RCTRL))  != 0;
 
-    /* DEBUG: dump every HID boot keyboard report. */
-    printk("[KBD] hid mod=0x%x k=%x %x %x %x %x %x\n",
-           (unsigned)report->modifier,
-           (unsigned)report->keys[0], (unsigned)report->keys[1],
-           (unsigned)report->keys[2], (unsigned)report->keys[3],
-           (unsigned)report->keys[4], (unsigned)report->keys[5]);
-
     /* Find newly pressed keys (in current report but not in previous) */
     for (i = 0; i < 6; i++) {
         uint8_t key = report->keys[i];
@@ -82,10 +75,6 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
             }
         }
         if (already_pressed) continue;
-
-        /* DEBUG: report every newly-pressed key (HID usage code). */
-        printk("[KBD] hid newkey=0x%x shift=%u ctrl=%u\n",
-               (unsigned)key, (unsigned)shift, (unsigned)ctrl);
 
         /* Arrow keys → emit ANSI ESC [ A/B/C/D triplet
          * (matches PS/2 driver's handling of E0-prefixed arrows). */
@@ -112,11 +101,8 @@ void usb_hid_process_report(const uint8_t *data, uint32_t len)
             ascii = shift ? hid_to_ascii_shift[key] : hid_to_ascii[key];
         }
 
-        if (ascii != 0) {
+        if (ascii != 0)
             kbd_usb_inject((uint8_t)ascii);
-        } else {
-            printk("[KBD] hid drop key=0x%x (no ascii mapping)\n", (unsigned)key);
-        }
     }
 
     /* Save current report */

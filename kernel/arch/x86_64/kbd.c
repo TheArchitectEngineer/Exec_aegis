@@ -35,7 +35,7 @@ static const char s_sc_lower[] = {
     0,    0,   '1', '2', '3', '4', '5', '6',  /* 0x00–0x07 */
     '7', '8', '9', '0', '-', '=',  '\b', '\t', /* 0x08–0x0F */
     'q', 'w', 'e', 'r', 't', 'y', 'u', 'i',   /* 0x10–0x17 */
-    'o', 'p', '[', ']', '\n',  0,  'a', 's',   /* 0x18–0x1F */
+    'o', 'p', '[', ']', '\r',  0,  'a', 's',   /* 0x18–0x1F */
     'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',   /* 0x20–0x27 */
     '\'', '`', 0,  '\\','z', 'x', 'c', 'v',   /* 0x28–0x2F */
     'b', 'n', 'm', ',', '.', '/',  0,   '*',   /* 0x30–0x37 */
@@ -47,7 +47,7 @@ static const char s_sc_upper[] = {
     0,    0,   '!', '@', '#', '$', '%', '^',
     '&', '*', '(', ')', '_', '+', '\b', '\t',
     'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
-    'O', 'P', '{', '}', '\n',  0,  'A', 'S',
+    'O', 'P', '{', '}', '\r',  0,  'A', 'S',
     'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
     '"', '~',  0,  '|', 'Z', 'X', 'C', 'V',
     'B', 'N', 'M', '<', '>', '?',  0,   '*',
@@ -59,14 +59,6 @@ static const char s_sc_upper[] = {
 static void
 buf_push(char c)
 {
-    /* DEBUG: trace every keystroke that reaches the ring buffer.
-     * Distinguishes printable / control / escape so we can see exactly
-     * what userspace will read from /dev/kbd. */
-    if (c >= ' ' && c < 127)
-        printk("[KBD] push '%c' (0x%x)\n", (unsigned)(uint8_t)c, (unsigned)(uint8_t)c);
-    else
-        printk("[KBD] push 0x%x (ctrl)\n", (unsigned)(uint8_t)c);
-
     irqflags_t fl = spin_lock_irqsave(&kbd_lock);
     uint32_t next = (s_head + 1) & (KBD_BUF_SIZE - 1);
     if (next != s_tail) {   /* drop if full */
@@ -92,9 +84,6 @@ void
 kbd_handler(void)
 {
     uint8_t sc = inb(KBD_DATA);
-    /* DEBUG: trace every PS/2 scan code from the i8042 controller.
-     * Includes break codes (bit 7 set) and E0 prefix bytes. */
-    printk("[KBD] ps2 sc=0x%x\n", (unsigned)sc);
     random_add_interrupt_entropy();  /* keyboard timing is excellent entropy */
 
     /* Extended key prefix — set flag, handle next byte */
