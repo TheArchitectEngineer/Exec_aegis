@@ -23,10 +23,13 @@
 #define EPOLL_CTL_DEL 2
 #define EPOLL_CTL_MOD 3
 
-typedef struct {
+typedef struct __attribute__((packed)) {
     uint32_t events;
     uint64_t data;   /* user data (epoll_data_t union — we treat as uint64_t) */
 } k_epoll_event_t;
+
+_Static_assert(sizeof(k_epoll_event_t) == 12,
+    "k_epoll_event_t must be 12 bytes (packed, matching Linux ABI)");
 
 typedef struct {
     uint32_t fd;
