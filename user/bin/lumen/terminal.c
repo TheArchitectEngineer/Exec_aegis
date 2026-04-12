@@ -36,10 +36,36 @@ static const uint32_t ansi_colors[16] = {
     0x5599FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF,
 };
 
+/* xterm-256color palette: 0-15 standard, 16-231 6x6x6 cube, 232-255 grayscale */
+static uint32_t ansi_256[256];
+
+static void init_ansi_256(void)
+{
+    for (int i = 0; i < 16; i++)
+        ansi_256[i] = ansi_colors[i];
+    for (int i = 0; i < 216; i++) {
+        int r = (i / 36) * 51;
+        int g = ((i / 6) % 6) * 51;
+        int b = (i % 6) * 51;
+        ansi_256[16 + i] = (uint32_t)((r << 16) | (g << 8) | b);
+    }
+    for (int i = 0; i < 24; i++) {
+        int v = 8 + i * 10;
+        ansi_256[232 + i] = (uint32_t)((v << 16) | (v << 8) | v);
+    }
+}
+
+#define TERM_DEFAULT_COLOR 0xFFFFFFFFU
+
+#define ATTR_BOLD      0x01
+#define ATTR_UNDERLINE 0x04
+#define ATTR_REVERSE   0x08
+
 typedef struct {
     char ch;
-    uint8_t fg;  /* index into ansi_colors, 0xFF = default */
-    uint8_t bg;  /* index into ansi_colors, 0xFF = default */
+    uint32_t fg;    /* 0xRRGGBB or TERM_DEFAULT_COLOR */
+    uint32_t bg;    /* 0xRRGGBB or TERM_DEFAULT_COLOR */
+    uint8_t  attrs; /* ATTR_BOLD | ATTR_UNDERLINE | ATTR_REVERSE */
 } term_cell_t;
 
 typedef struct {
@@ -48,14 +74,20 @@ typedef struct {
     int cx, cy;     /* cursor position (relative to visible area bottom) */
     int cell_w, cell_h; /* character cell size (TTF or bitmap fallback) */
     term_cell_t *grid;  /* ring buffer: total_rows * cols */
-    uint8_t cur_fg, cur_bg;  /* current SGR attributes (0xFF = default) */
+    uint32_t cur_fg, cur_bg;  /* current SGR colors (TERM_DEFAULT_COLOR = default) */
+    uint8_t cur_attrs;        /* current ATTR_* flags */
     int total_rows; /* rows + SCROLLBACK_LINES */
     int scroll_top; /* index of first visible line in ring buffer (bottom view) */
     int scroll_offset; /* how far user has scrolled back (0 = bottom) */
     /* ANSI escape parser state */
     int esc_state;      /* 0=normal, 1=got ESC, 2=got CSI (ESC[) */
-    int esc_params[4];
+    int esc_params[8];
     int esc_nparam;
+    int esc_private;    /* 1 if '?' seen after CSI */
+    /* Cursor visibility (DEC ?25) */
+    int cursor_visible;
+    /* Alternate screen buffer (DEC ?1049) */
+    int saved_cx, saved_cy;
     /* Selection state */
     int sel_active;     /* 1 if selection in progress */
     int sel_start_col, sel_start_row;  /* start of selection (visible grid coords) */
@@ -101,7 +133,7 @@ static void term_scroll(term_priv_t *tp)
     int new_bottom = (tp->scroll_top + tp->rows - 1) % tp->total_rows;
     term_cell_t *row = &tp->grid[new_bottom * tp->cols];
     for (int i = 0; i < tp->cols; i++)
-        row[i] = (term_cell_t){' ', 0xFF, 0xFF};
+        row[i] = (term_cell_t){' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
     tp->cy = tp->rows - 1;
 }
 
@@ -174,7 +206,7 @@ static void render_term_grid(glyph_window_t *win)
 
         if (!row_has_sel) {
             for (int c = 0; c < tp->cols; c++) {
-                if (row_start[c].ch != ' ' || row_start[c].bg != 0xFF) {
+                if (row_start[c].ch != ' ' || row_start[c].bg != TERM_DEFAULT_COLOR) {
                     row_has_content = 1;
                     break;
                 }
@@ -188,27 +220,39 @@ static void render_term_grid(glyph_window_t *win)
             int px = ox + c * cw;
             int py = oy + r * ch;
 
+            /* Resolve colors */
+            uint32_t fg = (cell->fg != TERM_DEFAULT_COLOR) ? cell->fg : C_TERM_FG;
+            uint32_t bg = (cell->bg != TERM_DEFAULT_COLOR) ? cell->bg : C_TERM_BG;
+
+            /* Apply reverse video */
+            if (cell->attrs & ATTR_REVERSE) {
+                uint32_t tmp = fg; fg = bg; bg = tmp;
+            }
+
             /* Draw cell background if non-default */
-            if (cell->bg != 0xFF && cell->bg < 16)
-                draw_fill_rect(s, px, py, cw, ch, ansi_colors[cell->bg]);
+            if (bg != C_TERM_BG)
+                draw_fill_rect(s, px, py, cw, ch, bg);
 
             if (row_has_sel && cell_in_sel(r, c, sr, sc, er, ec))
                 draw_blend_rect(s, px, py, cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
 
-            if (cell->ch != ' ') {
-                uint32_t fg = (cell->fg != 0xFF && cell->fg < 16)
-                              ? ansi_colors[cell->fg] : C_TERM_FG;
-                if (g_font_mono)
-                    font_draw_char(s, g_font_mono, 16, px, py, cell->ch, fg);
-                else
-                    draw_char(s, px, py, cell->ch, fg, C_TERM_BG);
+            if (cell->ch != ' ' || (cell->attrs & ATTR_UNDERLINE)) {
+                if (cell->ch != ' ') {
+                    if (g_font_mono)
+                        font_draw_char(s, g_font_mono, 16, px, py, cell->ch, fg);
+                    else
+                        draw_char(s, px, py, cell->ch, fg, C_TERM_BG);
+                }
+                /* Underline: 1px line at bottom of cell */
+                if (cell->attrs & ATTR_UNDERLINE)
+                    draw_fill_rect(s, px, py + ch - 1, cw, 1, fg);
             }
         }
     }
 
     /* Blinking cursor block (only when viewing bottom).
      * Uses wall clock so blink works even when terminal is idle. */
-    if (tp->master_fd >= 0 && tp->scroll_offset == 0) {
+    if (tp->master_fd >= 0 && tp->scroll_offset == 0 && tp->cursor_visible) {
         struct timespec now;
         clock_gettime(CLOCK_REALTIME, &now);
         int phase = (int)(now.tv_nsec / 500000000L) & 1; /* 0 or 1, toggles every 500ms */
@@ -263,8 +307,9 @@ static void term_grid_puts(term_priv_t *tp, const char *msg)
         } else if (ch >= 32 && ch <= 126) {
             term_cell_t *cell = grid_cell_abs(tp, tp->cy, tp->cx);
             cell->ch = (char)ch;
-            cell->fg = 0xFF;
-            cell->bg = 0xFF;
+            cell->fg = TERM_DEFAULT_COLOR;
+            cell->bg = TERM_DEFAULT_COLOR;
+            cell->attrs = 0;
             tp->cx++;
             if (tp->cx >= tp->cols) {
                 tp->cx = 0;
@@ -316,7 +361,7 @@ static void term_csi(term_priv_t *tp, int final)
     }
     case 'J': /* ED -- erase in display */
         {
-            term_cell_t blank = {' ', 0xFF, 0xFF};
+            term_cell_t blank = {' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
             if (n == 2) {
                 for (int r = 0; r < tp->rows; r++)
                     for (int c2 = 0; c2 < tp->cols; c2++)
@@ -334,7 +379,7 @@ static void term_csi(term_priv_t *tp, int final)
         break;
     case 'K': /* EL -- erase in line */
         {
-            term_cell_t blank = {' ', 0xFF, 0xFF};
+            term_cell_t blank = {' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
             if (n == 0) {
                 for (int c2 = tp->cx; c2 < tp->cols; c2++)
                     *grid_cell_abs(tp, tp->cy, c2) = blank;
@@ -346,21 +391,94 @@ static void term_csi(term_priv_t *tp, int final)
         break;
     case 'm': /* SGR -- set graphic rendition (colors) */
         if (tp->esc_nparam == 0) {
-            /* ESC[m = reset */
-            tp->cur_fg = 0xFF;
-            tp->cur_bg = 0xFF;
+            tp->cur_fg = TERM_DEFAULT_COLOR;
+            tp->cur_bg = TERM_DEFAULT_COLOR;
+            tp->cur_attrs = 0;
         }
         for (int pi = 0; pi < tp->esc_nparam; pi++) {
             int p = tp->esc_params[pi];
-            if (p == 0) { tp->cur_fg = 0xFF; tp->cur_bg = 0xFF; }
-            else if (p >= 30 && p <= 37) tp->cur_fg = (uint8_t)(p - 30);
-            else if (p == 39) tp->cur_fg = 0xFF;
-            else if (p >= 40 && p <= 47) tp->cur_bg = (uint8_t)(p - 40);
-            else if (p == 49) tp->cur_bg = 0xFF;
-            else if (p >= 90 && p <= 97) tp->cur_fg = (uint8_t)(p - 90 + 8);
-            else if (p >= 100 && p <= 107) tp->cur_bg = (uint8_t)(p - 100 + 8);
-            else if (p == 1) { /* bold → bright variant */
-                if (tp->cur_fg != 0xFF && tp->cur_fg < 8) tp->cur_fg += 8;
+            if (p == 0) {
+                tp->cur_fg = TERM_DEFAULT_COLOR;
+                tp->cur_bg = TERM_DEFAULT_COLOR;
+                tp->cur_attrs = 0;
+            }
+            else if (p == 1) tp->cur_attrs |= ATTR_BOLD;
+            else if (p == 4) tp->cur_attrs |= ATTR_UNDERLINE;
+            else if (p == 7) tp->cur_attrs |= ATTR_REVERSE;
+            else if (p == 22) tp->cur_attrs &= (uint8_t)~ATTR_BOLD;
+            else if (p == 24) tp->cur_attrs &= (uint8_t)~ATTR_UNDERLINE;
+            else if (p == 27) tp->cur_attrs &= (uint8_t)~ATTR_REVERSE;
+            else if (p >= 30 && p <= 37) {
+                int idx = p - 30;
+                if (tp->cur_attrs & ATTR_BOLD) idx += 8;
+                tp->cur_fg = ansi_colors[idx];
+            }
+            else if (p == 39) tp->cur_fg = TERM_DEFAULT_COLOR;
+            else if (p >= 40 && p <= 47) tp->cur_bg = ansi_colors[p - 40];
+            else if (p == 49) tp->cur_bg = TERM_DEFAULT_COLOR;
+            else if (p >= 90 && p <= 97) tp->cur_fg = ansi_colors[p - 90 + 8];
+            else if (p >= 100 && p <= 107) tp->cur_bg = ansi_colors[p - 100 + 8];
+            /* 256-color: 38;5;N (fg) / 48;5;N (bg) */
+            else if (p == 38 && pi + 2 < tp->esc_nparam
+                     && tp->esc_params[pi + 1] == 5) {
+                int idx = tp->esc_params[pi + 2];
+                if (idx >= 0 && idx < 256)
+                    tp->cur_fg = ansi_256[idx];
+                pi += 2;
+            }
+            else if (p == 48 && pi + 2 < tp->esc_nparam
+                     && tp->esc_params[pi + 1] == 5) {
+                int idx = tp->esc_params[pi + 2];
+                if (idx >= 0 && idx < 256)
+                    tp->cur_bg = ansi_256[idx];
+                pi += 2;
+            }
+            /* Truecolor: 38;2;R;G;B (fg) / 48;2;R;G;B (bg) */
+            else if (p == 38 && pi + 4 < tp->esc_nparam
+                     && tp->esc_params[pi + 1] == 2) {
+                int r = tp->esc_params[pi + 2] & 0xFF;
+                int g = tp->esc_params[pi + 3] & 0xFF;
+                int b = tp->esc_params[pi + 4] & 0xFF;
+                tp->cur_fg = (uint32_t)((r << 16) | (g << 8) | b);
+                pi += 4;
+            }
+            else if (p == 48 && pi + 4 < tp->esc_nparam
+                     && tp->esc_params[pi + 1] == 2) {
+                int r = tp->esc_params[pi + 2] & 0xFF;
+                int g = tp->esc_params[pi + 3] & 0xFF;
+                int b = tp->esc_params[pi + 4] & 0xFF;
+                tp->cur_bg = (uint32_t)((r << 16) | (g << 8) | b);
+                pi += 4;
+            }
+        }
+        break;
+    case 'h': /* SM -- set mode */
+        if (tp->esc_private) {
+            if (n == 25) tp->cursor_visible = 1;
+            else if (n == 1049) {
+                /* Save cursor + clear screen (alternate screen) */
+                tp->saved_cx = tp->cx;
+                tp->saved_cy = tp->cy;
+                term_cell_t blank = {' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
+                for (int r = 0; r < tp->rows; r++)
+                    for (int c2 = 0; c2 < tp->cols; c2++)
+                        *grid_cell_abs(tp, r, c2) = blank;
+                tp->cx = 0;
+                tp->cy = 0;
+            }
+        }
+        break;
+    case 'l': /* RM -- reset mode */
+        if (tp->esc_private) {
+            if (n == 25) tp->cursor_visible = 0;
+            else if (n == 1049) {
+                /* Restore cursor + clear screen (leave alternate screen) */
+                term_cell_t blank = {' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
+                for (int r = 0; r < tp->rows; r++)
+                    for (int c2 = 0; c2 < tp->cols; c2++)
+                        *grid_cell_abs(tp, r, c2) = blank;
+                tp->cx = tp->saved_cx;
+                tp->cy = tp->saved_cy;
             }
         }
         break;
@@ -386,6 +504,7 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
             if (ch == '[') {
                 tp->esc_state = 2;
                 tp->esc_nparam = 0;
+                tp->esc_private = 0;
                 tp->esc_params[0] = 0;
                 tp->esc_params[1] = 0;
             } else {
@@ -395,12 +514,16 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
         }
         if (tp->esc_state == 2) {
             /* Inside CSI -- collect params and final byte */
+            if (ch == '?' && tp->esc_nparam == 0) {
+                tp->esc_private = 1;
+                continue;
+            }
             if (ch >= '0' && ch <= '9') {
                 if (tp->esc_nparam == 0) tp->esc_nparam = 1;
                 tp->esc_params[tp->esc_nparam - 1] =
                     tp->esc_params[tp->esc_nparam - 1] * 10 + (ch - '0');
             } else if (ch == ';') {
-                if (tp->esc_nparam < 4) {
+                if (tp->esc_nparam < 8) {
                     tp->esc_params[tp->esc_nparam] = 0;
                     tp->esc_nparam++;
                 }
@@ -408,8 +531,10 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
                 /* Final byte -- execute */
                 term_csi(tp, ch);
                 tp->esc_state = 0;
+                tp->esc_private = 0;
             } else {
                 tp->esc_state = 0; /* unexpected byte, abort */
+                tp->esc_private = 0;
             }
             continue;
         }
@@ -440,6 +565,7 @@ void terminal_write(glyph_window_t *win, const char *data, int len)
             cell->ch = (char)ch;
             cell->fg = tp->cur_fg;
             cell->bg = tp->cur_bg;
+            cell->attrs = tp->cur_attrs;
             tp->cx++;
             if (tp->cx >= tp->cols) {
                 tp->cx = 0;
@@ -735,7 +861,7 @@ static int
 spawn_shell(int slave_fd)
 {
     char *argv[] = {"-stsh", NULL};  /* leading '-' = login shell */
-    char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=dumb", "USER=root", NULL};
+    char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=xterm-256color", "USER=root", NULL};
 
     /* Pre-register caps so the spawned shell inherits them via exec_caps */
     syscall(SYS_CAP_GRANT_EXEC, (long)CAP_KIND_CAP_DELEGATE, (long)CAP_RIGHTS_READ);
@@ -820,10 +946,17 @@ fail:
 }
 
 /* Allocate the ring-buffer grid and initialize a term_priv_t */
+static int ansi_256_inited;
+
 static term_priv_t *
 term_priv_alloc(int cols, int rows, int cell_w, int cell_h,
                 int pad_x, int pad_y, int is_dropdown)
 {
+    if (!ansi_256_inited) {
+        init_ansi_256();
+        ansi_256_inited = 1;
+    }
+
     term_priv_t *tp = calloc(1, sizeof(*tp));
     if (!tp)
         return NULL;
@@ -840,15 +973,17 @@ term_priv_alloc(int cols, int rows, int cell_w, int cell_h,
     tp->scroll_top = 0;
     tp->scroll_offset = 0;
 
-    tp->cur_fg = 0xFF;
-    tp->cur_bg = 0xFF;
+    tp->cur_fg = TERM_DEFAULT_COLOR;
+    tp->cur_bg = TERM_DEFAULT_COLOR;
+    tp->cur_attrs = 0;
+    tp->cursor_visible = 1;
     tp->grid = calloc((unsigned)(tp->total_rows * cols), sizeof(term_cell_t));
     if (!tp->grid) {
         free(tp);
         return NULL;
     }
     for (int i = 0; i < tp->total_rows * cols; i++)
-        tp->grid[i] = (term_cell_t){' ', 0xFF, 0xFF};
+        tp->grid[i] = (term_cell_t){' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
 
     return tp;
 }
