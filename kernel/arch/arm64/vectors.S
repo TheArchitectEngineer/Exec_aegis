@@ -131,6 +131,11 @@ _exc_hang:
     b       _exc_hang
 
 _exc_sync_el1:
+    /* Save ELR_EL1 and SPSR_EL1 — kernel sync handler may preempt /
+     * ctx_switch, which would clobber these registers (see _exc_irq_el1). */
+    stp     x0, x1,   [sp, #-16]!
+    mrs     x0, elr_el1
+    mrs     x1, spsr_el1
     stp     x0, x1,   [sp, #-16]!
     stp     x2, x3,   [sp, #-16]!
     stp     x29, x30, [sp, #-16]!
@@ -138,9 +143,21 @@ _exc_sync_el1:
     ldp     x29, x30, [sp], #16
     ldp     x2, x3,   [sp], #16
     ldp     x0, x1,   [sp], #16
+    msr     elr_el1,  x0
+    msr     spsr_el1, x1
+    ldp     x0, x1,   [sp], #16
     eret
 
 _exc_irq_el1:
+    /* Save ELR_EL1 and SPSR_EL1 first: irq_handler may call sched_tick,
+     * which ctx_switches to another task whose subsequent exception entries
+     * clobber these system registers.  Without saving them here, our eret
+     * uses whatever the last exception entry on the CPU set — which may be
+     * another task's user PC / EL0t state, causing us to eret to EL0 at a
+     * kernel VA and trap. */
+    stp     x0, x1,   [sp, #-16]!
+    mrs     x0, elr_el1
+    mrs     x1, spsr_el1
     stp     x0, x1,   [sp, #-16]!
     stp     x2, x3,   [sp, #-16]!
     stp     x4, x5,   [sp, #-16]!
@@ -163,6 +180,9 @@ _exc_irq_el1:
     ldp     x6, x7,   [sp], #16
     ldp     x4, x5,   [sp], #16
     ldp     x2, x3,   [sp], #16
+    ldp     x0, x1,   [sp], #16
+    msr     elr_el1,  x0
+    msr     spsr_el1, x1
     ldp     x0, x1,   [sp], #16
     eret
 
@@ -202,25 +222,14 @@ _exc_sync_el0:
 /* ── EL0 IRQ ── */
 _exc_irq_el0:
     KERNEL_ENTRY_FROM_EL0
-
-    /* Save TTBR0 before sched_tick may switch tasks.
-     * After ctx_switch, we may return to a DIFFERENT task.
-     * That task's TTBR0 must be loaded before ERET. */
-    mrs     x9, ttbr0_el1
-    sub     sp, sp, #16
-    str     x9, [sp]
-
     SAVE_ALL_EL0
     bl      save_user_tpidr
     bl      irq_handler
-    RESTORE_ALL_EL0
-
-    /* If sched_tick switched tasks, the current task may differ
-     * from the one that entered. Load current task's TTBR0. */
+    /* irq_handler may have ctx_switched us to a different task.  Its
+     * TTBR0 must be loaded before we eret.  fork_child_load_ttbr0 is
+     * safe: it's a leaf-style C helper that won't clobber ELR_EL1 or
+     * SPSR_EL1, which RESTORE_ALL_EL0 explicitly re-loads from frame. */
     bl      fork_child_load_ttbr0
-
-    /* Discard saved TTBR0 (we loaded the correct one above) */
-    add     sp, sp, #16
-
+    RESTORE_ALL_EL0
     KERNEL_EXIT_TO_EL0
     eret
