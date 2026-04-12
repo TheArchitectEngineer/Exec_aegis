@@ -1,11 +1,46 @@
 /*
  * boot.S — ARM64 kernel entry (TTBR1 higher-half boot).
  *
- * QEMU loads at physical 0x40000000. _start runs with MMU off.
- * We build two page tables:
- *   TTBR0: identity map (VA=PA) for the boot transition
- *   TTBR1: kernel at 0xFFFF000040000000 → PA 0x40000000
- * Enable MMU, jump to high VA, call kernel_main.
+ * QEMU virt loads us at physical 0x40200000 (both via `-kernel ELF`
+ * thanks to the ELF PhysAddr header, and via `-kernel Image` via
+ * QEMU's fixed 2MB arm64 Image load offset). The linker LMA is set
+ * to 0x40200000 to match — see linker.ld. KERN_VA_OFFSET stays at
+ * 0xFFFF000000000000 so the `PA + KERN_VA_OFFSET` convention used
+ * throughout the kernel continues to work.
+ *
+ * Linux arm64 boot protocol contract:
+ *   x0 = DTB physical address
+ *   x1 = x2 = x3 = 0 (reserved)
+ *   MMU off, caches off, EL1 or EL2
+ *   PC = image base
+ *
+ * The first 64 bytes of .text.boot ARE the Linux arm64 Image header:
+ *   0x00  code0       = `b _kernel_entry`  (branch over the header)
+ *   0x04  code1       = 0
+ *   0x08  text_offset = 0
+ *   0x10  image_size  = 0  (0 tells the loader to use whatever it
+ *                           computes from file size; modern QEMU and
+ *                           Linux accept this, and tools/gen-arm64-
+ *                           image.py stamps a real value after
+ *                           flattening the ELF if needed)
+ *   0x18  flags       = 2  (4K, little-endian)
+ *   0x20  res2        = 0
+ *   0x28  res3        = 0
+ *   0x30  res4        = 0
+ *   0x38  magic       = 0x644D5241 ("ARM\x64")
+ *   0x3c  res5        = 0
+ *
+ * ENTRY(_start) in linker.ld points at _start, which IS the code0
+ * branch. QEMU's `-kernel ELF` path jumps to the ELF entry (_start =
+ * image base), executes the branch, and lands at _kernel_entry. The
+ * `-kernel Image` path does the same: firmware jumps to image base,
+ * executes the branch, lands at _kernel_entry.
+ *
+ * tools/gen-arm64-image.py runs `aarch64-elf-objcopy -O binary` to
+ * flatten the ELF; the resulting .img already contains the header in
+ * its first 64 bytes, so the Python script only needs to stamp the
+ * `image_size` field (and can also re-verify magic/code0 as a sanity
+ * check).
  */
 
 /* VA offset: high VA - physical addr */
@@ -14,7 +49,49 @@
     .section .text.boot
     .globl _start
 _start:
+    /* ── Linux arm64 Image header (64 bytes) ────────────────────────
+     * code0: `b _kernel_entry` — imm26 = 16 words = 0x10.
+     * opcode bits 31:26 = 0b000101, imm = word offset = (64/4) = 16.
+     * Assembled: `b .+64` = 0x14000010.  We emit the raw encoding via
+     * .word rather than `b _kernel_entry` so the offset is locked in
+     * at assemble time regardless of how the rest of .text.boot
+     * expands. Double-checked with
+     *     echo 'b .+64' | aarch64-elf-as - -o /tmp/b.o \
+     *       && aarch64-elf-objdump -d /tmp/b.o
+     * which prints `0: 14000010  b 40 <.text+0x40>`.
+     */
+    .word   0x14000010          /* 0x00  code0: b _kernel_entry */
+    .word   0x00000000          /* 0x04  code1 (reserved) */
+    .quad   0                   /* 0x08  text_offset */
+    .quad   0                   /* 0x10  image_size (0 = use file size) */
+    .quad   0x0000000000000002  /* 0x18  flags: page=4K, LE */
+    .quad   0                   /* 0x20  res2 */
+    .quad   0                   /* 0x28  res3 */
+    .quad   0                   /* 0x30  res4 */
+    .word   0x644D5241          /* 0x38  magic: "ARM\x64" */
+    .word   0                   /* 0x3c  res5 (PE header offset) */
+
+    .globl _kernel_entry
+_kernel_entry:
     mov     x19, x0             /* save DTB pointer */
+
+    /*
+     * Drop from EL2 to EL1 if firmware handed us EL2 (Pi 4/5 default).
+     * QEMU virt with cortex-a72 starts at EL1 so this falls through.
+     * x19 (DTB) is preserved across the eret.
+     */
+    mrs     x0, CurrentEL
+    lsr     x0, x0, #2
+    cmp     x0, #2
+    b.ne    .Lat_el1
+    mov     x0, #(1 << 31)      /* HCR_EL2.RW = EL1 is AArch64 */
+    msr     hcr_el2, x0
+    mov     x0, #0x3c5          /* SPSR_EL2: D|A|I|F set, EL1h */
+    msr     spsr_el2, x0
+    adr     x0, .Lat_el1
+    msr     elr_el2, x0
+    eret
+.Lat_el1:
     msr     daifset, #0xf       /* mask all exceptions */
     msr     spsel, #1           /* use SP_EL1 */
 
@@ -24,8 +101,7 @@ _start:
     isb
 
     /* Zero BSS (physical addresses — MMU off).
-     * __bss_start/__bss_end are high VAs; subtract VA_OFF to get PA.
-     * Can't use adrp (±4GB range exceeded). Use ldr + subtract. */
+     * __bss_start/__bss_end are high VAs; subtract VA_OFF to get PA. */
     mov     x3, #0xFFFF
     lsl     x3, x3, #48         /* x3 = 0xFFFF000000000000 (VA offset) */
     ldr     x1, =__bss_start
@@ -41,7 +117,7 @@ _start:
 
     /* Boot stack (physical) */
     ldr     x1, =boot_stack_top
-    sub     x1, x1, x3          /* VA to PA */
+    sub     x1, x1, x3          /* VA → PA */
     mov     sp, x1
 
     /* Build page tables inline (can't call C — it's linked at high VA).

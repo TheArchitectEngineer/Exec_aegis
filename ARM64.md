@@ -687,3 +687,81 @@ Added:
 ---
 
 *Research conducted by parallel Explore agents on 2026-04-12. Setup work + first boot + stale userland purge completed same day. Primary sources: `kernel/arch/arm64/` on master, `origin/arm64-old`, `tests/Cargo.toml`, `vortex/src/core/qemu.rs`, Linux kernel `Documentation/arch/arm64/booting.rst`, Raspberry Pi config.txt reference, QEMU virt documentation.*
+
+---
+
+## 16. Linux arm64 Image format + Raspberry Pi boot
+
+As of 2026-04-12 the ARM64 kernel can be built into a Linux arm64
+Image-format `.img` suitable for both QEMU virt and Raspberry Pi
+firmware. The 64-byte boot header is assembled inline at the top of
+`.text.boot` (see `kernel/arch/arm64/boot.S` — look for `_start:` and
+the `.word 0x14000010` line). `tools/gen-arm64-image.py` flattens the
+ELF with `aarch64-elf-objcopy -O binary` and stamps the `image_size`
+field so firmware that honours it reserves enough room for the kernel
++ BSS + early allocations.
+
+### Build and boot on QEMU virt
+
+```
+make -C kernel/arch/arm64            # build/aegis-arm64.elf
+make -C kernel/arch/arm64 image      # build/aegis.img
+make -C kernel/arch/arm64 run-image  # qemu-system-aarch64 -M virt -kernel aegis.img
+```
+
+Verify the header:
+
+```
+xxd -l 64 kernel/arch/arm64/build/aegis.img
+#  00000000: 10 00 00 14 00 00 00 00  ...   code0: b .+64
+#  ...
+#  00000030: 00 00 00 00 00 00 00 00  41 52 4d 64 00 00 00 00   magic: ARM\x64
+```
+
+### Linker layout
+
+The linker script (`kernel/arch/arm64/linker.ld`) places the kernel at
+physical **0x40200000** (`KERN_LMA`). This matches QEMU virt's fixed
+2MB arm64 Image load offset on `-kernel` (both ELF and Image paths),
+so one artefact works for both. `KERN_VMA = 0xFFFF000040200000`
+preserves the `PA + KERN_VA_OFFSET = VA` convention used throughout
+the kernel (`KERN_VA_OFFSET` stays 0xFFFF000000000000). The existing
+1GB TTBR1 block mapping (`kern_l1[1]` → PA 0x40000000) still covers
+the kernel because 0x40200000 is inside that 1GB block.
+
+### Raspberry Pi 4 / 5 (not yet verified on hardware)
+
+`tools/mkpi.sh` partitions an SD card, writes Pi firmware + a
+`config.txt` configured for Aegis, and copies `aegis.img` as
+`kernel8.img`:
+
+```
+make -C kernel/arch/arm64 image
+sudo tools/mkpi.sh 4 /dev/sdX kernel/arch/arm64/build/aegis.img
+```
+
+The generated `config.txt` contains the critical line:
+
+```
+kernel_address=0x200000
+```
+
+This overrides the Pi firmware default of `0x80000` so the Image
+lands at the physical address Aegis is linked for. Wire a UART on
+GPIO 14/15 at 115200 8N1 and expect the usual `[SERIAL] OK: PL011
+UART initialized` banner.
+
+### Known caveat: ELF boot via `-kernel aegis-arm64.elf`
+
+QEMU's ELF loader runs its boot shim (the one that populates x0 with
+the DTB physical address) **only** when the ELF PhysAddr matches
+certain well-known values. Linking at 0x40200000 to make the Image
+path work means the ELF path no longer gets a DTB; `arch_mm_init`
+falls back to its hardcoded 128 MB RAM region. The boot oracle still
+passes (it prefix-matches `[PMM] OK:`), and userland still reaches
+`vigil: starting`, so day-to-day kernel development is unaffected —
+but a future phase should restore full DTB support on the ELF path,
+probably by linking at the original 0x40000000 LMA and teaching
+boot.S to compute a runtime PA slide for the Image case. See the
+in-progress history in this session for the slide approach (blocked
+on `vmm_init()` building a non-slid TTBR1 replacement).
