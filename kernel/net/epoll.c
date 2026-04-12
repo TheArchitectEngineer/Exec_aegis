@@ -4,6 +4,7 @@
 #include "vfs.h"
 #include "uaccess.h"
 #include "arch.h"
+#include "printk.h"
 #include "spinlock.h"
 #include <stdint.h>
 
@@ -91,6 +92,10 @@ int epoll_ctl_impl(uint32_t epoll_id, int op, int fd, k_epoll_event_t *ev)
                 ep->watches[i].data   = ev->data;
                 ep->watches[i].in_use = 1;
                 ep->nwatches++;
+                printk("[EPOLL] add: slot=%u fd=%u events=0x%x data=0x%x%x\n",
+                       (unsigned)i, (unsigned)fd, (unsigned)ev->events,
+                       (unsigned)(uint32_t)(ev->data >> 32),
+                       (unsigned)(uint32_t)ev->data);
                 return 0;
             }
         }
@@ -207,6 +212,11 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
                 kev.events = ep->watches[wi].events;
                 kev.data   = ep->watches[wi].data;
                 spin_unlock_irqrestore(&epoll_lock, efl);
+                printk("[EPOLL] deliver: wi=%u fd=%u events=0x%x data=0x%x%x\n",
+                       (unsigned)wi, (unsigned)ep->watches[wi].fd,
+                       (unsigned)kev.events,
+                       (unsigned)(uint32_t)(kev.data >> 32),
+                       (unsigned)(uint32_t)kev.data);
                 /* copy_to_user returns void — no fault recovery without extable */
                 copy_to_user((void *)(uintptr_t)(events_uptr +
                              (uint64_t)delivered * sizeof(k_epoll_event_t)),
