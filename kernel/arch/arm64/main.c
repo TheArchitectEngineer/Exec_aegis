@@ -70,6 +70,8 @@ kernel_main(uint64_t dtb_phys)
     vfs_init();
     console_init();
 
+    cap_policy_load();    /* load /etc/aegis/caps.d/ — must be after vfs_init  */
+
     sched_init();
     sched_spawn(task_idle);
     proc_spawn_init();
