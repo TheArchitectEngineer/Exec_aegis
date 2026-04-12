@@ -22,7 +22,7 @@ static const char hid_to_ascii[128] = {
     [0x26] = '9', [0x27] = '0',
     [0x28] = '\r',  /* Enter */
     [0x29] = 0x1B,  /* Escape */
-    [0x2A] = '\b',  /* Backspace */
+    [0x2A] = 127,   /* Backspace → DEL (0x7F) */
     [0x2B] = '\t',  /* Tab */
     [0x2C] = ' ',   /* Space */
     [0x2D] = '-', [0x2E] = '=', [0x2F] = '[', [0x30] = ']',

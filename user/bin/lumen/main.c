@@ -8,6 +8,7 @@
 #include <time.h>
 #include <sys/syscall.h>
 #include <errno.h>
+#include <poll.h>
 #include <signal.h>
 #include <glyph.h>
 #include <font.h>
@@ -459,15 +460,17 @@ main(void)
              * all bytes of an escape sequence in one handler invocation,
              * so they are in the ring buffer within microseconds. */
             if (kbd_byte == '\033') {
-                /* Try to read the next byte with a tight retry loop.
-                 * VMIN=0 means read returns 0 if nothing is buffered yet. */
+                /* Try to read the next byte after ESC.  The kbd ISR
+                 * pushes all bytes of an escape sequence together, but
+                 * for USB HID the bytes come from PIT ISR polling at
+                 * 100 Hz — the next byte might not arrive for up to
+                 * 10 ms.  Use poll() with a short timeout. */
                 char eb = 0;
                 int got_eb = 0;
-                for (int retry = 0; retry < 80; retry++) {
-                    if (read(0, &eb, 1) == 1) {
-                        got_eb = 1;
-                        break;
-                    }
+                {
+                    struct pollfd pfd = { .fd = 0, .events = POLLIN };
+                    if (poll(&pfd, 1, 15) > 0)  /* 15ms — covers one PIT tick */
+                        got_eb = (read(0, &eb, 1) == 1);
                 }
 
                 if (!got_eb) {
@@ -565,15 +568,12 @@ main(void)
                         char seq[16] = { '\033', '[' };
                         int slen = 2;
                         char cb;
-                        /* Collect remaining CSI bytes with retries */
+                        /* Collect remaining CSI bytes with poll timeout */
                         while (slen < 15) {
+                            struct pollfd cpfd = { .fd = 0, .events = POLLIN };
                             int got = 0;
-                            for (int retry = 0; retry < 80; retry++) {
-                                if (read(0, &cb, 1) == 1) {
-                                    got = 1;
-                                    break;
-                                }
-                            }
+                            if (poll(&cpfd, 1, 15) > 0)
+                                got = (read(0, &cb, 1) == 1);
                             if (!got) break;
                             seq[slen++] = cb;
                             if (cb >= 0x40 && cb <= 0x7E)
