@@ -24,12 +24,17 @@
 // isa-debug-exit semantics.
 
 use aegis_tests::{
-    aegis_arm64_virt, arm64_elf, assert_boot_subsequence, AegisHarness,
+    aegis_arm64_virt, arm64_elf, assert_boot_subsequence, assert_line_contains,
+    AegisHarness,
 };
 
-/// Subsequence from `ARM64.md` §15 — the honest current boot trace.
+/// Subsequence from phase A4 — real ARM64 userland now runs.
 /// Extra output is allowed between these lines; their relative order
 /// is enforced. When the port adds new subsystems this list grows.
+///
+/// Note: `assert_boot_subsequence` walks `kernel_lines` (lines starting
+/// with `[`), so user-space chatter such as `vigil: starting` is not
+/// visible here — see USERSPACE_ORACLE_ARM64 below for that check.
 const BOOT_ORACLE_ARM64: &[&str] = &[
     "[SERIAL] OK: PL011 UART initialized",
     "[PMM] OK:",                                 // "[PMM] OK: 2048MB usable across 1 regions"
@@ -41,9 +46,19 @@ const BOOT_ORACLE_ARM64: &[&str] = &[
     "[CAP] OK: capability subsystem initialized",
     "[RNG] OK: ChaCha20 CSPRNG seeded",
     "[VFS] OK: initialized",
-    "[INITRD] OK:",                              // "[INITRD] OK: 26 files registered"
-    "[INIT] ARM64 userland not yet built",
-    "[SCHED] OK: scheduler started, 1 tasks",
+    "[INITRD] OK:",                              // "[INITRD] OK: 32 files registered"
+    "[CAP] OK: 7 baseline capabilities granted to init",
+    "[SCHED] OK: scheduler started, 2 tasks",
+];
+
+/// Userspace markers that must appear *anywhere* in the full output —
+/// checked via `assert_line_contains` rather than the subsequence
+/// assertion, because vigil's lines don't start with `[`. These prove
+/// that phase A4 worked: the init blob is a real aarch64-musl vigil
+/// ELF, not a stub, and userland reached the service supervision loop.
+const VIGIL_USERSPACE_MARKERS: &[&str] = &[
+    "vigil: starting",
+    "vigil: boot mode: text",
 ];
 
 #[tokio::test]
@@ -80,4 +95,10 @@ async fn arm64_boot_oracle() {
         .expect("ARM64 kernel boot failed");
 
     assert_boot_subsequence(&out, BOOT_ORACLE_ARM64);
+
+    // Phase A4: verify real userland runs by looking for vigil's
+    // startup chatter in the full (non-kernel) output stream.
+    for marker in VIGIL_USERSPACE_MARKERS {
+        assert_line_contains(&out, marker);
+    }
 }

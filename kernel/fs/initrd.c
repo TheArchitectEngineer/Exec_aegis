@@ -121,16 +121,19 @@ static const unsigned int s_cap_installer_size  = sizeof(s_cap_installer)  - 1;
  * Boot-critical static binaries in initrd: login, vigil, shell, echo, cat, ls.
  * All other user binaries are dynamically linked and live on the ext2 disk.
  *
- * x86_64 convention: objcopy --input binary produces
+ * Both x86_64 and aarch64 use the same objcopy-based embedding:
+ *     objcopy -I binary -O elf64-<target> -B <arch> <blob>.bin <blob>.o
+ * produces the linker-visible symbols
  *     _binary_<name>_bin_{start,end}
- * for each user/bin/<name>.bin blob (see top-level Makefile).
+ * for each blob. The x86 build drives this from the top-level Makefile
+ * (BLOB_COPY_RULE); the ARM64 build drives it from
+ * kernel/arch/arm64/Makefile, which in turn calls
+ * tools/build-arm64-userland.sh to produce the aarch64-musl blobs.
  *
- * On aarch64 these symbols are not provided — ARM64 userland is not yet
- * built from current master sources (ARM64.md phase A4). The user-binary
- * entries below are #ifdef'd out of the initrd table, so initrd_open
- * of /bin/stsh etc. simply returns ENOENT until we have a real aarch64
- * musl toolchain. */
-#ifndef __aarch64__
+ * If the ARM64 build is run with ARM64_SKIP_USERLAND=1, the blob
+ * sources are zero-byte stubs: start == end, so any read through
+ * initrd_open returns 0 bytes and initrd_open itself returns ENOENT
+ * for a zero-sized entry (see initrd_open below). */
 extern const unsigned char _binary_login_bin_start[];
 extern const unsigned char _binary_login_bin_end[];
 extern const unsigned char _binary_vigil_bin_start[];
@@ -143,7 +146,6 @@ extern const unsigned char _binary_cat_bin_start[];
 extern const unsigned char _binary_cat_bin_end[];
 extern const unsigned char _binary_ls_bin_start[];
 extern const unsigned char _binary_ls_bin_end[];
-#endif
 
 /* initrd_entry_t — each entry holds a path, a pointer to file data, and a
  * pointer to the file's size variable (link-time value from objcopy/bin2c).
@@ -159,14 +161,12 @@ static const initrd_entry_t s_files[] = {
     { "/etc/motd",       (const unsigned char *)s_motd,       (const unsigned char *)s_motd + sizeof(s_motd) - 1 },
     { "/etc/banner",     (const unsigned char *)s_banner,     (const unsigned char *)s_banner + sizeof(s_banner) - 1 },
     { "/etc/banner.net", (const unsigned char *)s_banner_net, (const unsigned char *)s_banner_net + sizeof(s_banner_net) - 1 },
-#ifndef __aarch64__
     { "/bin/login",   _binary_login_bin_start, _binary_login_bin_end },
     { "/bin/vigil",   _binary_vigil_bin_start, _binary_vigil_bin_end },
     { "/bin/sh",      _binary_shell_bin_start, _binary_shell_bin_end },
     { "/bin/echo",    _binary_echo_bin_start,  _binary_echo_bin_end  },
     { "/bin/cat",     _binary_cat_bin_start,   _binary_cat_bin_end   },
     { "/bin/ls",      _binary_ls_bin_start,    _binary_ls_bin_end    },
-#endif
     { "/etc/vigil/services/dhcp/run", (const unsigned char *)s_dhcp_run, (const unsigned char *)s_dhcp_run + s_dhcp_run_size },
     { "/etc/vigil/services/dhcp/policy", (const unsigned char *)s_dhcp_policy, (const unsigned char *)s_dhcp_policy + s_dhcp_policy_size },
     { "/etc/vigil/services/dhcp/caps", (const unsigned char *)s_dhcp_caps, (const unsigned char *)s_dhcp_caps + s_dhcp_caps_size },

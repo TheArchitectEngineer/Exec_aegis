@@ -35,12 +35,13 @@ proc_alloc_pid(void)
 _Static_assert(offsetof(aegis_process_t, task) == 0,
                "aegis_process_t: task must be at offset 0 for safe cast");
 
-/*
- */
-#ifndef __aarch64__
+/* init blob symbols — produced by the objcopy-based blob pipeline in
+ * the top-level Makefile (x86) and kernel/arch/arm64/Makefile (ARM64,
+ * via tools/build-arm64-userland.sh). The init blob is a copy of the
+ * vigil ELF. Both arches now provide these symbols, so no #ifdef
+ * dispatch is needed. */
 extern const unsigned char _binary_init_bin_start[];
 extern const unsigned char _binary_init_bin_end[];
-#endif
 
 
 /* 16KB kernel stack for the user process (4 pages, matching sched task stacks).
@@ -412,16 +413,18 @@ proc_spawn(const uint8_t *elf_data, size_t elf_len)
 void
 proc_spawn_init(void)
 {
-#ifdef __aarch64__
-    /* ARM64 userland is not yet built from current master sources. The
-     * previous port embedded pre-rebase byte-array blobs that referenced
-     * syscalls, paths, and /bin/sh that no longer exist. Until a real
-     * aarch64-musl toolchain is wired up (ARM64.md phase A4), there is
-     * nothing to spawn — the scheduler runs idle. */
-    printk("[INIT] ARM64 userland not yet built — running idle only\n");
-#else
-    proc_spawn((const uint8_t *)_binary_init_bin_start, (size_t)(_binary_init_bin_end - _binary_init_bin_start));
-#endif
+    size_t size = (size_t)(_binary_init_bin_end - _binary_init_bin_start);
+    if (size < 16) {
+        /* Blob is a zero-byte (or effectively empty) placeholder. This
+         * happens on ARM64 when the Makefile is invoked with
+         * ARM64_SKIP_USERLAND=1, producing 1-byte stub blobs. Report
+         * the condition and fall through to the idle scheduler rather
+         * than handing an empty buffer to the ELF loader. */
+        printk("[INIT] blob empty (%u bytes) — running idle only\n",
+               (unsigned)size);
+        return;
+    }
+    proc_spawn((const uint8_t *)_binary_init_bin_start, size);
 }
 
 /* arch_get_current_pml4 — return current user process PML4 phys addr.

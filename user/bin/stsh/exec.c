@@ -1,16 +1,12 @@
 #include "stsh.h"
 
+/* sys_setfg — tell kernel the given PID is the foreground process group
+ * for signal routing. Uses the libc syscall(3) wrapper so the same
+ * source builds on both x86-64 and aarch64. */
 static long
 sys_setfg(long pid)
 {
-    long ret;
-    __asm__ volatile(
-        "syscall"
-        : "=a"(ret)
-        : "0"((long)SYS_SETFG), "D"(pid)
-        : "rcx", "r11", "memory"
-    );
-    return ret;
+    return syscall(SYS_SETFG, pid);
 }
 
 /*
