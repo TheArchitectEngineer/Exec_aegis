@@ -12,13 +12,43 @@ _Static_assert(sizeof(pipe_t) == 4096,
     "pipe_t must be exactly 4096 bytes (one kva page); adjust PIPE_BUF_SIZE");
 
 /* Forward declarations */
-static int  pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
-static int  pipe_write_fn(void *priv, const void *buf, uint64_t len);
-static void pipe_read_close_fn(void *priv);
-static void pipe_write_close_fn(void *priv);
-static void pipe_dup_read_fn(void *priv);
-static void pipe_dup_write_fn(void *priv);
-static int  pipe_stat_fn(void *priv, k_stat_t *st);
+static int      pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
+static int      pipe_write_fn(void *priv, const void *buf, uint64_t len);
+static void     pipe_read_close_fn(void *priv);
+static void     pipe_write_close_fn(void *priv);
+static void     pipe_dup_read_fn(void *priv);
+static void     pipe_dup_write_fn(void *priv);
+static int      pipe_stat_fn(void *priv, k_stat_t *st);
+static uint16_t pipe_read_poll_fn(void *priv);
+static uint16_t pipe_write_poll_fn(void *priv);
+
+static uint16_t
+pipe_read_poll_fn(void *priv)
+{
+    pipe_t *p = (pipe_t *)priv;
+    uint16_t events = 0;
+    irqflags_t fl = spin_lock_irqsave(&p->lock);
+    if (p->count > 0 || p->write_refs == 0)
+        events |= 0x0001; /* POLLIN */
+    if (p->write_refs == 0)
+        events |= 0x0010; /* POLLHUP */
+    spin_unlock_irqrestore(&p->lock, fl);
+    return events;
+}
+
+static uint16_t
+pipe_write_poll_fn(void *priv)
+{
+    pipe_t *p = (pipe_t *)priv;
+    uint16_t events = 0;
+    irqflags_t fl = spin_lock_irqsave(&p->lock);
+    if (p->count < PIPE_BUF_SIZE || p->read_refs == 0)
+        events |= 0x0004; /* POLLOUT */
+    if (p->read_refs == 0)
+        events |= 0x0008; /* POLLERR */
+    spin_unlock_irqrestore(&p->lock, fl);
+    return events;
+}
 
 const vfs_ops_t g_pipe_read_ops = {
     .read    = pipe_read_fn,
@@ -27,7 +57,7 @@ const vfs_ops_t g_pipe_read_ops = {
     .readdir = (void *)0,
     .dup     = pipe_dup_read_fn,
     .stat    = pipe_stat_fn,
-    .poll    = (void *)0,
+    .poll    = pipe_read_poll_fn,
 };
 
 const vfs_ops_t g_pipe_write_ops = {
@@ -37,7 +67,7 @@ const vfs_ops_t g_pipe_write_ops = {
     .readdir = (void *)0,
     .dup     = pipe_dup_write_fn,
     .stat    = pipe_stat_fn,
-    .poll    = (void *)0,
+    .poll    = pipe_write_poll_fn,
 };
 
 /*

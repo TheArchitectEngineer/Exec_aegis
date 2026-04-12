@@ -19,6 +19,10 @@ char kbd_read(void);
  * Returns 0 if the buffer is empty. */
 int kbd_poll(char *out);
 
+/* Non-destructive check: returns 1 if the keyboard ring buffer has data,
+ * 0 if empty. Does NOT consume the character. Used by VFS .poll(). */
+int kbd_has_data(void);
+
 /* Register the foreground process group for signal delivery.
  * Called by the shell via sys_setfg (syscall 360) before waitpid.
  * Call with pgid=0 to clear (no foreground process group). */

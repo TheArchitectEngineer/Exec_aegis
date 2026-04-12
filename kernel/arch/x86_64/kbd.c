@@ -215,6 +215,15 @@ kbd_poll(char *out)
     return 1;
 }
 
+int
+kbd_has_data(void)
+{
+    irqflags_t fl = spin_lock_irqsave(&kbd_lock);
+    int has = (s_head != s_tail);
+    spin_unlock_irqrestore(&kbd_lock, fl);
+    return has;
+}
+
 /* kbd_usb_inject — inject an ASCII character from USB HID into the keyboard
  * ring buffer.  Called from usb_hid_process_report() in interrupt context
  * (PIT ISR → xhci_poll → usb_hid_process_report → here).

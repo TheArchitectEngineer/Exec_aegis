@@ -74,6 +74,13 @@ console_stat_fn(void *priv, k_stat_t *st)
     return 0;
 }
 
+static uint16_t
+console_poll_fn(void *priv)
+{
+    (void)priv;
+    return 0x0004; /* POLLOUT always — console is write-only */
+}
+
 static const vfs_ops_t s_console_ops = {
     .read    = console_read_fn,
     .write   = console_write_fn,
@@ -81,7 +88,7 @@ static const vfs_ops_t s_console_ops = {
     .readdir = (void *)0,
     .dup     = (void *)0,
     .stat    = console_stat_fn,
-    .poll    = (void *)0,
+    .poll    = console_poll_fn,
 };
 
 static vfs_file_t s_console_file = {

@@ -45,17 +45,41 @@ ring_pull(uint8_t *buf, uint32_t *tail)
 
 /* ── Forward declarations ─────────────────────────────────────────── */
 
-static int  master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
-static int  master_write_fn(void *priv, const void *buf, uint64_t len);
-static void master_dup_fn(void *priv);
-static void master_close_fn(void *priv);
-static int  master_stat_fn(void *priv, k_stat_t *st);
+static int      master_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
+static int      master_write_fn(void *priv, const void *buf, uint64_t len);
+static void     master_dup_fn(void *priv);
+static void     master_close_fn(void *priv);
+static int      master_stat_fn(void *priv, k_stat_t *st);
 
-static int  slave_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
-static int  slave_write_fn(void *priv, const void *buf, uint64_t len);
-static void slave_dup_fn(void *priv);
-static void slave_close_fn(void *priv);
-static int  slave_stat_fn(void *priv, k_stat_t *st);
+static int      slave_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
+static int      slave_write_fn(void *priv, const void *buf, uint64_t len);
+static void     slave_dup_fn(void *priv);
+static void     slave_close_fn(void *priv);
+static int      slave_stat_fn(void *priv, k_stat_t *st);
+
+static uint16_t
+master_poll_fn(void *priv)
+{
+	pty_pair_t *pair = (pty_pair_t *)priv;
+	uint16_t events = 0x0004; /* POLLOUT always */
+	if (ring_count(pair->output_head, pair->output_tail) > 0 || !pair->slave_open)
+		events |= 0x0001; /* POLLIN */
+	if (!pair->slave_open)
+		events |= 0x0010; /* POLLHUP */
+	return events;
+}
+
+static uint16_t
+slave_poll_fn(void *priv)
+{
+	pty_pair_t *pair = (pty_pair_t *)priv;
+	uint16_t events = 0x0004; /* POLLOUT always */
+	if (ring_count(pair->input_head, pair->input_tail) > 0 || !pair->master_open)
+		events |= 0x0001; /* POLLIN */
+	if (!pair->master_open)
+		events |= 0x0010; /* POLLHUP */
+	return events;
+}
 
 static const vfs_ops_t s_master_ops = {
 	.read    = master_read_fn,
@@ -64,7 +88,7 @@ static const vfs_ops_t s_master_ops = {
 	.readdir = (void *)0,
 	.dup     = master_dup_fn,
 	.stat    = master_stat_fn,
-	.poll    = (void *)0,
+	.poll    = master_poll_fn,
 };
 
 static const vfs_ops_t s_slave_ops = {
@@ -74,7 +98,7 @@ static const vfs_ops_t s_slave_ops = {
 	.readdir = (void *)0,
 	.dup     = slave_dup_fn,
 	.stat    = slave_stat_fn,
-	.poll    = (void *)0,
+	.poll    = slave_poll_fn,
 };
 
 /* ── TTY backend callbacks for the slave side ─────────────────────── */

@@ -107,6 +107,16 @@ kbd_stat_fn(void *priv, k_stat_t *st)
 	return 0;
 }
 
+static uint16_t
+kbd_vfs_poll_fn(void *priv)
+{
+	(void)priv;
+	uint16_t events = 0x0004; /* POLLOUT always */
+	if (kbd_has_data())
+		events |= 0x0001; /* POLLIN */
+	return events;
+}
+
 static const vfs_ops_t s_kbd_ops = {
 	.read    = kbd_vfs_read_fn,
 	.write   = kbd_vfs_write_fn,
@@ -114,7 +124,7 @@ static const vfs_ops_t s_kbd_ops = {
 	.readdir = (void *)0,
 	.dup     = (void *)0,
 	.stat    = kbd_stat_fn,
-	.poll    = (void *)0,
+	.poll    = kbd_vfs_poll_fn,
 };
 
 static vfs_file_t s_kbd_file = {
