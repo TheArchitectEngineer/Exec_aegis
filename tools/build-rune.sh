@@ -18,13 +18,23 @@ if [ -f "$RUNE_BIN" ]; then
     exit 0
 fi
 
-# Clone or update
-if [ -d "$RUNE_SRC" ]; then
+# Clone or update. Check for Cargo.toml, not just directory existence —
+# a cache restore might create references/rune/target/ without the source.
+if [ -f "$RUNE_SRC/Cargo.toml" ] && [ -d "$RUNE_SRC/.git" ]; then
     echo "[rune] updating existing checkout..."
     git -C "$RUNE_SRC" pull --ff-only || true
 else
     echo "[rune] cloning from $RUNE_REPO..."
-    git clone "$RUNE_REPO" "$RUNE_SRC"
+    # Preserve target/ across clone for cache benefit
+    if [ -d "$RUNE_SRC/target" ]; then
+        mv "$RUNE_SRC/target" "${RUNE_SRC}.target.tmp"
+        rm -rf "$RUNE_SRC"
+        git clone "$RUNE_REPO" "$RUNE_SRC"
+        mv "${RUNE_SRC}.target.tmp" "$RUNE_SRC/target"
+    else
+        rm -rf "$RUNE_SRC"
+        git clone "$RUNE_REPO" "$RUNE_SRC"
+    fi
 fi
 
 # Ensure musl target is installed
