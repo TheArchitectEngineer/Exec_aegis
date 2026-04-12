@@ -1,6 +1,6 @@
 # Security
 
-Aegis is v1 software -- a first public release, not a production-hardened system. The kernel is predominantly written in C (~346K LOC), and there are almost certainly real, exploitable vulnerabilities that have not yet been found. All vulnerabilities identified in audits to date have been hypothetical. This is expected for a from-scratch OS at this stage of maturity.
+Aegis is v1 software -- a first public release, not a production-hardened system. The kernel is predominantly written in C (~29K LOC of C, plus ~6.8K LOC of headers, ~1.6K LOC of assembly, and a small Rust core), and there are almost certainly real, exploitable vulnerabilities that have not yet been found. All vulnerabilities identified in audits to date have been hypothetical. This is expected for a from-scratch OS at this stage of maturity.
 
 This document describes where the project stands, what's known to be risky, and how to report issues.
 
@@ -9,7 +9,7 @@ This document describes where the project stands, what's known to be risky, and 
 Aegis is not running in production anywhere, so private disclosure is not critical -- but we offer both options:
 
 - **Public:** Open an issue at [exec/aegis](https://github.com/exec/aegis/issues). This is fine for most findings.
-- **Private:** Email [security@exec.dev](mailto:security@exec.dev) if you prefer coordinated disclosure or if the issue is particularly sensitive.
+- **Private:** Email [execxd@icloud.com](mailto:execxd@icloud.com) if you prefer coordinated disclosure or if the issue is particularly sensitive.
 
 Include enough detail to reproduce the issue: affected subsystem, triggering input or sequence, and (if applicable) the capability kind and rights bitfield involved. Proof-of-concept code or QEMU reproduction steps are appreciated but not required.
 
@@ -19,7 +19,7 @@ Anything in the Aegis codebase is fair game:
 
 - **Kernel** -- memory management, scheduler, VFS, page tables, interrupt handling, syscall dispatch
 - **Capability system** -- `cap_check`, `cap_grant`, capability table manipulation, the Rust/C FFI boundary in `kernel/cap/`
-- **Syscall interface** -- all 150+ syscalls, argument validation, user-kernel memory copies
+- **Syscall interface** -- all 100+ syscalls, argument validation, user-kernel memory copies
 - **Security policy engine** -- policy file parsing in `kernel/cap/cap_policy.c`, baseline capabilities, two-tier grant logic
 - **Drivers** -- NVMe, xHCI, USB HID, virtio-net, RTL8169, framebuffer
 - **Network stack** -- Ethernet, ARP, IP, TCP, UDP, ICMP, BSD socket implementation
@@ -29,7 +29,7 @@ Anything in the Aegis codebase is fair game:
 
 These are areas where the project is aware of elevated risk. They are not exhaustive -- a C kernel of this size has a large attack surface.
 
-### C memory safety across ~346K LOC
+### C memory safety across the kernel codebase
 
 The most likely class of real vulnerability is a memory safety bug in the C kernel code -- buffer overflows, use-after-free, integer overflows, null dereference in unexpected paths. The capability validation core (`cap_check`, `cap_grant`, `cap_init`) is implemented in Rust with bounds checking and null safety, but everything surrounding it -- syscall handlers, VFS operations, the scheduler, drivers -- is C. A memory corruption bug in any syscall handler could overwrite a process's capability table in kernel memory, bypassing the Rust validation entirely.
 
@@ -51,7 +51,7 @@ User pointer validation uses `copy_from_user`/`copy_to_user` with SMAP enforceme
 
 ### Basename-based policy matching
 
-The security policy engine matches policies on executable basename, not full path. A binary at `/tmp/malicious/login` would match the `login` policy and receive its capabilities (e.g., `CAP_KIND_AUTH`, `CAP_KIND_SETUID`). This is mitigated by filesystem permissions and controlled spawn paths in Vigil, but it is a real design trade-off documented in the [policy engine docs](https://aegis.exec.dev/docs/security/policy/).
+The security policy engine matches policies on executable basename, not full path. A binary at `/tmp/malicious/login` would match the `login` policy and receive its capabilities (e.g., `CAP_KIND_AUTH`, `CAP_KIND_SETUID`). This is mitigated by filesystem permissions and controlled spawn paths in Vigil, but it is a real design trade-off documented in the [policy engine docs](https://aegis.byexec.com/docs/security/policy/).
 
 ## Rust Migration
 
