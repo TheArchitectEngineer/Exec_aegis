@@ -29,6 +29,16 @@ extern char **environ;
 
 #define SYS_FB_MAP  513
 #define SYS_SPAWN   514
+#define SYS_NETCFG  500
+
+/* Mirrors kernel netcfg_info_t — for the greeter network status line. */
+typedef struct {
+    uint8_t  mac[6];
+    uint8_t  pad[2];
+    uint32_t ip;       /* network byte order */
+    uint32_t mask;
+    uint32_t gateway;
+} bastion_netcfg_t;
 
 /* ---- Framebuffer ----------------------------------------------------- */
 
@@ -209,6 +219,22 @@ draw_form(void)
         draw_text_simple(cx - 5 * 8 / 2, logo_y, "AEGIS", 0x00FFFFFF);
     }
 
+    /* v1 disclaimer below logo — matches aegissite terminology */
+    {
+        const char *line1 = "v1 software -- first public release, not production-hardened";
+        const char *line2 = "The C kernel likely contains real, exploitable vulnerabilities";
+        int disc_y = logo_y + logo_dh + 16;
+        int tw1 = g_font_ui ? font_text_width(g_font_ui, 13, line1) : (int)strlen(line1) * 8;
+        int tw2 = g_font_ui ? font_text_width(g_font_ui, 13, line2) : (int)strlen(line2) * 8;
+        if (g_font_ui) {
+            font_draw_text(surf, g_font_ui, 13, cx - tw1 / 2, disc_y, line1, 0x00FFAA55);
+            font_draw_text(surf, g_font_ui, 13, cx - tw2 / 2, disc_y + 18, line2, 0x00AA9080);
+        } else {
+            draw_text_simple(cx - tw1 / 2, disc_y, line1, 0x00FFAA55);
+            draw_text_simple(cx - tw2 / 2, disc_y + 12, line2, 0x00AA9080);
+        }
+    }
+
     /* Fields well below logo — horizontal layout: [username] [password] [button] */
     int total_w = FIELD_W + FIELD_GAP + FIELD_W + FIELD_GAP + 100;
     int fx = cx - total_w / 2;
@@ -218,6 +244,36 @@ draw_form(void)
     if (s_is_lock) {
         int lock_tw = 6 * 8;
         draw_text_simple(cx - lock_tw / 2, fy - 22, "Locked", 0x00FF8888);
+    }
+
+    /* Network status line — top of screen, useful for headless verification
+     * of the network stack on bare-metal where serial isn't available. */
+    {
+        bastion_netcfg_t info;
+        memset(&info, 0, sizeof(info));
+        (void)syscall(SYS_NETCFG, 1, (long)&info, 0, 0);
+        char netline[96];
+        if (info.ip != 0) {
+            uint8_t *b = (uint8_t *)&info.ip;
+            uint8_t *m = info.mac;
+            snprintf(netline, sizeof(netline),
+                     "net: %u.%u.%u.%u  mac %02x:%02x:%02x:%02x:%02x:%02x",
+                     b[0], b[1], b[2], b[3],
+                     m[0], m[1], m[2], m[3], m[4], m[5]);
+            draw_text_simple(20, 16, netline, 0x0080C080);
+        } else {
+            uint8_t *m = info.mac;
+            int has_mac = m[0] || m[1] || m[2] || m[3] || m[4] || m[5];
+            if (has_mac) {
+                snprintf(netline, sizeof(netline),
+                         "net: NO IP (mac %02x:%02x:%02x:%02x:%02x:%02x  DHCP failing)",
+                         m[0], m[1], m[2], m[3], m[4], m[5]);
+            } else {
+                snprintf(netline, sizeof(netline),
+                         "net: NO INTERFACE (driver did not register netdev)");
+            }
+            draw_text_simple(20, 16, netline, 0x00FF8080);
+        }
     }
 
     /* Username field */

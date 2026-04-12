@@ -434,6 +434,21 @@ main(void)
 
     (void)0; /* esc_pending removed — sequences collected inline */
 
+    /* First-boot disclaimer: show the About window (which carries the v1
+     * software disclaimer) on every Lumen startup.  Users can close it
+     * immediately; it's a reminder, not a blocker. */
+    {
+        glyph_window_t *aw = about_create(fb_w, fb_h);
+        if (aw) {
+            comp_add_window(&comp, aw);
+            comp_raise_window(&comp, aw);
+            comp.focused = aw;
+            aw->focused_window = 1;
+            glyph_window_mark_all_dirty(aw);
+            comp.full_redraw = 1;
+        }
+    }
+
     /* Clock update counter */
     int clock_counter = 0;
 

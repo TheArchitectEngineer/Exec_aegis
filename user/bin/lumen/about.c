@@ -206,7 +206,27 @@ about_render(glyph_window_t *win)
         int tw = font_text_width(g_font_ui, 14, tag);
         font_draw_text(s, g_font_ui, 14, cx + (cw - tw) / 2, y, tag, 0x00808898);
     }
-    y += 30;
+    y += 28;
+
+    /* v1 disclaimer — matches aegissite terminology */
+    if (g_font_ui) {
+        const char *d1 = "v1 software -- first public release";
+        const char *d2 = "not production-hardened";
+        const char *d3 = "The C kernel likely contains real,";
+        const char *d4 = "exploitable vulnerabilities.";
+        int tw1 = font_text_width(g_font_ui, 13, d1);
+        int tw2 = font_text_width(g_font_ui, 13, d2);
+        int tw3 = font_text_width(g_font_ui, 13, d3);
+        int tw4 = font_text_width(g_font_ui, 13, d4);
+        font_draw_text(s, g_font_ui, 13, cx + (cw - tw1) / 2, y, d1, 0x00FFAA55);
+        y += 17;
+        font_draw_text(s, g_font_ui, 13, cx + (cw - tw2) / 2, y, d2, 0x00FFAA55);
+        y += 20;
+        font_draw_text(s, g_font_ui, 13, cx + (cw - tw3) / 2, y, d3, 0x00AA9080);
+        y += 17;
+        font_draw_text(s, g_font_ui, 13, cx + (cw - tw4) / 2, y, d4, 0x00AA9080);
+        y += 20;
+    }
 
     /* Separator */
     draw_blend_rect(s, cx + 30, y, cw - 60, 1, 0x00FFFFFF, 20);
@@ -323,7 +343,7 @@ about_create(int screen_w, int screen_h)
     if (!s_claude_px)
         load_claude_logo();
 
-    glyph_window_t *win = glyph_window_create("About Aegis", 380, 400);
+    glyph_window_t *win = glyph_window_create("About Aegis", 400, 500);
     if (!win) return NULL;
 
     win->on_render = about_render;
