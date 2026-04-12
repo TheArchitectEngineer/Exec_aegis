@@ -78,7 +78,8 @@ _kernel_entry:
     /* ── Early liveness signal (pre-MMU, pre-C, pre-EL-drop) ──────────
      * Goal: write "[BOOT] aegis arm64 (pre-MMU)\r\n" to whichever PL011
      * UART is actually mapped on this platform — QEMU virt at 0x09000000
-     * or Pi 5 at 0xFE201000 — BEFORE any C runs, any MMU setup happens,
+     * or Pi 5 BCM2712 internal PL011 at 0x107D001000 — BEFORE any C
+     * runs, any MMU setup happens,
      * and any probe logic executes. On Pi 5 this is the FIRST kernel-
      * originated serial output the user sees on a serial cable, and its
      * presence proves the kernel entry, EL drop, and UART access path
@@ -130,8 +131,12 @@ _kernel_entry:
     b       .Learly_done
 
 .Learly_try_pi:
-    /* Probe 2: Pi 5 UART0 (0xFE201000). */
-    ldr     x0, =0xFE201000
+    /* Probe 2: Pi 5 BCM2712 internal PL011 debug UART at 0x10_7D00_1000.
+     * This is a 40-bit PA — Cortex-A76 supports 40-bit physical addresses
+     * natively pre-MMU, same reason Pi 5 firmware can load us to 0x40200000
+     * before any translation context is configured. Confirmed via Circle
+     * bare-metal library lib/bootloader/periph.c. */
+    ldr     x0, =0x107D001000
     mov     w3, #0xFF
     ldr     w3, [x0, #0xFE0]
     and     w3, w3, #0xFF
@@ -203,17 +208,69 @@ _kernel_entry:
      * Drop from EL2 to EL1 if firmware handed us EL2 (Pi 4/5 default).
      * QEMU virt with cortex-a72 starts at EL1 so this falls through.
      * x19 (DTB) is preserved across the eret.
+     *
+     * Full sanitization of EL2 state before the drop. The minimal
+     * "HCR_EL2.RW=1 + SPSR + eret" drop leaves timer/trap/stage-2/FP
+     * registers in whatever state TF-A left them, which on Pi 5 causes
+     * silent hangs the first time EL1 touches the generic timer. We
+     * set every register Linux head.S sets.
      */
     mrs     x0, CurrentEL
     lsr     x0, x0, #2
     cmp     x0, #2
     b.ne    .Lat_el1
-    mov     x0, #(1 << 31)      /* HCR_EL2.RW = EL1 is AArch64 */
+
+    /* Reset SCTLR_EL2 to a known MMU-off state (RES1 bits preserved). */
+    ldr     x0, =0x30C50830     /* Linux INIT_SCTLR_EL2_MMU_OFF */
+    msr     sctlr_el2, x0
+    isb
+
+    /* HCR_EL2: EL1 is AArch64 (RW=1), everything else default. */
+    mov     x0, #(1 << 31)
     msr     hcr_el2, x0
-    mov     x0, #0x3c5          /* SPSR_EL2: D|A|I|F set, EL1h */
+
+    /* Kill stage-2 translation (no virtualization). */
+    msr     vttbr_el2, xzr
+
+    /* Enable EL1 timer access — else EL1 timer reads trap to EL2. */
+    mrs     x0, cnthctl_el2
+    orr     x0, x0, #3          /* EL1PCEN | EL1PCTEN */
+    msr     cnthctl_el2, x0
+    msr     cntvoff_el2, xzr
+
+    /* Disable coprocessor trapping — else FP/SIMD traps to EL2. */
+    mov     x0, #0x33FF         /* Linux CPTR_EL2_DEFAULT */
+    msr     cptr_el2, x0
+
+    /* Disable CP15 traps. */
+    msr     hstr_el2, xzr
+
+    /* Virtual CPU ID registers (EL1 MIDR/MPIDR reads come from here). */
+    mrs     x0, midr_el1
+    msr     vpidr_el2, x0
+    mrs     x0, mpidr_el1
+    msr     vmpidr_el2, x0
+
+    /* ICC_SRE_EL2: enable GICv3 sysreg access from EL1. Safe on GICv2
+     * too — the bit is simply unused in GICv2-compat mode. Bits: SRE
+     * (0) | Enable (3) = 0b1001 = 9. Not a valid bitmask-immediate, so
+     * build it in a scratch register. */
+    mrs     x0, icc_sre_el2
+    mov     x1, #9              /* SRE | Enable */
+    orr     x0, x0, x1
+    msr     icc_sre_el2, x0
+    isb
+
+    /* Pre-configure SCTLR_EL1 for the destination exception level. */
+    ldr     x0, =0x30D00800     /* Linux INIT_SCTLR_EL1_MMU_OFF */
+    msr     sctlr_el1, x0
+
+    /* Return state: EL1h with D|A|I|F masked. */
+    mov     x0, #0x3C5
     msr     spsr_el2, x0
     adr     x0, .Lat_el1
     msr     elr_el2, x0
+    isb
     eret
 .Lat_el1:
     msr     daifset, #0xf       /* mask all exceptions */
@@ -310,14 +367,55 @@ _kernel_entry:
     orr     x14, x14, x13      /* kern_l1 PA */
     str     x14, [x12]          /* kern_l0[0] */
 
-    /* kern_l1[0] = device 1GB at PA 0 */
+    /* kern_l1[0] = device 1GB at PA 0x00000000 (QEMU GIC/UART + Pi legacy MMIO) */
     mov     x14, #(PTE_V | PTE_AF | PTE_DEV)
     str     x14, [x13]          /* kern_l1[0] */
 
-    /* kern_l1[1] = RAM 1GB at PA 0x40000000 */
+    /* kern_l1[1] = RAM 1GB at PA 0x40000000 (kernel image region) */
     mov     x14, #(PTE_V | PTE_AF | PTE_SH)
     orr     x14, x14, #0x40000000
     str     x14, [x13, #8]      /* kern_l1[1] */
+
+    /* kern_l1[2] = RAM 1GB at PA 0x80000000 (Pi 4/5 extra RAM to 3GB) */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    orr     x14, x14, #0x80000000
+    str     x14, [x13, #16]     /* kern_l1[2] */
+
+    /* kern_l1[3] = RAM 1GB at PA 0xC0000000 (Pi 4/5 extra RAM to 4GB) */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    orr     x14, x14, #0xC0000000
+    str     x14, [x13, #24]     /* kern_l1[3] */
+
+    /* kern_l1[4] = DEVICE 1GB at PA 0x100000000
+     * Pi 5 high MMIO window — contains BCM2712 internal UART at
+     * 0x107D001000, GIC-400 distributor at 0x107FFF9000, and the rest
+     * of the 0x10_7C000000-0x10_7FFFFFFF peripheral region. Required
+     * for any post-MMU access to Pi 5 hardware. */
+    mov     x14, #(PTE_V | PTE_AF | PTE_DEV)
+    movz    x15, #0x0001, lsl #32       /* PA = 0x100000000 */
+    orr     x14, x14, x15
+    str     x14, [x13, #32]     /* kern_l1[4] */
+
+    /* kern_l1[5] = RAM 1GB at PA 0x140000000 (Pi 5 8GB-model RAM) */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    movz    x15, #0x0001, lsl #32
+    orr     x15, x15, #0x40000000
+    orr     x14, x14, x15
+    str     x14, [x13, #40]     /* kern_l1[5] */
+
+    /* kern_l1[6] = RAM 1GB at PA 0x180000000 */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    movz    x15, #0x0001, lsl #32
+    orr     x15, x15, #0x80000000
+    orr     x14, x14, x15
+    str     x14, [x13, #48]     /* kern_l1[6] */
+
+    /* kern_l1[7] = RAM 1GB at PA 0x1C0000000 */
+    mov     x14, #(PTE_V | PTE_AF | PTE_SH)
+    movz    x15, #0x0001, lsl #32
+    orr     x15, x15, #0xC0000000
+    orr     x14, x14, x15
+    str     x14, [x13, #56]     /* kern_l1[7] */
 
     /* ── MMU configuration ── */
 
@@ -326,9 +424,12 @@ _kernel_entry:
     msr     mair_el1, x1
 
     /* TCR: T0SZ=16 (48-bit user), T1SZ=16 (48-bit kernel),
-     * TG0=4KB, TG1=4KB, Inner Shareable, WB Allocate */
+     * TG0=4KB, TG1=4KB, Inner Shareable, WB Allocate,
+     * IPS=2 (40-bit PA) — required for Pi 5 peripherals at PA
+     * 0x10_7C000000+ which are beyond the 32-bit default. */
     ldr     x1, =(16 | (0b11 << 12) | (0b01 << 10) | (0b01 << 8) | \
-                  (16 << 16) | (0b10 << 30) | (0b11 << 28) | (0b01 << 26) | (0b01 << 24))
+                  (16 << 16) | (0b10 << 30) | (0b11 << 28) | (0b01 << 26) | (0b01 << 24) | \
+                  (0b010UL << 32))
     msr     tcr_el1, x1
 
     /* TTBR0: identity map (boot_l0 PA in x10) */
@@ -340,12 +441,25 @@ _kernel_entry:
     dsb     sy
     isb
 
+    /* Invalidate I-cache + TLB before flipping the MMU on. Stale I-cache
+     * lines from the MMU-off regime on Cortex-A76 can cause intermittent
+     * instruction-fetch corruption when the translation context changes.
+     * QEMU doesn't model cache state so this is invisible in emulation,
+     * but it's the #1 cause of "works on QEMU, hangs on Pi 5 hardware"
+     * in bare-metal ARM64 bring-up. TF-A, U-Boot, Linux head.S, Circle,
+     * and OP-TEE all do this sequence. */
+    ic      iallu               /* invalidate all I-cache to PoU */
+    tlbi    vmalle1             /* invalidate all EL1&0 TLB entries */
+    dsb     ish                 /* wait for invalidations to complete */
+    isb                         /* synchronize instruction pipeline */
+
     /* Enable MMU + caches */
     mrs     x1, sctlr_el1
     orr     x1, x1, #(1 << 0)
     orr     x1, x1, #(1 << 2)
     orr     x1, x1, #(1 << 12)
     msr     sctlr_el1, x1
+    dsb     sy
     isb
 
     /* Jump to high VA (TTBR1 range) */
