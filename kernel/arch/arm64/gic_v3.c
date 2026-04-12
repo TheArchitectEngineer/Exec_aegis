@@ -16,12 +16,41 @@
  * wakes redistributor 0, configures SGI/PPIs there, and routes all
  * SPIs to affinity 0 via GICD_IROUTER. SMP is deferred to phase B3.
  *
+ * Diagnostics: every spinloop in this file is bounded. On timeout we
+ * print a [GICv3] TIMEOUT line with the offending register and bail
+ * cleanly so the user has something actionable on bare metal instead
+ * of a silent hang after [KVA] OK. Per-step traces are gated on
+ * GICV3_DEBUG; flip the macro to 0 once silicon boot is confirmed.
+ *
  * See ARM64.md §17.2 for the design rationale and the plan.
  * Spec reference: ARM IHI 0069 (GICv3/v4 architecture).
  */
 
 #include "printk.h"
 #include <stdint.h>
+
+/* ---------------------------------------------------------------------
+ * Diagnostic macros.
+ *
+ * GICV3_DEBUG=1 enables the per-step "[GICv3] step N:" traces and the
+ * register sanity prints. Set to 0 to suppress them once Pi 5 boot is
+ * confirmed. TIMEOUT prints are unconditional — they only fire on
+ * failure and are exactly the lines the user needs to debug silicon.
+ * --------------------------------------------------------------------- */
+
+#define GICV3_DEBUG 1
+
+#if GICV3_DEBUG
+#define GICV3_TRACE(...) printk(__VA_ARGS__)
+#else
+#define GICV3_TRACE(...) ((void)0)
+#endif
+
+/* Bound for every spinloop in this file. ~1M iterations is on the order
+ * of a few milliseconds on modern aarch64 hardware (and well under 100ms
+ * even on the slowest Cortex-A class core), so any wait that exceeds it
+ * is genuinely stuck rather than slow. */
+#define GICV3_SPIN_MAX  1000000UL
 
 /* ---------------------------------------------------------------------
  * MMIO accessors — the caller passes the kernel-VA-mapped base; we
@@ -56,6 +85,10 @@ static inline void mmio_w64(uint64_t base, uint32_t off, uint64_t val)
 #define GICD_IPRIORITYR(n)      (0x0400 + 4 * (n))
 #define GICD_ICFGR(n)           (0x0C00 + 4 * (n))
 #define GICD_IROUTER(n)         (0x6000 + 8 * (n))   /* 64-bit, one per SPI */
+
+/* GICD_TYPER bits */
+#define GICD_TYPER_ITLines_MASK 0x1F
+#define GICD_TYPER_LPIS         (1U << 17)
 
 /* GICD_CTLR (secure/non-secure banked; we run NS EL1 on QEMU virt) */
 #define GICD_CTLR_EnableGrp1NS  (1U << 1)
@@ -143,32 +176,58 @@ static uint64_t s_redist_base;     /* RD_base[0] VA */
 static uint64_t s_sgi_base;        /* RD_base[0] + 0x10000 VA */
 static uint32_t s_max_spi;         /* highest supported SPI (from GICD_TYPER) */
 
-/* Spin on RWP (register write pending). */
-static void
+/* ---------------------------------------------------------------------
+ * Bounded spinloops.
+ *
+ * Returns 0 on success, -1 on timeout. The caller must propagate the
+ * failure so init bails before doing more damage. Timeout messages are
+ * unconditional (raw printk, not GICV3_TRACE).
+ * --------------------------------------------------------------------- */
+
+static int
 gicd_wait_rwp(void)
 {
-    while (mmio_r32(s_dist_base, GICD_CTLR) & GICD_CTLR_RWP)
+    for (unsigned long i = 0; i < GICV3_SPIN_MAX; i++) {
+        if (!(mmio_r32(s_dist_base, GICD_CTLR) & GICD_CTLR_RWP))
+            return 0;
         __asm__ volatile("yield");
+    }
+    printk("[GICv3] TIMEOUT: gicd_wait_rwp GICD_CTLR=0x%x after %lu iters "
+           "(dist_base=0x%lx, expected RWP=0)\n",
+           mmio_r32(s_dist_base, GICD_CTLR),
+           GICV3_SPIN_MAX,
+           (unsigned long)s_dist_base);
+    return -1;
 }
 
-/* Wake redistributor 0 for the BSP. */
-static void
+/* Wake redistributor 0 for the BSP. Returns 0 on success, -1 on timeout. */
+static int
 gicr_wake_bsp(void)
 {
     uint32_t waker = mmio_r32(s_redist_base, GICR_WAKER);
     waker &= ~GICR_WAKER_ProcessorSleep;
     mmio_w32(s_redist_base, GICR_WAKER, waker);
-    /* Wait for ChildrenAsleep to clear. */
-    while (mmio_r32(s_redist_base, GICR_WAKER) & GICR_WAKER_ChildrenAsleep)
+
+    for (unsigned long i = 0; i < GICV3_SPIN_MAX; i++) {
+        if (!(mmio_r32(s_redist_base, GICR_WAKER) & GICR_WAKER_ChildrenAsleep))
+            return 0;
         __asm__ volatile("yield");
+    }
+    printk("[GICv3] TIMEOUT: gicr_wake_bsp GICR_WAKER=0x%x after %lu iters "
+           "(redist_base=0x%lx, expected ChildrenAsleep=0)\n",
+           mmio_r32(s_redist_base, GICR_WAKER),
+           GICV3_SPIN_MAX,
+           (unsigned long)s_redist_base);
+    return -1;
 }
 
 /* ---------------------------------------------------------------------
  * Public API — matches gic.c signatures so the dispatcher can route
- * identically for v2/v3.
+ * identically for v2/v3. gic_v3_init now returns int so the dispatcher
+ * can suppress the success line on timeout.
  * --------------------------------------------------------------------- */
 
-void
+int
 gic_v3_init(uint64_t dist_base, uint64_t redist_base)
 {
     s_dist_base   = dist_base;
@@ -178,15 +237,28 @@ gic_v3_init(uint64_t dist_base, uint64_t redist_base)
     /* Read GICD_TYPER.ITLinesNumber (bits [4:0]) to size the SPI loop.
      * ITLinesNumber N => supported INTIDs = 32 * (N + 1). */
     uint32_t typer = mmio_r32(s_dist_base, GICD_TYPER);
-    uint32_t it_lines = (typer & 0x1F) + 1;
+    uint32_t it_lines = (typer & GICD_TYPER_ITLines_MASK) + 1;
     s_max_spi = (it_lines * 32) - 1;
     if (s_max_spi > 1019) s_max_spi = 1019;
 
+    GICV3_TRACE("[GICv3]   GICD_TYPER=0x%x SPIs=%u LPIs=%s\n",
+                typer,
+                it_lines * 32,
+                (typer & GICD_TYPER_LPIS) ? "yes" : "no");
+
+    uint32_t rtyper_lo = mmio_r32(s_redist_base, GICR_TYPER);
+    GICV3_TRACE("[GICv3]   GICR_TYPER lo=0x%x\n", rtyper_lo);
+
+    GICV3_TRACE("[GICv3] step 1: disable distributor\n");
     /* 1. Disable the distributor before touching its registers. */
     mmio_w32(s_dist_base, GICD_CTLR, 0);
-    gicd_wait_rwp();
 
-    /* 2. SPI configuration (INTIDs >= 32):
+    GICV3_TRACE("[GICv3] step 2: wait GICD_CTLR RWP\n");
+    if (gicd_wait_rwp() != 0)
+        return -1;
+
+    GICV3_TRACE("[GICv3] step 3: configure SPIs (max_spi=%u)\n", s_max_spi);
+    /* 3. SPI configuration (INTIDs >= 32):
      *    - all group 1 non-secure
      *    - priority 0xA0 (middle)
      *    - level-sensitive (ICFGR = 0 for each 2-bit field)
@@ -212,17 +284,23 @@ gic_v3_init(uint64_t dist_base, uint64_t redist_base)
         mmio_w64(s_dist_base, GICD_IROUTER(i), 0);
     }
 
-    /* 3. Enable distributor with ARE_NS + Group 1 NS. ARE is required
+    GICV3_TRACE("[GICv3] step 4: enable distributor (ARE_NS|Grp1NS)\n");
+    /* 4. Enable distributor with ARE_NS + Group 1 NS. ARE is required
      *    in GICv3; GICD_ITARGETSR is RES0 once ARE is set. */
     mmio_w32(s_dist_base, GICD_CTLR,
              GICD_CTLR_ARE_NS | GICD_CTLR_EnableGrp1NS);
-    gicd_wait_rwp();
+    if (gicd_wait_rwp() != 0)
+        return -1;
 
-    /* 4. Wake this CPU's redistributor. Must happen before any ICC_*
+    GICV3_TRACE("[GICv3] step 5: wake redistributor at 0x%lx\n",
+                (unsigned long)redist_base);
+    /* 5. Wake this CPU's redistributor. Must happen before any ICC_*
      *    system register traps will be allowed to function. */
-    gicr_wake_bsp();
+    if (gicr_wake_bsp() != 0)
+        return -1;
 
-    /* 5. SGI/PPI configuration in the redistributor SGI frame:
+    GICV3_TRACE("[GICv3] step 6: configure SGI/PPI frame\n");
+    /* 6. SGI/PPI configuration in the redistributor SGI frame:
      *    - all group 1 NS
      *    - priority 0xA0
      *    - disable everything initially; individual enables come from
@@ -237,31 +315,50 @@ gic_v3_init(uint64_t dist_base, uint64_t redist_base)
     /* Leave ICFGR1 (PPI config) as default — timer PPI 30 is set up
      * in gic_v3_timer_init(). */
 
-    /* 6. Enable system-register access. SRE=1, DIB=1 (disable IRQ
+    GICV3_TRACE("[GICv3] step 7: enable system registers (ICC_SRE_EL1)\n");
+    /* 7. Enable system-register access. SRE=1, DIB=1 (disable IRQ
      *    bypass), DFB=1 (disable FIQ bypass). */
+    uint64_t sre_before = read_icc_sre_el1();
+    GICV3_TRACE("[GICv3]   ICC_SRE_EL1 before = 0x%lx\n",
+                (unsigned long)sre_before);
     write_icc_sre_el1(0x7);
+    uint64_t sre_after = read_icc_sre_el1();
+    GICV3_TRACE("[GICv3]   ICC_SRE_EL1 after  = 0x%lx\n",
+                (unsigned long)sre_after);
 
-    /* 7. Priority mask: allow everything. */
+    GICV3_TRACE("[GICv3] step 8: set PMR/BPR/IGRPEN1\n");
+    /* 8. Priority mask: allow everything. */
     write_icc_pmr_el1(0xFF);
 
-    /* 8. Binary point: no group preemption. */
+    /* 9. Binary point: no group preemption. */
     write_icc_bpr1_el1(0);
 
-    /* 9. Enable Group 1 IRQs. */
+    /* 10. Enable Group 1 IRQs. */
     write_icc_igrpen1_el1(1);
+
+    return 0;
 }
 
 void
 gic_v3_enable_irq(uint32_t irq)
 {
+    static int first = 1;
+    if (first) {
+        GICV3_TRACE("[GICv3] first enable_irq: irq=%u (PPI=%u)\n",
+                    irq, irq < 32 ? 1U : 0U);
+        first = 0;
+    }
+
     if (irq < 32) {
         /* SGI or PPI: configure in the redistributor SGI frame. */
         mmio_w32(s_sgi_base, GICR_ISENABLER0, 1U << irq);
     } else {
-        /* SPI: configure in the distributor. */
+        /* SPI: configure in the distributor. Best-effort RWP wait —
+         * a timeout here is non-fatal (the bit may simply already be
+         * set), but we still print the diagnostic. */
         mmio_w32(s_dist_base, GICD_ISENABLER(irq / 32),
                  1U << (irq % 32));
-        gicd_wait_rwp();
+        (void)gicd_wait_rwp();
     }
 }
 
