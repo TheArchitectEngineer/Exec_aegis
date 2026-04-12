@@ -1,6 +1,7 @@
 /* kernel/net/epoll.c — epoll implementation */
 #include "epoll.h"
 #include "proc.h"
+#include "vfs.h"
 #include "uaccess.h"
 #include "arch.h"
 #include "spinlock.h"
@@ -168,6 +169,34 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
      * checking nready==0 and setting waiter_task loses the wake. */
     for (;;) {
         irqflags_t efl = spin_lock_irqsave(&epoll_lock);
+
+        /* VFS poll sweep: check non-socket fds for readiness */
+        {
+            aegis_process_t *poll_proc = (aegis_process_t *)sched_current();
+            uint8_t w;
+            for (w = 0; w < EPOLL_MAX_WATCHES; w++) {
+                if (!ep->watches[w].in_use) continue;
+                uint32_t wfd = ep->watches[w].fd;
+                if (wfd >= PROC_MAX_FDS) continue;
+                const vfs_ops_t *ops = poll_proc->fd_table->fds[wfd].ops;
+                if (!ops || !ops->poll) continue;
+                void *priv = poll_proc->fd_table->fds[wfd].priv;
+                /* Release lock while calling .poll (it may acquire per-object locks) */
+                spin_unlock_irqrestore(&epoll_lock, efl);
+                uint16_t ready = ops->poll(priv);
+                efl = spin_lock_irqsave(&epoll_lock);
+                uint32_t match = ready & ep->watches[w].events;
+                if (!match) continue;
+                /* Check if already in ready list (dedup) */
+                uint8_t already = 0, k;
+                for (k = 0; k < ep->nready; k++) {
+                    if (ep->ready[k] == w) { already = 1; break; }
+                }
+                if (!already && ep->nready < EPOLL_MAX_WATCHES)
+                    ep->ready[ep->nready++] = w;
+            }
+        }
+
         if (ep->nready > 0) {
             int limit = (ep->nready < (uint8_t)maxevents) ? (int)ep->nready : maxevents;
             int delivered = 0;
@@ -210,6 +239,11 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
         }
 
         ep->waiter_task = (aegis_task_t *)sched_current();
+        /* Also register as poll waiter so PIT wakes us for VFS poll sweep */
+        {
+            extern aegis_task_t *g_poll_waiter;
+            g_poll_waiter = (aegis_task_t *)sched_current();
+        }
         spin_unlock_irqrestore(&epoll_lock, efl);
         sched_block();
         /* Loop: check ready list again after wake */
