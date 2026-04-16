@@ -6,6 +6,7 @@
 #include "tty.h"
 #include "sched.h"
 #include "spinlock.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 #define PTY_MAX_PAIRS  16
@@ -27,6 +28,14 @@ typedef struct {
     spinlock_t lock;                      /* per-pair lock for SMP safety */
     aegis_task_t *master_waiting;         /* task blocked reading master */
     aegis_task_t *slave_waiting;          /* task blocked reading slave */
+    /* Wake queues for sys_poll on each end.
+     * master_waiters: wake when slave→master direction has bytes
+     *   (the shell wrote to its stdout/stderr — Lumen's terminal
+     *   window can now read).
+     * slave_waiters:  wake when master→slave direction has bytes
+     *   (Lumen forwarded a keystroke — the shell can now read it). */
+    waitq_t  master_waiters;
+    waitq_t  slave_waiters;
 } pty_pair_t;
 
 /* ptmx_open -- allocate a PTY pair and return the master fd.

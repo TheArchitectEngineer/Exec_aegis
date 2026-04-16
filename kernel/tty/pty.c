@@ -7,6 +7,7 @@
 #include "signal.h"
 #include "arch.h"
 #include "spinlock.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 /* ── Static pool ──────────────────────────────────────────────────── */
@@ -57,6 +58,18 @@ static void     slave_dup_fn(void *priv);
 static void     slave_close_fn(void *priv);
 static int      slave_stat_fn(void *priv, k_stat_t *st);
 
+static struct waitq *
+pty_master_get_waitq_fn(void *priv)
+{
+	return &((pty_pair_t *)priv)->master_waiters;
+}
+
+static struct waitq *
+pty_slave_get_waitq_fn(void *priv)
+{
+	return &((pty_pair_t *)priv)->slave_waiters;
+}
+
 static uint16_t
 master_poll_fn(void *priv)
 {
@@ -82,23 +95,25 @@ slave_poll_fn(void *priv)
 }
 
 static const vfs_ops_t s_master_ops = {
-	.read    = master_read_fn,
-	.write   = master_write_fn,
-	.close   = master_close_fn,
-	.readdir = (void *)0,
-	.dup     = master_dup_fn,
-	.stat    = master_stat_fn,
-	.poll    = master_poll_fn,
+	.read      = master_read_fn,
+	.write     = master_write_fn,
+	.close     = master_close_fn,
+	.readdir   = (void *)0,
+	.dup       = master_dup_fn,
+	.stat      = master_stat_fn,
+	.poll      = master_poll_fn,
+	.get_waitq = pty_master_get_waitq_fn,
 };
 
 static const vfs_ops_t s_slave_ops = {
-	.read    = slave_read_fn,
-	.write   = slave_write_fn,
-	.close   = slave_close_fn,
-	.readdir = (void *)0,
-	.dup     = slave_dup_fn,
-	.stat    = slave_stat_fn,
-	.poll    = slave_poll_fn,
+	.read      = slave_read_fn,
+	.write     = slave_write_fn,
+	.close     = slave_close_fn,
+	.readdir   = (void *)0,
+	.dup       = slave_dup_fn,
+	.stat      = slave_stat_fn,
+	.poll      = slave_poll_fn,
+	.get_waitq = pty_slave_get_waitq_fn,
 };
 
 /* ── TTY backend callbacks for the slave side ─────────────────────── */
@@ -127,6 +142,9 @@ pty_slave_write_out(tty_t *tty, const char *buf, uint32_t len)
 		sched_wake(pair->master_waiting);
 		pair->master_waiting = 0;
 	}
+	/* Wake sys_poll waiters on the master end (slave→master direction). */
+	if (i > 0)
+		waitq_wake_all(&pair->master_waiters);
 	return (int)i;
 }
 
@@ -311,6 +329,9 @@ master_write_fn(void *priv, const void *buf, uint64_t len)
 		sched_wake(pair->slave_waiting);
 		pair->slave_waiting = 0;
 	}
+	/* Wake sys_poll waiters on the slave end (master→slave direction). */
+	if (i > 0)
+		waitq_wake_all(&pair->slave_waiters);
 	return (int)i;
 }
 
@@ -340,6 +361,10 @@ master_close_fn(void *priv)
 		sched_wake(pair->slave_waiting);
 		pair->slave_waiting = 0;
 	}
+	/* Close path: wake sys_poll waiters on both ends so blocked
+	 * pollers see HUP / EOF. */
+	waitq_wake_all(&pair->master_waiters);
+	waitq_wake_all(&pair->slave_waiters);
 	if (!pair->slave_open)
 		pair->in_use = 0;
 	spin_unlock_irqrestore(&pair->lock, fl);
@@ -427,6 +452,10 @@ slave_close_fn(void *priv)
 		sched_wake(pair->master_waiting);
 		pair->master_waiting = 0;
 	}
+	/* Close path: wake sys_poll waiters on both ends so blocked
+	 * pollers see HUP / EOF. */
+	waitq_wake_all(&pair->master_waiters);
+	waitq_wake_all(&pair->slave_waiters);
 	if (!pair->master_open) {
 		pair->in_use = 0;
 	}
@@ -475,6 +504,8 @@ ptmx_open(int flags, vfs_file_t *out)
 		spinlock_t init = SPINLOCK_INIT;
 		pair->lock = init;
 	}
+	waitq_init(&pair->master_waiters);
+	waitq_init(&pair->slave_waiters);
 
 	tty_init_defaults(&pair->tty);
 	pair->tty.write_out = pty_slave_write_out;
