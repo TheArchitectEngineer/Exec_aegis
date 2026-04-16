@@ -2,7 +2,8 @@ MUSL_DIR = ../../../build/musl-dynamic
 CC = $(MUSL_DIR)/usr/bin/musl-gcc
 CFLAGS = -O2 -fno-pie -no-pie -Wl,--build-id=none -Wall -I../../lib/glyph -I../../lib/citadel
 
-SRCS = main.c cursor.c compositor.c terminal.c widget_test.c about.c
+SRCS = main.c cursor.c compositor.c terminal.c widget_test.c about.c \
+       lumen_server.c
 OBJS = $(SRCS:.c=.o)
 GLYPH = ../../lib/glyph/libglyph.a
 CITADEL = ../../lib/citadel/libcitadel.a

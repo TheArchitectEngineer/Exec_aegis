@@ -5,7 +5,7 @@ AR = ar
 
 SRCS = draw.c widget.c window.c box.c label.c button.c textfield.c \
        checkbox.c progress.c image.c scrollbar.c listview.c menubar.c tabs.c \
-       font.c
+       font.c lumen_client.c
 OBJS = $(SRCS:.c=.o)
 
 all: libglyph.a
