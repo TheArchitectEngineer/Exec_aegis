@@ -127,13 +127,18 @@ main(void)
         auth_grant_shell_caps();
 
         char *argv[] = { login_shell, NULL };
+        write(1, "[LOGIN] about to execve\n", 24);
         execve(shell, argv, environ);
         /* Fallback — log why the primary shell failed */
-        dprintf(2, "[LOGIN] execve(%s) failed: errno=%d, falling back to /bin/sh\n",
-                shell, errno);
+        char errbuf[128];
+        int n = snprintf(errbuf, sizeof(errbuf),
+                         "[LOGIN] execve(%s) failed: errno=%d\n", shell, errno);
+        if (n > 0) write(1, errbuf, (size_t)n);
         char *fb_argv[] = { "-sh", NULL };
         execve("/bin/sh", fb_argv, NULL);
-        dprintf(2, "[LOGIN] execve(/bin/sh) failed: errno=%d\n", errno);
+        n = snprintf(errbuf, sizeof(errbuf),
+                     "[LOGIN] execve(/bin/sh) failed: errno=%d\n", errno);
+        if (n > 0) write(1, errbuf, (size_t)n);
         return 1;
     }
 
