@@ -20,6 +20,7 @@
 #include "terminal.h"
 #include "widget_test.h"
 #include "about.h"
+#include "lumen_server.h"
 
 typedef struct {
     uint64_t addr;
@@ -354,6 +355,11 @@ main(void)
     s_fb_w = fb_w;
     s_fb_h = fb_h;
 
+    /* Start external window server */
+    int lumen_srv_fd = lumen_server_init();
+    if (lumen_srv_fd < 0)
+        dprintf(2, "[LUMEN] warning: could not open /run/lumen.sock\n");
+
     /* Load wallpaper (optional) */
     load_wallpaper(&comp.wallpaper);
 
@@ -462,6 +468,12 @@ main(void)
         int activity = 0;
         int mouse_only = 0;  /* 1 = only mouse moved, no content change */
         ssize_t n;
+
+        /* Service external window clients */
+        if (lumen_srv_fd >= 0) {
+            if (lumen_server_tick(&comp, lumen_srv_fd))
+                activity = 1;
+        }
 
         /* Poll keyboard (stdin, raw mode, non-blocking via VMIN=0) */
         n = read(0, &kbd_byte, 1);

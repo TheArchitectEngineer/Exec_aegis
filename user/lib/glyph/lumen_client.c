@@ -11,7 +11,38 @@
 
 #include "lumen_client.h"
 
-int lumen_connect(void) { return -ENOSYS; }
+int lumen_connect(void)
+{
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -errno;
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, "/run/lumen.sock",
+            sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int err = errno;
+        close(fd);
+        return -err;
+    }
+
+    lumen_hello_t hello = { LUMEN_MAGIC, LUMEN_VERSION };
+    if (write(fd, &hello, sizeof(hello)) != (ssize_t)sizeof(hello)) {
+        close(fd); return -EIO;
+    }
+
+    lumen_hello_reply_t reply;
+    if (read(fd, &reply, sizeof(reply)) != (ssize_t)sizeof(reply)) {
+        close(fd); return -EIO;
+    }
+    if (reply.magic != LUMEN_MAGIC || reply.status != 0) {
+        close(fd); return -EPROTO;
+    }
+
+    return fd;
+}
 
 lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
 {
