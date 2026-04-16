@@ -287,6 +287,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 | Bastion (Phase 46) | ✅ | Graphical display manager; libauth.a + libcitadel.a |
 | GUI polish (Phase 46b) | ✅ | Dark mode, frosted glass, TTF fonts, sys_reboot |
 | Cap-policy redesign (Phase 46c) | ✅ | Two-tier kernel policy; /etc/aegis/caps.d/; sys_auth_session(364); capd+exec_caps eliminated |
+| GUI installer + Lumen external window protocol (Phase 47) | ✅ | gui-installer is a real Lumen window via AF_UNIX protocol (memfd+SCM_RIGHTS); LUMEN_OP_CREATE_WINDOW/DAMAGE/DESTROY/CREATE_PANEL/INVOKE; mouse + Enter dispatch; CAP_KIND_FB no longer required |
+| Citadel dock split (Phase 47b) | ✅ | /bin/citadel-dock is its own process; talks to Lumen over the protocol; vigil graphical-mode service. First step of subsystem peeling |
 
 ### Known deviations
 
@@ -318,7 +320,8 @@ A subsystem is ✅ only when `make test` passes with it included.
 |-------|---------|--------|
 | 25-46b | (All complete — see Build Status table) | ✅ Done |
 | 46c | **Cap-policy redesign** — two-tier kernel policy (service+admin caps); /etc/aegis/caps.d/; sys_auth_session(364); capd+exec_caps+sys_cap_grant_exec/runtime removed | ✅ Done |
-| 47 | **GUI installer** — graphical version of text-mode installer using Glyph | Not started |
+| 47 | **GUI installer** — graphical version of text-mode installer using Glyph | ✅ Done (v1.0.1) |
+| 47b | **Subsystem peeling** — split Lumen subsystems into separate binaries; dock done. Terminal/taskbar/file-manager next. | Dock done; rest TBD |
 | 48 | **Super key + extended keyboard** — PS/2 E0; Super modifier; multimedia scancodes | Not started |
 | 49 | **TCP polish** — send segmentation; per-connection TX buffer; flow control. Required for SSH. | Not started |
 | 50 | **TinySSH + sftp-server** — NaCl crypto, key-only auth; CAP_KIND_NET_LISTEN | Not started |
@@ -381,18 +384,41 @@ Aegis has its own native GUI stack — no X11, no Wayland, no bloat. The framebu
 | **Citadel** | Desktop shell | GNOME Shell / KDE Plasma | Taskbar, app launcher, desktop icons, clock. |
 | **Bastion** | Display manager | GDM / SDDM | Graphical login + lock screen. Owns session lifecycle. |
 
-### Architecture (v0.2 — Phase 46)
+### Architecture (v0.3 — Phase 47/47b)
 
-Bastion owns the graphical session. Vigil starts Bastion (not Lumen). Bastion authenticates, then spawns Lumen as a child. Citadel is `libcitadel.a` linked into Lumen. Auth is `libauth.a` shared between `/bin/login` (text) and `/bin/bastion` (graphical).
+Bastion owns the graphical session. Vigil starts Bastion. Bastion auths, spawns Lumen. Lumen runs the AF_UNIX server at `/run/lumen.sock`. External processes (citadel-dock, gui-installer) are first-class clients via the **external window protocol**. Terminal + widget_test are still in-process Lumen built-ins (next to peel).
 
 ```
-Bastion (display manager) → authenticates → spawns Lumen
-  Lumen (compositor) — links libcitadel.a + libglyph.a
+Bastion (display manager) → auths → spawns Lumen
+  Lumen (compositor) — links libglyph.a; serves /run/lumen.sock
     Terminal, Terminal, ... (PTY children via sys_spawn)
   Win+L → SIGUSR1 to Bastion → lock screen
+
+  ↕ AF_UNIX (external window protocol)
+
+  /bin/citadel-dock  (panel, vigil graphical-mode service)
+  /bin/gui-installer (regular window, on-demand)
 ```
 
-**Target architecture (future):** Lumen becomes `liblumen.a`. Bastion links everything into one binary. No framebuffer handoff.
+**External window protocol** (`user/lib/glyph/lumen_proto.h`, `lumen_client.{c,h}`, `user/bin/lumen/lumen_server.{c,h}`):
+- Handshake: `lumen_hello_t` magic+version, reply with status
+- Opcodes (client→server): `LUMEN_OP_CREATE_WINDOW`, `LUMEN_OP_CREATE_PANEL` (chromeless, non-focusable, bottom-anchored), `LUMEN_OP_DAMAGE`, `LUMEN_OP_DESTROY_WINDOW`, `LUMEN_OP_INVOKE` (ask Lumen to spawn a built-in by name — currently "terminal" / "widgets")
+- Events (server→client): `LUMEN_EV_KEY`, `LUMEN_EV_MOUSE`, `LUMEN_EV_CLOSE_REQUEST`, `LUMEN_EV_FOCUS`, `LUMEN_EV_RESIZED` (reserved, never sent in v1)
+- Memfd-backed pixel buffer passed via `SCM_RIGHTS` on the CREATE reply. Client renders to backbuf, copies to shared, sends DAMAGE.
+- `lumen_window_created_t` includes `width, height, x, y` — clients need x,y for screen-relative coordinates (e.g. `[DOCK]` debug lines)
+- Lumen single-byte keys go through `focused->on_key(byte)` if set (terminals' `on_key` writes to PTY master_fd; proxy windows' `on_key` sends `LUMEN_EV_KEY`). Falls back to direct `tag` write for legacy paths. Multi-byte ESC sequences (arrows / CSI) still PTY-only — known gap.
+- `LUMEN_RUNNING=1` env guard: `/bin/lumen` exits with "you're already using lumen, pal" if launched recursively.
+- `lumen-probe` (`user/bin/lumen-probe/`) is a test/diagnostic binary — connects, creates a 200x100 blue window, presents, destroys, exits. Used by `tests/tests/lumen_proxy_uaf_test.rs`. NOT auto-launched in production rootfs.
+
+**Cleanup invariants** (UAF-class bugs to not regress):
+- `comp_remove_window(comp, win)` already calls `glyph_window_destroy(win)`. Do NOT call `glyph_window_destroy` again afterward in proxy hangup paths — double free.
+- `comp_remove_window` clears `c->focused`, `c->drag_win`, `c->content_drag_win` if they pointed to the removed window. Anything else holding a `glyph_window_t *` outside the windows[] array MUST be cleared by `comp_remove_window` (or audited on add/raise paths).
+- Proxy windows: `pw->shared` is munmap'd in hangup. After hangup, the focused/drag pointers must already be cleared or they'll fault on the next event with CR2 in the mmap region.
+- Close button: invokes `win->on_close()` if set (proxy windows use this to forward `LUMEN_EV_CLOSE_REQUEST` to the owner instead of self-destruct), otherwise falls back to `comp_remove_window`.
+
+**glyph_window_t.tag** initializes to **-1** (sentinel). Default 0 from calloc collided with valid PTY fd 0 in dispatch checks. Lumen uses `tag >= 0` to mean "deliver via direct PTY write".
+
+**Target architecture (future):** Continue subsystem peeling. Terminal next, then taskbar, file manager, settings. Each becomes its own binary using the protocol; Lumen shrinks toward pure compositor + AF_UNIX broker.
 
 ### Font
 
@@ -419,11 +445,13 @@ Outbound TCP works. `nettest` vigil service connects to `1.1.1.1:80`, sends HTTP
 ### IPC Limits (Phase 44)
 
 - UNIX_SOCK_MAX = 32 (16 concurrent connections)
+- **UNIX_BUF_SIZE = 4096** — must stay a power of two. The ring math uses `(head - tail) & (UNIX_BUF_SIZE - 1)` which only computes a real modulo for power-of-two sizes. Original 4056 was broken (`8 & 4055 == 0`); fixed in v1.0.1.
 - MEMFD_PAGES_MAX = 2048 (8MB — one 1080p BGRA framebuffer)
 - CAP_KIND_IPC = 15 is the last cap slot. CAP_TABLE_SIZE = 16.
 - No SOCK_DGRAM AF_UNIX, no abstract namespace, no MSG_PEEK/DONTWAIT/WAITALL
-- MAP_SHARED only for memfd fds (not ext2 or pipes)
-- ftruncate only for memfd (not ext2)
+- MAP_SHARED only for memfd fds (not ext2 or pipes). `sys_mmap` MAP_SHARED size check compares `len > page_count * 4096` (page-rounded), not `len > mf->size` — fixed in v1.0.1, sub-page-aligned ftruncate works.
+- AF_UNIX `fcntl(F_SETFL, O_NONBLOCK)` propagates to `unix_sock_t.nonblocking` (sys_file.c). AF_UNIX has a real `.poll` callback (`unix_vfs_poll`); checks accept queue (LISTENING), peer ring (CONNECTED), peer state (POLLHUP). Fixed in v1.0.1; both required to unfreeze Lumen on bare metal.
+- AF_UNIX bind does NOT create a filesystem entry — the path lives in an in-kernel name table (`name_register`/`name_lookup`). Clients must retry connect until ECONNREFUSED stops; `stat()` will not work.
 
 ### Capability System (Phase 46c — policy redesign)
 
