@@ -8,6 +8,8 @@ make run     # boot in QEMU
 make test    # headless boot + serial diff against expected output
 ```
 
+Default root password: `forevervigilant`
+
 Aegis is **v1 software** — a first public release, not production-hardened. The C kernel almost certainly contains real, exploitable vulnerabilities. A gradual Rust migration is underway, starting with the capability validation core (`kernel/cap/`). See [`SECURITY.md`](SECURITY.md) for the full security posture.
 
 ## Documentation
