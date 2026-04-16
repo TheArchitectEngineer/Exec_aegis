@@ -45,6 +45,7 @@ user/bin/chmod/chmod.elf        /bin/chmod
 user/bin/chown/chown.elf        /bin/chown
 user/bin/readlink/readlink.elf  /bin/readlink
 user/bin/polltest/polltest.elf  /bin/polltest
+user/bin/poll-test/poll-test.elf /bin/poll-test
 
 # Network / services
 user/bin/httpd/httpd.elf        /bin/httpd
