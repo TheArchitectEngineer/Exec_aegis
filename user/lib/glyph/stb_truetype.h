@@ -3341,13 +3341,16 @@ static void stbtt__rasterize_sorted_edges(stbtt__bitmap *result, stbtt__edge *e,
          if (e->y0 != e->y1) {
             stbtt__active_edge *z = stbtt__new_active(&hh, e, off_x, scan_y_top, userdata);
             if (z != NULL) {
-               if (j == 0 && off_y != 0) {
-                  if (z->ey < scan_y_top) {
-                     // this can happen due to subpixel positioning and some kind of fp rounding error i think
-                     z->ey = scan_y_top;
-                  }
-               }
-               STBTT_assert(z->ey >= scan_y_top); // if we get really unlucky a tiny bit of an edge can be out of bounds
+               // Aegis: stb_truetype upstream only clamps for j == 0 && off_y != 0,
+               // but subpixel positioning + fp rounding can produce edges with
+               // ey < scan_y_top on any scanline (notably j == 0, off_y == 0 with
+               // glyphs whose vertices spill above the bbox iy0). Clamping is safe
+               // because (1) z is deleted next iteration when ey <= scan_y_top,
+               // (2) downstream stbtt__handle_clipped_edge guards on y0 == y1,
+               // (3) sy is unchanged so the trapezoid degenerates to zero area.
+               if (z->ey < scan_y_top)
+                  z->ey = scan_y_top;
+               STBTT_assert(z->ey >= scan_y_top);
                // insert at front
                z->next = active;
                active = z;
