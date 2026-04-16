@@ -686,14 +686,46 @@ static void handle_key(char c)
     }
 }
 
+/* Per-screen Back action. Welcome has no previous screen (no-op);
+ * Disk/User/Confirm step backwards through the wizard; Progress
+ * piggybacks on the Retry path that handle_key_progress already
+ * implements (only meaningful after install_failed). */
+static void handle_back(void)
+{
+    switch (g_st.screen) {
+    case SCREEN_WELCOME:
+        break;
+    case SCREEN_DISK:
+        g_st.screen = SCREEN_WELCOME;
+        dprintf(2, "[INSTALLER] screen=1\n");
+        g_st.dirty = 1;
+        break;
+    case SCREEN_USER:
+        g_st.validation_error[0] = '\0';
+        g_st.screen = SCREEN_DISK;
+        dprintf(2, "[INSTALLER] screen=2\n");
+        g_st.dirty = 1;
+        break;
+    case SCREEN_CONFIRM:
+        g_st.screen = SCREEN_USER;
+        dprintf(2, "[INSTALLER] screen=3\n");
+        g_st.dirty = 1;
+        break;
+    case SCREEN_PROGRESS:
+        /* The left button is "Retry" while the install is failed —
+         * reuse handle_key_progress's existing Enter-to-retry path. */
+        if (g_st.install_failed)
+            handle_key_progress('\r');
+        break;
+    }
+}
+
 /* Mouse click handling. Buttons are drawn at fixed positions
  * (see draw_screen_*): width 100, height 40, y = fb_h - 120.
  * The "advance" button is either centered (Welcome, Reboot) at
  * (cx - 50, y) or on the right (Disk, User, Confirm, Abort) at
- * (cx + 60, y). Synthesize Enter on a click in either slot —
- * the per-screen handle_key_* functions interpret Enter as
- * "advance / confirm". Back-button clicks are ignored for now
- * (no keyboard back action exists either). */
+ * (cx + 60, y). The "Back" / "Retry" button is on the left at
+ * (cx - 160, y) for Disk/User/Confirm/Progress-failed. */
 static void handle_mouse_click(int x, int y)
 {
     int cx     = g_st.fb_w / 2;
@@ -701,11 +733,14 @@ static void handle_mouse_click(int x, int y)
     int btn_h  = 40;
     int btn_w  = 100;
     if (y < btn_y || y >= btn_y + btn_h) return;
+    int left_x0   = cx - 160;
     int center_x0 = cx - 50;
     int right_x0  = cx + 60;
     if ((x >= center_x0 && x < center_x0 + btn_w) ||
         (x >= right_x0  && x < right_x0  + btn_w))
         handle_key('\r');
+    else if (x >= left_x0 && x < left_x0 + btn_w)
+        handle_back();
 }
 
 /* ── Main ───────────────────────────────────────────────────────────── */
