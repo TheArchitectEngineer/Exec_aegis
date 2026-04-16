@@ -35,15 +35,9 @@ static volatile uint64_t s_epoch_offset = 0;
  * forward decl is cleaner for a single-function dependency. */
 void sched_tick(void);
 
-/* Forward decl for aegis_task_t — defined in sched.h. */
-struct aegis_task_t;
-typedef struct aegis_task_t aegis_task_t;
-void sched_wake(aegis_task_t *task);
-
-/* Global poll waiter: set by sys_poll when blocking, cleared after wake.
- * The PIT handler wakes this task after netdev_poll_all + inb(0x61) so
- * that poll() detects data that arrived during the tick. */
-aegis_task_t *g_poll_waiter;
+/* PIT wakes g_timer_waitq each tick so timed pollers re-check their
+ * deadline. Replaces the old single-slot g_poll_waiter (deleted). */
+#include "../../sched/waitq.h"
 
 void
 pit_init(void)
@@ -75,13 +69,8 @@ pit_handler(void)
      * loop to run select()/poll(), which processes SLIRP hostfwd connections.
      * Port 0x61 (PC speaker control) is safe to read in any state. */
     inb(0x61);
-    /* Wake poll waiter after network processing + SLIRP yield.
-     * This ensures data that arrived during this tick is visible to poll. */
-    if (g_poll_waiter) {
-        aegis_task_t *w = g_poll_waiter;
-        g_poll_waiter = (aegis_task_t *)0;
-        sched_wake(w);
-    }
+    /* Wake all timed pollers so they can re-check their deadline. */
+    waitq_wake_all(&g_timer_waitq);
     /* Check shutdown AFTER sched_tick so the task that set s_shutdown
      * gets preempted cleanly before we call arch_debug_exit. */
     if (s_shutdown)

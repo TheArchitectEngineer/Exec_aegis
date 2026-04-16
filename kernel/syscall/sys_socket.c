@@ -1,6 +1,7 @@
 /* sys_socket.c — POSIX socket API syscalls */
 #include "sys_impl.h"
 #include "sched.h"
+#include "waitq.h"
 #include "proc.h"
 #include "vfs.h"
 #include "socket.h"
@@ -910,10 +911,8 @@ sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout_ms)
          * global poll-waiter pointer so the PIT handler can wake us
          * after network processing is complete. */
         {
-            extern aegis_task_t *g_poll_waiter;
-            g_poll_waiter = (aegis_task_t *)sched_current();
-            sched_block();
-            /* After wake: g_poll_waiter cleared by PIT handler */
+            /* TEMP: bridged via g_timer_waitq until Task 5 lands per-fd queues. */
+            waitq_wait(&g_timer_waitq);
         }
     }
 }

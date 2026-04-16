@@ -4,6 +4,8 @@
 #include "spinlock.h"
 #include <stddef.h>
 
+waitq_t g_timer_waitq = WAITQ_INIT;
+
 void
 waitq_add(waitq_t *wq, waitq_entry_t *e)
 {

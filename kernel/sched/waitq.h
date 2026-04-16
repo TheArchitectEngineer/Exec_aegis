@@ -80,4 +80,10 @@ void waitq_wake_all(waitq_t *wq);
  * Caller must have checked the wait condition is NOT met. */
 void waitq_wait(waitq_t *wq);
 
+/* g_timer_waitq — woken once per PIT tick by the timer ISR.
+ * sys_poll / sys_epoll_wait with a finite timeout register on this
+ * queue so they wake to re-check their deadline. Calls with timeout=-1
+ * skip it (zero overhead, no spurious wakes). */
+extern waitq_t g_timer_waitq;
+
 #endif /* AEGIS_WAITQ_H */

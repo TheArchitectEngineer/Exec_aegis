@@ -6,6 +6,7 @@
 #include "arch.h"
 #include "printk.h"
 #include "spinlock.h"
+#include "waitq.h"
 #include <stdint.h>
 
 static epoll_fd_t s_epoll[EPOLL_MAX_INSTANCES];
@@ -240,13 +241,9 @@ int epoll_wait_impl(uint32_t epoll_id, uint64_t events_uptr,
         }
 
         ep->waiter_task = (aegis_task_t *)sched_current();
-        /* Also register as poll waiter so PIT wakes us for VFS poll sweep */
-        {
-            extern aegis_task_t *g_poll_waiter;
-            g_poll_waiter = (aegis_task_t *)sched_current();
-        }
         spin_unlock_irqrestore(&epoll_lock, efl);
-        sched_block();
+        /* TEMP: bridged via g_timer_waitq until Task 10 wires epoll waitqs. */
+        waitq_wait(&g_timer_waitq);
         /* Loop: check ready list again after wake */
     }
 }
