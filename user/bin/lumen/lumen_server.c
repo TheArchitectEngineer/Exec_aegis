@@ -122,7 +122,10 @@ void lumen_proxy_notify_focus(glyph_window_t *win, int focused)
     proxy_window_t *pw = win->priv;
     if (win->on_render != proxy_on_render) return;
     lumen_msg_hdr_t hdr = { LUMEN_EV_FOCUS, sizeof(lumen_focus_event_t) };
-    lumen_focus_event_t ev = { pw->id, (uint8_t)focused, {0,0,0} };
+    lumen_focus_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.window_id = pw->id;
+    ev.focused   = (uint8_t)focused;
     write(pw->client->fd, &hdr, sizeof(hdr));
     write(pw->client->fd, &ev,  sizeof(ev));
 }
