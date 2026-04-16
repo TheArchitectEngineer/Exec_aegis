@@ -114,6 +114,19 @@ static void proxy_on_mouse_up(glyph_window_t *win, int x, int y)
     send_mouse_event(win->priv, x, y, 0, LUMEN_MOUSE_UP);
 }
 
+/* ── Focus notification (public — called from compositor) ────────────── */
+
+void lumen_proxy_notify_focus(glyph_window_t *win, int focused)
+{
+    if (!win || !win->priv) return;
+    proxy_window_t *pw = win->priv;
+    if (win->on_render != proxy_on_render) return;
+    lumen_msg_hdr_t hdr = { LUMEN_EV_FOCUS, sizeof(lumen_focus_event_t) };
+    lumen_focus_event_t ev = { pw->id, (uint8_t)focused, {0,0,0} };
+    write(pw->client->fd, &hdr, sizeof(hdr));
+    write(pw->client->fd, &ev,  sizeof(ev));
+}
+
 /* ── CREATE_WINDOW handler ──────────────────────────────────────────── */
 
 static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
