@@ -39,6 +39,174 @@ struct proxy_window {
 static lumen_client_t *s_clients[LUMEN_MAX_CLIENTS];
 static int              s_ncli;
 
+/* ── Proxy window callbacks ─────────────────────────────────────────── */
+
+static void proxy_on_render(glyph_window_t *win)
+{
+    proxy_window_t *pw = win->priv;
+    int client_w  = win->client_w;
+    int client_h  = win->client_h;
+    int surf_pitch = win->surface.pitch;
+
+    uint32_t *dst = win->surface.buf
+                    + (GLYPH_TITLEBAR_HEIGHT + GLYPH_BORDER_WIDTH) * surf_pitch
+                    + GLYPH_BORDER_WIDTH;
+    const uint32_t *src = pw->shared;
+
+    for (int row = 0; row < client_h; row++)
+        memcpy(dst + row * surf_pitch,
+               src + row * client_w,
+               (size_t)client_w * sizeof(uint32_t));
+}
+
+static void proxy_on_close(glyph_window_t *win)
+{
+    proxy_window_t *pw = win->priv;
+    lumen_msg_hdr_t hdr = { LUMEN_EV_CLOSE_REQUEST,
+                             sizeof(lumen_close_request_t) };
+    lumen_close_request_t ev = { pw->id };
+    write(pw->client->fd, &hdr, sizeof(hdr));
+    write(pw->client->fd, &ev,  sizeof(ev));
+}
+
+static void proxy_on_key(glyph_window_t *win, char key)
+{
+    proxy_window_t *pw = win->priv;
+    lumen_msg_hdr_t hdr = { LUMEN_EV_KEY, sizeof(lumen_key_event_t) };
+    lumen_key_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.window_id = pw->id;
+    ev.keycode   = (uint32_t)(uint8_t)key;
+    ev.pressed   = 1;
+    write(pw->client->fd, &hdr, sizeof(hdr));
+    write(pw->client->fd, &ev,  sizeof(ev));
+}
+
+static void send_mouse_event(proxy_window_t *pw, int win_x, int win_y,
+                              uint8_t buttons, uint8_t evtype)
+{
+    int cx = win_x - GLYPH_BORDER_WIDTH;
+    int cy = win_y - GLYPH_TITLEBAR_HEIGHT - GLYPH_BORDER_WIDTH;
+    lumen_msg_hdr_t hdr = { LUMEN_EV_MOUSE, sizeof(lumen_mouse_event_t) };
+    lumen_mouse_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.window_id = pw->id;
+    ev.x         = cx;
+    ev.y         = cy;
+    ev.buttons   = buttons;
+    ev.evtype    = evtype;
+    write(pw->client->fd, &hdr, sizeof(hdr));
+    write(pw->client->fd, &ev,  sizeof(ev));
+}
+
+static void proxy_on_mouse_down(glyph_window_t *win, int x, int y)
+{
+    send_mouse_event(win->priv, x, y, 1, LUMEN_MOUSE_DOWN);
+}
+
+static void proxy_on_mouse_move(glyph_window_t *win, int x, int y)
+{
+    send_mouse_event(win->priv, x, y, 0, LUMEN_MOUSE_MOVE);
+}
+
+static void proxy_on_mouse_up(glyph_window_t *win, int x, int y)
+{
+    send_mouse_event(win->priv, x, y, 0, LUMEN_MOUSE_UP);
+}
+
+/* ── CREATE_WINDOW handler ──────────────────────────────────────────── */
+
+static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
+                                  const lumen_create_window_t *req)
+{
+    if (cli->nwindows >= LUMEN_MAX_WINDOWS_PER_CLIENT)
+        goto err_reply;
+
+    int w = req->width;
+    int h = req->height;
+    size_t bufsz = (size_t)w * h * sizeof(uint32_t);
+
+    int memfd = memfd_create("lumen_win", 0);
+    if (memfd < 0) goto err_reply;
+    if (ftruncate(memfd, (off_t)bufsz) < 0) { close(memfd); goto err_reply; }
+
+    void *shared = mmap(NULL, bufsz, PROT_READ, MAP_SHARED, memfd, 0);
+    if (shared == MAP_FAILED) { close(memfd); goto err_reply; }
+
+    proxy_window_t *pw = calloc(1, sizeof(*pw));
+    if (!pw) { munmap(shared, bufsz); close(memfd); goto err_reply; }
+
+    pw->client = cli;
+    pw->id     = cli->next_id++;
+    pw->memfd  = memfd;
+    pw->shared = shared;
+
+    char title[64];
+    memset(title, 0, sizeof(title));
+    strncpy(title, req->title, sizeof(title) - 1);
+
+    pw->win = glyph_window_create(title, w, h);
+    if (!pw->win) { free(pw); munmap(shared, bufsz); close(memfd); goto err_reply; }
+
+    pw->win->priv          = pw;
+    pw->win->on_render     = proxy_on_render;
+    pw->win->on_close      = proxy_on_close;
+    pw->win->on_key        = proxy_on_key;
+    pw->win->on_mouse_down = proxy_on_mouse_down;
+    pw->win->on_mouse_move = proxy_on_mouse_move;
+    pw->win->on_mouse_up   = proxy_on_mouse_up;
+
+    pw->win->x = (comp->fb.w - pw->win->surf_w) / 2;
+    pw->win->y = (comp->fb.h - pw->win->surf_h) / 2;
+
+    comp_add_window(comp, pw->win);
+    glyph_window_mark_all_dirty(pw->win);
+    comp->full_redraw = 1;
+
+    cli->windows[cli->nwindows++] = pw;
+
+    /* Reply: lumen_window_created_t + memfd via SCM_RIGHTS */
+    lumen_window_created_t reply_data = {
+        .status    = 0,
+        .window_id = pw->id,
+        .width     = (uint32_t)w,
+        .height    = (uint32_t)h,
+    };
+    lumen_msg_hdr_t rhdr = { 0, sizeof(reply_data) };
+
+    char cmsgbuf[CMSG_SPACE(sizeof(int))];
+    struct iovec iov[2] = {
+        { .iov_base = &rhdr,       .iov_len = sizeof(rhdr)       },
+        { .iov_base = &reply_data, .iov_len = sizeof(reply_data) },
+    };
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov        = iov;
+    msg.msg_iovlen     = 2;
+    msg.msg_control    = cmsgbuf;
+    msg.msg_controllen = sizeof(cmsgbuf);
+
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type  = SCM_RIGHTS;
+    cmsg->cmsg_len   = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cmsg), &memfd, sizeof(int));
+    msg.msg_controllen = cmsg->cmsg_len;
+
+    sendmsg(cli->fd, &msg, 0);
+    return 1;
+
+err_reply: {
+        lumen_window_created_t err_data = { (uint32_t)EIO, 0, 0, 0 };
+        lumen_msg_hdr_t ehdr = { 0, sizeof(err_data) };
+        write(cli->fd, &ehdr,     sizeof(ehdr));
+        write(cli->fd, &err_data, sizeof(err_data));
+        return 0;
+    }
+}
+
+/* ── Client read + hangup ───────────────────────────────────────────── */
+
 static int lumen_server_read(compositor_t *comp, lumen_client_t *cli)
 {
     (void)comp; (void)cli;
