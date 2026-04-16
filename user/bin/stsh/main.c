@@ -37,8 +37,6 @@ main(int argc, char **argv, char **envp)
     cmd_t cmds[MAX_PIPELINE];
     int last_exit = 0;
 
-    write(1, "[STSH] entered main\n", 20);
-
     /* Initialize environment */
     env_init(envp);
 
