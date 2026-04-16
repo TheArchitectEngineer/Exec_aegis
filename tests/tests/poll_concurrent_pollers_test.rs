@@ -80,17 +80,13 @@ async fn two_pollers_both_receive() {
         .expect("send password");
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    // Spawn server + two clients in the same shell line. The 1s sleep
-    // after server-background gives it time to bind/listen before the
-    // clients attempt to connect — `connect_to` retries on
-    // ECONNREFUSED so even without it this would converge, but keep
-    // it for determinism.
-    proc.send_keys(
-        "poll-test server /tmp/p.sock & sleep 1; \
-         poll-test client /tmp/p.sock & poll-test client /tmp/p.sock & wait\n",
-    )
-    .await
-    .expect("send command line");
+    // `poll-test all` forks server + two clients itself — avoids
+    // shell `&` / `;` / `wait` because vortex send_keys can't transmit
+    // `&` (and reliably composing the multi-cmd line through the PS/2
+    // path is fragile).
+    proc.send_keys("poll-test all /tmp/p.sock\n")
+        .await
+        .expect("send command line");
 
     let mut got_a = false;
     let mut got_b = false;
