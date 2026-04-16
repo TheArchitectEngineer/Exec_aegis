@@ -412,9 +412,9 @@ Bastion (display manager) → authenticates → spawns Lumen
 
 These are constraints from completed phases that remain load-bearing. Grouped by topic.
 
-### Outbound TCP — BROKEN (Phase 40b)
+### Outbound TCP — WORKING (fixed, verified 2026-04-15)
 
-`curl -sk https://example.com` exits with rc=7 (ECONNREFUSED). Inbound TCP works (test_socket PASS). Outbound connect through SLIRP NAT has a race condition — `tcp_send_segment` outside `tcp_lock` races with `tcp_tick`. Next steps: TCP debug logging or `make gdb` breakpoints in tcp_connect/tcp_rx.
+Outbound TCP works. `nettest` vigil service connects to `1.1.1.1:80`, sends HTTP GET, receives 255 bytes — verified on QEMU q35 + SLIRP. The `tcp_send_segment` / `tcp_lock` race described in the Phase 40b note has been resolved. `curl -sk https://example.com` works from the shell.
 
 ### IPC Limits (Phase 44)
 
@@ -504,7 +504,9 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 
 **Userland: NONE.** All pre-rebase user blobs have been purged. `proc_spawn_init()` is a no-op on aarch64 until a real aarch64-musl toolchain is wired up (phase A4). Never embed generated blob `.c` files in `kernel/arch/arm64/` — they are `.gitignore`'d, and if they reappear they lie about correctness (a 685-commit-old `/bin/sh` blob ran successfully under current syscall dispatch and masked every ARM64 regression).
 
-**Remaining:** aarch64-musl userland (A4), Linux arm64 Image boot header (A5, for Pi), Rust `kernel/cap/` cross-compile (~1h Makefile), PAN, TLB shootdown for SMP, `vmm_free_user_pages`. Boot oracle via Vortex (A5) pending.
+**Completed (2026-04-15):** Linux arm64 Image format + `tools/gen-arm64-image.py` (A5), GICv3 driver `gic_v3.c` (B1a), DTB-driven UART probe, Rust `kernel/cap/` `aarch64-unknown-none` target added, boot oracle `tests/tests/boot_oracle_arm64.rs`. Pi 5 support deferred indefinitely.
+
+**Remaining:** aarch64-musl userland (A4 — main blocker), PAN, TLB shootdown for SMP, `vmm_free_user_pages`.
 
 ### Lock Ordering (Canonical)
 
