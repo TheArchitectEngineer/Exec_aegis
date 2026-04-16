@@ -1,5 +1,6 @@
 /* lumen_server.c — Lumen external window protocol server */
 #define _GNU_SOURCE
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -143,11 +144,22 @@ static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
     size_t bufsz = (size_t)w * h * sizeof(uint32_t);
 
     int memfd = memfd_create("lumen_win", 0);
-    if (memfd < 0) goto err_reply;
-    if (ftruncate(memfd, (off_t)bufsz) < 0) { close(memfd); goto err_reply; }
+    if (memfd < 0) {
+        dprintf(2, "[LUMEN-SRV] memfd_create failed errno=%d\n", errno);
+        goto err_reply;
+    }
+    if (ftruncate(memfd, (off_t)bufsz) < 0) {
+        dprintf(2, "[LUMEN-SRV] ftruncate(%lu) failed errno=%d\n",
+            (unsigned long)bufsz, errno);
+        close(memfd); goto err_reply;
+    }
 
     void *shared = mmap(NULL, bufsz, PROT_READ, MAP_SHARED, memfd, 0);
-    if (shared == MAP_FAILED) { close(memfd); goto err_reply; }
+    if (shared == MAP_FAILED) {
+        dprintf(2, "[LUMEN-SRV] mmap failed errno=%d bufsz=%lu\n",
+            errno, (unsigned long)bufsz);
+        close(memfd); goto err_reply;
+    }
 
     proxy_window_t *pw = calloc(1, sizeof(*pw));
     if (!pw) { munmap(shared, bufsz); close(memfd); goto err_reply; }
@@ -162,7 +174,10 @@ static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
     strncpy(title, req->title, sizeof(title) - 1);
 
     pw->win = glyph_window_create(title, w, h);
-    if (!pw->win) { free(pw); munmap(shared, bufsz); close(memfd); goto err_reply; }
+    if (!pw->win) {
+        dprintf(2, "[LUMEN-SRV] glyph_window_create failed\n");
+        free(pw); munmap(shared, bufsz); close(memfd); goto err_reply;
+    }
 
     pw->win->priv          = pw;
     pw->win->on_render     = proxy_on_render;
@@ -209,7 +224,8 @@ static int handle_create_window(compositor_t *comp, lumen_client_t *cli,
     memcpy(CMSG_DATA(cmsg), &memfd, sizeof(int));
     msg.msg_controllen = cmsg->cmsg_len;
 
-    sendmsg(cli->fd, &msg, 0);
+    if (sendmsg(cli->fd, &msg, 0) < 0)
+        dprintf(2, "[LUMEN-SRV] sendmsg reply failed errno=%d\n", errno);
     return 1;
 
 err_reply: {
@@ -341,18 +357,32 @@ static void lumen_server_accept_fd(compositor_t *comp, int listen_fd)
     (void)comp;
 
     int fd = accept(listen_fd, NULL, NULL);
-    if (fd < 0) return;
+    if (fd < 0) {
+        dprintf(2, "[LUMEN-SRV] accept failed: errno=%d\n", errno);
+        return;
+    }
+    dprintf(2, "[LUMEN-SRV] accepted fd=%d\n", fd);
 
     fcntl(fd, F_SETFL, O_NONBLOCK);
 
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
-    if (poll(&pfd, 1, 500) <= 0) { close(fd); return; }
-
-    lumen_hello_t hello;
-    if (read(fd, &hello, sizeof(hello)) != (ssize_t)sizeof(hello)) {
+    int pr = poll(&pfd, 1, 500);
+    if (pr <= 0) {
+        dprintf(2, "[LUMEN-SRV] poll(hello) returned %d errno=%d, closing\n", pr, errno);
         close(fd);
         return;
     }
+
+    lumen_hello_t hello;
+    ssize_t rn = read(fd, &hello, sizeof(hello));
+    if (rn != (ssize_t)sizeof(hello)) {
+        dprintf(2, "[LUMEN-SRV] read(hello) returned %ld errno=%d, closing\n",
+                (long)rn, errno);
+        close(fd);
+        return;
+    }
+    dprintf(2, "[LUMEN-SRV] hello read: magic=0x%x version=%u\n",
+            hello.magic, hello.version);
 
     lumen_hello_reply_t reply;
     reply.magic   = LUMEN_MAGIC;
@@ -384,10 +414,15 @@ static void lumen_server_accept_fd(compositor_t *comp, int listen_fd)
 
 int lumen_server_init(void)
 {
-    mkdir("/run", 0755);
+    int mr = mkdir("/run", 0755);
+    if (mr < 0 && errno != EEXIST)
+        dprintf(2, "[LUMEN-SRV] mkdir(/run) failed: errno=%d\n", errno);
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        dprintf(2, "[LUMEN-SRV] socket(AF_UNIX) failed: errno=%d\n", errno);
+        return -1;
+    }
 
     unlink("/run/lumen.sock");
 
@@ -398,17 +433,20 @@ int lumen_server_init(void)
             sizeof(addr.sun_path) - 1);
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        dprintf(2, "[LUMEN-SRV] bind(/run/lumen.sock) failed: errno=%d\n", errno);
         close(fd);
         return -1;
     }
 
     if (listen(fd, 8) < 0) {
+        dprintf(2, "[LUMEN-SRV] listen failed: errno=%d\n", errno);
         close(fd);
         return -1;
     }
 
     fcntl(fd, F_SETFL, O_NONBLOCK);
 
+    dprintf(2, "[LUMEN-SRV] listening on /run/lumen.sock fd=%d\n", fd);
     return fd;
 }
 

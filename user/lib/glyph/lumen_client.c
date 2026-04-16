@@ -1,8 +1,11 @@
 /* lumen_client.c — Lumen external window protocol client implementation */
 #define _GNU_SOURCE
+#include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -11,10 +14,32 @@
 
 #include "lumen_client.h"
 
+/* Write a diagnostic line to BOTH stderr AND /dev/console.
+ * stderr may be a PTY (invisible in test-harness serial output) when
+ * the client was launched from a Lumen terminal window. /dev/console
+ * always reaches the kernel serial driver. */
+static void
+lumen_diag(const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if (n > (int)sizeof(buf)) n = (int)sizeof(buf);
+    write(2, buf, (size_t)n);
+    int cfd = open("/dev/console", O_WRONLY);
+    if (cfd >= 0) { write(cfd, buf, (size_t)n); close(cfd); }
+}
+
 int lumen_connect(void)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -errno;
+    if (fd < 0) {
+        lumen_diag( "[LUMEN-CLI] socket: errno=%d\n", errno);
+        return -errno;
+    }
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -24,20 +49,30 @@ int lumen_connect(void)
 
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         int err = errno;
+        /* Silent on ECONNREFUSED (server not yet up — caller will retry).
+         * Surface anything else immediately. */
+        if (err != 111)
+            lumen_diag( "[LUMEN-CLI] connect: errno=%d\n", err);
         close(fd);
         return -err;
     }
 
     lumen_hello_t hello = { LUMEN_MAGIC, LUMEN_VERSION };
-    if (write(fd, &hello, sizeof(hello)) != (ssize_t)sizeof(hello)) {
+    ssize_t wn = write(fd, &hello, sizeof(hello));
+    if (wn != (ssize_t)sizeof(hello)) {
+        lumen_diag( "[LUMEN-CLI] write hello: rc=%ld errno=%d\n", (long)wn, errno);
         close(fd); return -EIO;
     }
 
     lumen_hello_reply_t reply;
-    if (read(fd, &reply, sizeof(reply)) != (ssize_t)sizeof(reply)) {
+    ssize_t rn = read(fd, &reply, sizeof(reply));
+    if (rn != (ssize_t)sizeof(reply)) {
+        lumen_diag( "[LUMEN-CLI] read reply: rc=%ld errno=%d\n", (long)rn, errno);
         close(fd); return -EIO;
     }
     if (reply.magic != LUMEN_MAGIC || reply.status != 0) {
+        lumen_diag( "[LUMEN-CLI] bad reply magic=0x%x status=%u\n",
+                reply.magic, reply.status);
         close(fd); return -EPROTO;
     }
 
@@ -120,8 +155,14 @@ lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
     req.height = (uint16_t)h;
     strncpy(req.title, title ? title : "", sizeof(req.title) - 1);
 
-    if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr)) return NULL;
-    if (write(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) return NULL;
+    if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr)) {
+        lumen_diag("[LUMEN-CLI] window_create: write hdr errno=%d\n", errno);
+        return NULL;
+    }
+    if (write(fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) {
+        lumen_diag("[LUMEN-CLI] window_create: write req errno=%d\n", errno);
+        return NULL;
+    }
 
     lumen_msg_hdr_t rhdr;
     lumen_window_created_t created;
@@ -138,21 +179,34 @@ lumen_window_t *lumen_window_create(int fd, const char *title, int w, int h)
     msg.msg_control    = cmsgbuf;
     msg.msg_controllen = sizeof(cmsgbuf);
 
-    if (recvmsg(fd, &msg, 0) < 0) return NULL;
-    if (created.status != 0) return NULL;
+    if (recvmsg(fd, &msg, 0) < 0) {
+        lumen_diag("[LUMEN-CLI] window_create: recvmsg errno=%d\n", errno);
+        return NULL;
+    }
+    if (created.status != 0) {
+        lumen_diag("[LUMEN-CLI] window_create: server status=%u\n", created.status);
+        return NULL;
+    }
 
     int memfd = -1;
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
     if (cmsg && cmsg->cmsg_level == SOL_SOCKET &&
         cmsg->cmsg_type == SCM_RIGHTS)
         memcpy(&memfd, CMSG_DATA(cmsg), sizeof(int));
-    if (memfd < 0) return NULL;
+    if (memfd < 0) {
+        lumen_diag("[LUMEN-CLI] window_create: no memfd in cmsg\n");
+        return NULL;
+    }
 
     size_t bufsz = (size_t)created.width * created.height * sizeof(uint32_t);
 
     void *shared = mmap(NULL, bufsz, PROT_READ | PROT_WRITE,
                         MAP_SHARED, memfd, 0);
-    if (shared == MAP_FAILED) { close(memfd); return NULL; }
+    if (shared == MAP_FAILED) {
+        lumen_diag("[LUMEN-CLI] window_create: mmap errno=%d bufsz=%lu\n",
+            errno, (unsigned long)bufsz);
+        close(memfd); return NULL;
+    }
 
     void *backbuf = malloc(bufsz);
     if (!backbuf) { munmap(shared, bufsz); close(memfd); return NULL; }

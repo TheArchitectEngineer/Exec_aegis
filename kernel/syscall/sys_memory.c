@@ -288,7 +288,11 @@ sys_mmap(uint64_t arg1, uint64_t arg2, uint64_t arg3,
         extern memfd_t *memfd_get(uint32_t id);
         memfd_t *mf = memfd_get(mid);
         if (!mf) return (uint64_t)-(int64_t)22;
-        if (len > mf->size)
+        /* Compare against page-rounded size so a memfd ftruncate'd to a
+         * non-page-aligned length (e.g. 200x100x4 = 80000 bytes) can still
+         * be mapped at the page-rounded length the caller passed. */
+        uint64_t mf_pages_bytes = (uint64_t)mf->page_count * 4096UL;
+        if (len > mf_pages_bytes)
             return (uint64_t)-(int64_t)22;  /* mapping larger than memfd */
 
         uint32_t num_pages = (uint32_t)(len / 4096);
