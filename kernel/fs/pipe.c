@@ -12,15 +12,17 @@ _Static_assert(sizeof(pipe_t) == 4096,
     "pipe_t must be exactly 4096 bytes (one kva page); adjust PIPE_BUF_SIZE");
 
 /* Forward declarations */
-static int      pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
-static int      pipe_write_fn(void *priv, const void *buf, uint64_t len);
-static void     pipe_read_close_fn(void *priv);
-static void     pipe_write_close_fn(void *priv);
-static void     pipe_dup_read_fn(void *priv);
-static void     pipe_dup_write_fn(void *priv);
-static int      pipe_stat_fn(void *priv, k_stat_t *st);
-static uint16_t pipe_read_poll_fn(void *priv);
-static uint16_t pipe_write_poll_fn(void *priv);
+static int           pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len);
+static int           pipe_write_fn(void *priv, const void *buf, uint64_t len);
+static void          pipe_read_close_fn(void *priv);
+static void          pipe_write_close_fn(void *priv);
+static void          pipe_dup_read_fn(void *priv);
+static void          pipe_dup_write_fn(void *priv);
+static int           pipe_stat_fn(void *priv, k_stat_t *st);
+static uint16_t      pipe_read_poll_fn(void *priv);
+static uint16_t      pipe_write_poll_fn(void *priv);
+static struct waitq *pipe_read_get_waitq_fn(void *priv);
+static struct waitq *pipe_write_get_waitq_fn(void *priv);
 
 static uint16_t
 pipe_read_poll_fn(void *priv)
@@ -50,24 +52,38 @@ pipe_write_poll_fn(void *priv)
     return events;
 }
 
+static struct waitq *
+pipe_read_get_waitq_fn(void *priv)
+{
+    return &((pipe_t *)priv)->read_waiters;
+}
+
+static struct waitq *
+pipe_write_get_waitq_fn(void *priv)
+{
+    return &((pipe_t *)priv)->write_waiters;
+}
+
 const vfs_ops_t g_pipe_read_ops = {
-    .read    = pipe_read_fn,
-    .write   = (void *)0,
-    .close   = pipe_read_close_fn,
-    .readdir = (void *)0,
-    .dup     = pipe_dup_read_fn,
-    .stat    = pipe_stat_fn,
-    .poll    = pipe_read_poll_fn,
+    .read      = pipe_read_fn,
+    .write     = (void *)0,
+    .close     = pipe_read_close_fn,
+    .readdir   = (void *)0,
+    .dup       = pipe_dup_read_fn,
+    .stat      = pipe_stat_fn,
+    .poll      = pipe_read_poll_fn,
+    .get_waitq = pipe_read_get_waitq_fn,
 };
 
 const vfs_ops_t g_pipe_write_ops = {
-    .read    = (void *)0,
-    .write   = pipe_write_fn,
-    .close   = pipe_write_close_fn,
-    .readdir = (void *)0,
-    .dup     = pipe_dup_write_fn,
-    .stat    = pipe_stat_fn,
-    .poll    = pipe_write_poll_fn,
+    .read      = (void *)0,
+    .write     = pipe_write_fn,
+    .close     = pipe_write_close_fn,
+    .readdir   = (void *)0,
+    .dup       = pipe_dup_write_fn,
+    .stat      = pipe_stat_fn,
+    .poll      = pipe_write_poll_fn,
+    .get_waitq = pipe_write_get_waitq_fn,
 };
 
 /*
@@ -133,6 +149,9 @@ pipe_read_fn(void *priv, void *buf, uint64_t off, uint64_t len)
             sched_wake(p->writer_waiting);
             p->writer_waiting = NULL;
         }
+        /* Wake any sys_poll/sys_epoll_wait waiters on the write end —
+         * draining the buffer may have made it writable (POLLOUT). */
+        waitq_wake_all(&p->write_waiters);
 
         spin_unlock_irqrestore(&p->lock, fl);
         return (int)n;
@@ -215,6 +234,9 @@ pipe_write_fn(void *priv, const void *buf, uint64_t len)
             sched_wake(p->reader_waiting);
             p->reader_waiting = NULL;
         }
+        /* Wake any sys_poll/sys_epoll_wait waiters on the read end —
+         * data is now available (POLLIN). */
+        waitq_wake_all(&p->read_waiters);
 
         spin_unlock_irqrestore(&p->lock, fl);
         return (int)n;   /* partial write; caller must loop if n < len */
@@ -236,6 +258,10 @@ pipe_read_close_fn(void *priv)
         sched_wake(p->writer_waiting);
         p->writer_waiting = NULL;
     }
+    /* Wake pollers on the write end — they should now see POLLERR
+     * (last reader gone) so subsequent writes will get EPIPE. */
+    if (p->read_refs == 0)
+        waitq_wake_all(&p->write_waiters);
     int do_free = (p->read_refs == 0 && p->write_refs == 0);
     spin_unlock_irqrestore(&p->lock, fl);
     if (do_free)
@@ -257,6 +283,10 @@ pipe_write_close_fn(void *priv)
         sched_wake(p->reader_waiting);
         p->reader_waiting = NULL;
     }
+    /* Wake pollers on the read end — last writer gone means readers
+     * should now see POLLIN|POLLHUP (EOF on next read). */
+    if (p->write_refs == 0)
+        waitq_wake_all(&p->read_waiters);
     int do_free = (p->read_refs == 0 && p->write_refs == 0);
     spin_unlock_irqrestore(&p->lock, fl);
     if (do_free)

@@ -4,6 +4,7 @@
 #include "vfs.h"
 #include "sched.h"
 #include "spinlock.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 /*
@@ -16,11 +17,13 @@
  *   lock (spinlock_t)           = 4 bytes             (fills alignment gap)
  *   reader_waiting (pointer)    = 8 bytes
  *   writer_waiting (pointer)    = 8 bytes             (total ptrs = 16 bytes)
+ *   read_waiters  (waitq_t)     = 16 bytes (8 ptr + 4 spinlock + 4 pad)
+ *   write_waiters (waitq_t)     = 16 bytes
  *
- * 4056 + 20 + 4 + 16 = 4096 = one kva page.
+ * 4024 + 20 + 4 + 16 + 32 = 4096 = one kva page.
  * Verified by _Static_assert in pipe.c.
  */
-#define PIPE_BUF_SIZE 4056
+#define PIPE_BUF_SIZE 4024
 
 typedef struct {
     uint8_t          buf[PIPE_BUF_SIZE];
@@ -32,6 +35,13 @@ typedef struct {
     spinlock_t       lock;            /* per-pipe lock for SMP safety */
     aegis_task_t    *reader_waiting;  /* task blocked on empty pipe */
     aegis_task_t    *writer_waiting;  /* task blocked on full pipe */
+    /* Wake queues for sys_poll / sys_epoll_wait waiters on each end.
+     * read_waiters: pollers on the read end (wake when data arrives or
+     *   write end closes — POLLIN / POLLHUP).
+     * write_waiters: pollers on the write end (wake when buffer drains
+     *   or read end closes — POLLOUT / POLLHUP). */
+    waitq_t          read_waiters;
+    waitq_t          write_waiters;
 } pipe_t;
 
 /*

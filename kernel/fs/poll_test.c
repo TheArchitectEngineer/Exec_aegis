@@ -4,6 +4,7 @@
 #include "kva.h"
 #include "printk.h"
 #include "spinlock.h"
+#include "../sched/waitq.h"
 #include <stdint.h>
 
 void
@@ -20,6 +21,8 @@ poll_test(void)
         spinlock_t init = SPINLOCK_INIT;
         p->lock = init;
     }
+    waitq_init(&p->read_waiters);
+    waitq_init(&p->write_waiters);
     p->read_refs  = 1;
     p->write_refs = 1;
 
