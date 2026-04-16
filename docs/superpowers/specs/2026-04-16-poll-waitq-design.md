@@ -1,7 +1,7 @@
 ---
 title: Per-fd wait queues — replace global g_poll_waiter
 date: 2026-04-16
-status: approved
+status: implemented
 author: Dylan Hart (with Claude)
 ---
 

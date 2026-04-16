@@ -453,6 +453,15 @@ Outbound TCP works. `nettest` vigil service connects to `1.1.1.1:80`, sends HTTP
 - AF_UNIX `fcntl(F_SETFL, O_NONBLOCK)` propagates to `unix_sock_t.nonblocking` (sys_file.c). AF_UNIX has a real `.poll` callback (`unix_vfs_poll`); checks accept queue (LISTENING), peer ring (CONNECTED), peer state (POLLHUP). Fixed in v1.0.1; both required to unfreeze Lumen on bare metal.
 - AF_UNIX bind does NOT create a filesystem entry — the path lives in an in-kernel name table (`name_register`/`name_lookup`). Clients must retry connect until ECONNREFUSED stops; `stat()` will not work.
 
+### Polling and wake-up (Phase 47c — per-fd waitqs)
+
+- All pollable fds have a `waitq_t poll_waiters` (or shared global for kbd/console/mouse). Producers (writers, ISRs, state-change paths) call `waitq_wake_all` on the object's queue.
+- `sys_poll` and `sys_epoll_wait` register one `waitq_entry_t` per watched fd (stack-allocated, max 64 fds for poll / `EPOLL_MAX_WATCHES` for epoll). Plus `g_timer_waitq` if timeout is finite.
+- Removed: global `g_poll_waiter` and the PIT wake hack at `pit.c:80-84` that wrote to it. PIT now calls `waitq_wake_all(&g_timer_waitq)`.
+- New file: `kernel/syscall/fd_waitq.{c,h}` — single-point `fd_get_waitq(int fd)` dispatch (AF_INET → AF_UNIX → vfs_ops_t.get_waitq → NULL).
+- Lock order: waitq locks are leaf. `sched_lock` > waitq lock. Producers call `waitq_wake_all` after dropping any object-specific lock (sock_lock, tcp_lock, etc.) to avoid `sched_lock` reentry under those locks.
+- Spec: `docs/superpowers/specs/2026-04-16-poll-waitq-design.md`. Plan: `docs/superpowers/plans/2026-04-16-poll-waitq-implementation.md`. Regression test: `tests/tests/poll_concurrent_pollers_test.rs`.
+
 ### Capability System (Phase 46c — policy redesign)
 
 Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/caps.d/<binary>` declare caps per-binary. The kernel reads these at execve time.
@@ -540,6 +549,7 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 
 ```
 sched_lock > (all others)
+sched_lock > waitq_lock (waitq_wake_all calls sched_wake outside its own lock)
 vmm_window_lock > pmm_lock > kva_lock
 tcp_lock before sock_lock (deferred wake pattern)
 ip_lock before arp_lock (copy-then-release pattern)
