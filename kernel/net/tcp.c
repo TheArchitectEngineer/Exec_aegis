@@ -150,6 +150,16 @@ static tcp_conn_t *tcp_alloc(void)
     return NULL;
 }
 
+/* wake_poll_waiters — wake any sys_poll / sys_epoll_wait registered on
+ * sock_id's embedded poll_waiters waitq. Safe to call with NONE / freed
+ * sids; sock_get returns NULL.  Must be called OUTSIDE tcp_lock to
+ * respect the sock_lock > tcp_lock ordering. */
+static void wake_poll_waiters(uint32_t sock_id)
+{
+    sock_t *s = sock_get(sock_id);
+    if (s) waitq_wake_all(&s->poll_waiters);
+}
+
 void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
             const void *tcp_data, uint16_t len)
 {
@@ -158,8 +168,10 @@ void tcp_rx(netdev_t *dev, ip4_addr_t src_ip, ip4_addr_t dst_ip,
     const tcp_hdr_t *seg = (const tcp_hdr_t *)tcp_data;
 
     /* Deferred socket wake/notify — collected under tcp_lock, executed after
-     * release.  Avoids tcp_lock → sock_lock ordering inversion. */
-    #define TCP_RX_WAKE_MAX 4
+     * release.  Avoids tcp_lock → sock_lock ordering inversion.  Sized to
+     * TCP_MAX_CONNS so a worst-case packet that touches every conn can
+     * still queue every wake without dropping. */
+    #define TCP_RX_WAKE_MAX TCP_MAX_CONNS
     uint32_t wake_ids[TCP_RX_WAKE_MAX];
     uint32_t wake_epoll_events[TCP_RX_WAKE_MAX];
     uint32_t wake_count = 0;
@@ -428,13 +440,11 @@ out:
             if (wake_epoll_events[w] != 0)
                 epoll_notify(wake_ids[w], wake_epoll_events[w]);
             /* Wake any sys_poll / sys_epoll_wait waiters registered on
-             * this socket via the embedded poll_waiters waitq. Covers
-             * TCP rx, accept enqueue, connect-complete, RST, and FIN
-             * (CLOSE_WAIT) — all events that change pollable state. */
-            {
-                sock_t *s_wake = sock_get(wake_ids[w]);
-                if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
-            }
+             * this socket via its embedded poll_waiters waitq. Every
+             * wake_ids entry above corresponds to a pollable state
+             * change (rx data, accept ready, connect complete, RST,
+             * FIN/CLOSE_WAIT, FIN_WAIT_2/CLOSING/LAST_ACK). */
+            wake_poll_waiters(wake_ids[w]);
         }
     }
     #undef TCP_RX_WAKE_MAX
@@ -445,8 +455,10 @@ void tcp_tick(void)
     irqflags_t fl = spin_lock_irqsave(&tcp_lock);
     uint32_t now = (uint32_t)arch_get_ticks();
     /* Deferred poll_waiters wakes — collected under tcp_lock, fired after
-     * release to avoid the tcp_lock → sock_lock ordering inversion. */
-    #define TCP_TICK_WAKE_MAX 4
+     * release to avoid the tcp_lock → sock_lock ordering inversion.
+     * Sized to TCP_MAX_CONNS so a worst-case tick where every conn
+     * expires TIME_WAIT in the same 10ms can still queue every wake. */
+    #define TCP_TICK_WAKE_MAX TCP_MAX_CONNS
     uint32_t tick_wake_ids[TCP_TICK_WAKE_MAX];
     uint32_t tick_wake_count = 0;
     int i;
@@ -478,18 +490,13 @@ void tcp_tick(void)
             if (timeout_sid != (uint32_t)-1) {
                 spin_unlock_irqrestore(&tcp_lock, fl);
                 sock_wake(timeout_sid);
-                /* Wake poll_waiters too — connection died. */
-                {
-                    sock_t *s_wake = sock_get(timeout_sid);
-                    if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
-                }
-                /* Fire any other pending tick wakes too. */
+                /* Wake poll_waiters — connection died, plus any
+                 * pending TIME_WAIT-expiry wakes queued earlier. */
+                wake_poll_waiters(timeout_sid);
                 {
                     uint32_t w;
-                    for (w = 0; w < tick_wake_count; w++) {
-                        sock_t *s_wake = sock_get(tick_wake_ids[w]);
-                        if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
-                    }
+                    for (w = 0; w < tick_wake_count; w++)
+                        wake_poll_waiters(tick_wake_ids[w]);
                 }
                 return;  /* bail — we released the lock */
             }
@@ -511,10 +518,8 @@ void tcp_tick(void)
     /* Fire deferred poll_waiters wakes outside tcp_lock. */
     {
         uint32_t w;
-        for (w = 0; w < tick_wake_count; w++) {
-            sock_t *s_wake = sock_get(tick_wake_ids[w]);
-            if (s_wake) waitq_wake_all(&s_wake->poll_waiters);
-        }
+        for (w = 0; w < tick_wake_count; w++)
+            wake_poll_waiters(tick_wake_ids[w]);
     }
     #undef TCP_TICK_WAKE_MAX
 }
