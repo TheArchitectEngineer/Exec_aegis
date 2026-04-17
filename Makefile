@@ -187,9 +187,11 @@ SIMPLE_USER_PROGS = \
     mkdir touch rm cp mv whoami ln chmod chown readlink \
     shutdown reboot login stsh httpd nettest polltest poll-test
 
-# Generate rules: user/bin/foo/foo.elf depends on musl, built via sub-make
+# Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
+# so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the
+# wildcard dep, a stale .elf gets silently packed into the rootfs.
 define SIMPLE_USER_RULE
-user/bin/$(1)/$(1).elf: $$(MUSL_BUILT)
+user/bin/$(1)/$(1).elf: $$(MUSL_BUILT) $$(wildcard user/bin/$(1)/*.c) $$(wildcard user/bin/$(1)/*.h) user/bin/$(1)/Makefile
 	$$(MAKE) -C user/bin/$(1)
 endef
 $(foreach p,$(SIMPLE_USER_PROGS),$(eval $(call SIMPLE_USER_RULE,$(p))))
