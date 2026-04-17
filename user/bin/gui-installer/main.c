@@ -676,6 +676,8 @@ static void handle_key_progress(char c)
     }
 }
 
+static void handle_back(void);
+
 static void handle_key(char c)
 {
     if (c == '\x1b') { handle_back(); return; }
