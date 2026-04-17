@@ -60,11 +60,9 @@ static const unsigned char AEGIS_ROOT_GUID[16] = {
     0x00,0x01, 0x00,0x00,0x00,0x00,0x00,0x00
 };
 
-/* ESP layout (native LBAs; LBA 2048 aligns to >=1 MB for any block size) */
-#define ESP_START   2048ULL
-#define ESP_SECTORS 65536ULL
-#define ESP_END     (ESP_START + ESP_SECTORS - 1)
-#define ROOT_START  (ESP_END + 1)
+/* ESP layout in bytes — converted to native LBAs at runtime */
+#define ESP_ALIGN_BYTES (1ULL * 1024 * 1024)   /* 1 MiB start alignment */
+#define ESP_SIZE_BYTES  (32ULL * 1024 * 1024)  /* 32 MiB ESP */
 
 /* ── Error reporting helper ─────────────────────────────────────────── */
 
@@ -95,7 +93,11 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     static unsigned char sector[512];
     static unsigned char entries[128 * 128];
 
-    /* LBAs needed for the 128-entry x 128-byte partition array */
+    /* All LBA values in native block_size units */
+    unsigned long long esp_start    = ESP_ALIGN_BYTES / block_size;
+    unsigned long long esp_lbas     = ESP_SIZE_BYTES  / block_size;
+    unsigned long long esp_end      = esp_start + esp_lbas - 1ULL;
+    unsigned long long root_start   = esp_end + 1ULL;
     unsigned long long entry_bytes  = 128ULL * 128;
     unsigned long long entry_lbas   = (entry_bytes + block_size - 1) / block_size;
     unsigned long long last_lba     = disk_blocks - 1;
@@ -106,7 +108,7 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     if (p && p->on_step)
         p->on_step("Writing partition table", p->ctx);
 
-    if (root_end <= ROOT_START) {
+    if (root_end <= root_start) {
         report_err(p, "disk too small");
         return -1;
     }
@@ -126,7 +128,7 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     entries[16] = 0x01; entries[17] = 0x02;
     entries[18] = 0x03; entries[19] = 0x04;
     {
-        unsigned long long s = ESP_START, e = ESP_END;
+        unsigned long long s = esp_start, e = esp_end;
         memcpy(&entries[32], &s, 8);
         memcpy(&entries[40], &e, 8);
     }
@@ -136,7 +138,7 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     entries[128+16] = 0x05; entries[128+17] = 0x06;
     entries[128+18] = 0x07; entries[128+19] = 0x08;
     {
-        unsigned long long s = ROOT_START, e = root_end;
+        unsigned long long s = root_start, e = root_end;
         memcpy(&entries[128+32], &s, 8);
         memcpy(&entries[128+40], &e, 8);
     }
