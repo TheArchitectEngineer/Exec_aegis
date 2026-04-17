@@ -251,12 +251,15 @@ static void draw_screen_disk(void)
             if (i == g_st.selected_disk)
                 draw_fill_rect(&g_st.surf, lx + 4, ry - 2,
                                lw - 8, row_h, 0x004488CC);
-            char line[64];
-            snprintf(line, sizeof(line), "%s  —  %llu MB",
+            char line[80];
+            int has_install = install_disk_has_aegis(g_st.disks[i].name);
+            snprintf(line, sizeof(line), "%s  —  %llu MB%s",
                      g_st.disks[i].name,
                      (unsigned long long)g_st.disks[i].block_count *
-                         g_st.disks[i].block_size / (1024 * 1024));
-            draw_text14(lx + 12, ry + 8, line, 0x00FFFFFF);
+                         g_st.disks[i].block_size / (1024 * 1024),
+                     has_install ? "  [existing Aegis install]" : "");
+            uint32_t color = has_install ? 0x00FFAA40 : 0x00FFFFFF;
+            draw_text14(lx + 12, ry + 8, line, color);
         }
     }
 
@@ -403,9 +406,25 @@ static void draw_screen_confirm(void)
                 0x00FFFFFF);
     y += 60;
 
-    draw_text14(lx, y,
-                "WARNING: all existing data on the target disk will be erased.",
-                0x00FFAA40);
+    /* If the selected disk already has an Aegis install, make the
+     * destruction explicit. The user has reported losing systems by
+     * accidentally re-installing without noticing. */
+    int sel = g_st.selected_disk;
+    int existing = (sel >= 0 && sel < g_st.ndisks) &&
+                   install_disk_has_aegis(g_st.disks[sel].name);
+    if (existing) {
+        draw_text14(lx, y,
+                    "WARNING: this disk already contains an Aegis install.",
+                    0x00FF6060);
+        y += 22;
+        draw_text14(lx, y,
+                    "Pressing Install will ERASE that system permanently.",
+                    0x00FF6060);
+    } else {
+        draw_text14(lx, y,
+                    "WARNING: all existing data on the target disk will be erased.",
+                    0x00FFAA40);
+    }
 
     /* Back + Install buttons.  Install is the default focus. */
     draw_button(cx - 160, g_st.fb_h - 120, 100, 40, "Back", 0);

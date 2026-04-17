@@ -121,6 +121,31 @@ int install_list_blkdevs(install_blkdev_t *out, int max)
     return (int)n;
 }
 
+/* ── Public: install_disk_has_aegis ─────────────────────────────────── */
+
+int install_disk_has_aegis(const char *devname)
+{
+    install_blkdev_t devs[8];
+    int n = install_list_blkdevs(devs, 8);
+    int dlen = 0;
+    while (devname[dlen]) dlen++;
+    int i;
+    for (i = 0; i < n; i++) {
+        /* Must start with `<devname>` and have `p<digit>` after. */
+        int j;
+        int prefix_ok = 1;
+        for (j = 0; j < dlen; j++) {
+            if (devs[i].name[j] != devname[j]) { prefix_ok = 0; break; }
+        }
+        if (!prefix_ok) continue;
+        if (devs[i].name[dlen] == 'p' &&
+            devs[i].name[dlen + 1] >= '0' &&
+            devs[i].name[dlen + 1] <= '9')
+            return 1;
+    }
+    return 0;
+}
+
 /* ── Public: install_copy_esp ───────────────────────────────────────── */
 
 int install_copy_esp(const char *devname, uint32_t block_size,

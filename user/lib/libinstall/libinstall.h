@@ -38,6 +38,13 @@ typedef struct {
 
 int install_list_blkdevs(install_blkdev_t *out, int max);
 
+/* Returns 1 if the given disk has at least one Aegis-typed partition
+ * registered (i.e. an existing Aegis installation), 0 otherwise.
+ * Detection: any blkdev whose name is `<devname>p<digit>` was
+ * registered by the kernel's gpt_scan, which only registers
+ * partitions matching the Aegis GUID prefix. */
+int install_disk_has_aegis(const char *devname);
+
 /* GPT — write protective MBR + primary GPT + backup GPT.
  * Creates 32 MB ESP (LBA 2048..67583) and Aegis root (rest of disk).
  * block_size must be 512 or 4096 (native LBA size of the device).
