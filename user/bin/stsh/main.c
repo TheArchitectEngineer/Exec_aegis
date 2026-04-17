@@ -101,6 +101,11 @@ main(int argc, char **argv, char **envp)
         sigaction(SIGCHLD, &sa, NULL);
     }
 
+    /* Test-harness marker — emitted once when stsh is about to draw its
+     * first prompt. Lets Rust integration tests anchor reliably without
+     * scraping the prompt itself (which has no trailing newline). */
+    dprintf(2, "[STSH] ready\n");
+
     /* REPL */
     for (;;) {
         char prompt[512];
