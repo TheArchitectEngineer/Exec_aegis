@@ -389,8 +389,11 @@ installer-test-iso: $(BUILD)/aegis-installer-test.iso
 # ── Rootfs image (built by script, reads rootfs.manifest) ───────────────────
 # Collect all source files mentioned in the manifest so Make knows to rebuild.
 MANIFEST_SRCS := $(shell grep -v '^\#' rootfs.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
+# Also depend on every file under the rootfs/ skeleton tree (cap policies,
+# vigil services, etc.) so editing /etc files actually triggers a rebuild.
+SKELETON_FILES := $(shell find rootfs -type f 2>/dev/null)
 
-$(ROOTFS): $(MANIFEST_SRCS) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/logo.raw $(BUILD)/claude.raw
+$(ROOTFS): $(MANIFEST_SRCS) $(SKELETON_FILES) $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/logo.raw $(BUILD)/claude.raw
 	bash tools/build-rootfs.sh $@ $(BUILD)/aegis.elf $(BUILD)/wallpaper.raw $(BUILD)/logo.raw $(BUILD)/claude.raw
 
 rootfs: $(ROOTFS)
