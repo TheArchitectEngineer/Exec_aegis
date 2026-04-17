@@ -91,12 +91,32 @@ static const uint8_t k_aegis_guid_prefix[8] = {
     0x24, 0x8F, 0x61, 0xA3, 0x76, 0x0C, 0x3D, 0x4B
 };
 
+/*
+ * Partition devices always present 512-byte logical sectors (512e emulation)
+ * regardless of the parent device's native block size.  This keeps the ext2
+ * cache and all other kernel consumers working unchanged; they assume 512B.
+ *
+ * lba/count in the callbacks are in 512B logical units.
+ * p->lba_offset is in parent-native LBAs (set at registration time).
+ */
+
 static int gpt_part_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf)
 {
     gpt_part_priv_t *p = (gpt_part_priv_t *)dev->priv;
     if (lba + count > dev->block_count)
         return -1;
-    return p->parent->read(p->parent, lba + p->lba_offset, count, buf);
+    uint32_t native_bs = p->parent->block_size;
+    if (native_bs == 512) {
+        return p->parent->read(p->parent, lba + p->lba_offset, count, buf);
+    }
+    /* Translate: 512B logical lba → native LBA.
+     * ext2/other callers always issue aligned, multiple-of-native_bs reads so
+     * there is no partial-block overlap to handle. */
+    uint64_t factor = native_bs / 512u;
+    return p->parent->read(p->parent,
+                           p->lba_offset + lba / factor,
+                           count / factor,
+                           buf);
 }
 
 static int gpt_part_write(blkdev_t *dev, uint64_t lba, uint32_t count,
@@ -105,7 +125,15 @@ static int gpt_part_write(blkdev_t *dev, uint64_t lba, uint32_t count,
     gpt_part_priv_t *p = (gpt_part_priv_t *)dev->priv;
     if (lba + count > dev->block_count)
         return -1;
-    return p->parent->write(p->parent, lba + p->lba_offset, count, buf);
+    uint32_t native_bs = p->parent->block_size;
+    if (native_bs == 512) {
+        return p->parent->write(p->parent, lba + p->lba_offset, count, buf);
+    }
+    uint64_t factor = native_bs / 512u;
+    return p->parent->write(p->parent,
+                            p->lba_offset + lba / factor,
+                            count / factor,
+                            buf);
 }
 
 /* ── Header validation ────────────────────────────────────────────────────
@@ -236,9 +264,11 @@ int gpt_scan(const char *devname)
         s_parts[idx].parent     = dev;
         s_parts[idx].lba_offset = e->start_lba;
 
-        /* blkdev_t: block_count, block_size, zero-based lba_offset, callbacks */
-        s_devs[idx].block_count = e->end_lba - e->start_lba + 1;
-        s_devs[idx].block_size  = dev->block_size;
+        /* blkdev_t: always 512B logical sectors (512e) so ext2/VFS work unchanged.
+         * block_count is expressed in 512B units. */
+        uint64_t native_count = e->end_lba - e->start_lba + 1;
+        s_devs[idx].block_count = native_count * (dev->block_size / 512u);
+        s_devs[idx].block_size  = 512;
         s_devs[idx].lba_offset  = 0;
         s_devs[idx].read        = gpt_part_read;
         s_devs[idx].write       = gpt_part_write;
