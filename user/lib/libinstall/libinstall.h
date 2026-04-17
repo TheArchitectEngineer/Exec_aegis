@@ -40,23 +40,26 @@ int install_list_blkdevs(install_blkdev_t *out, int max);
 
 /* GPT — write protective MBR + primary GPT + backup GPT.
  * Creates 32 MB ESP (LBA 2048..67583) and Aegis root (rest of disk).
+ * block_size must be 512 or 4096 (native LBA size of the device).
  * Returns 0 on success, -1 on I/O error (error callback fired). */
 int install_write_gpt(const char *devname, uint64_t disk_blocks,
-                      install_progress_t *p);
+                      uint32_t block_size, install_progress_t *p);
 
 /* Ask the kernel to re-enumerate partitions on `devname`.
  * Returns the number of partitions found (>0 on success). */
 int install_rescan_gpt(const char *devname);
 
 /* Copy ramdisk1 (the ESP image embedded as module 2 in the live
- * ISO) to the ESP partition on `devname`. */
-int install_copy_esp(const char *devname, install_progress_t *p);
+ * ISO) to the ESP partition on `devname`.
+ * block_size: native LBA size of devname (512 or 4096). */
+int install_copy_esp(const char *devname, uint32_t block_size,
+                     install_progress_t *p);
 
 /* Copy ramdisk0 (the ext2 rootfs image embedded as module 1) to
  * `dst_dev` (the Aegis root partition found via install_rescan_gpt).
- * Emits on_progress every 10%. */
+ * block_size: native LBA size of dst_dev. Emits on_progress every 10%. */
 int install_copy_rootfs(const char *dst_dev, uint64_t dst_blocks,
-                        install_progress_t *p);
+                        uint32_t block_size, install_progress_t *p);
 
 /* Write a fresh grub.cfg to /boot/grub/grub.cfg on the currently
  * mounted root (the ramdisk0 ext2 before it's copied to the target).
@@ -96,6 +99,7 @@ int install_write_credentials(const char *root_hash,
  * callback has been called with a diagnostic and the partially-
  * written disk is left in place (caller may retry or abort). */
 int install_run_all(const char *devname, uint64_t disk_blocks,
+                    uint32_t block_size,
                     const char *root_hash,
                     const char *username,
                     const char *user_hash,

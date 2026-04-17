@@ -10,6 +10,7 @@ static void report_err(install_progress_t *p, const char *msg)
 }
 
 int install_run_all(const char *devname, uint64_t disk_blocks,
+                    uint32_t block_size,
                     const char *root_hash,
                     const char *username,
                     const char *user_hash,
@@ -45,7 +46,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
     if (p && p->on_progress) p->on_progress(100, p->ctx);
 
     /* 4. GPT */
-    if (install_write_gpt(devname, disk_blocks, p) < 0)
+    if (install_write_gpt(devname, disk_blocks, block_size, p) < 0)
         return -1;
 
     /* 5. Rescan */
@@ -83,11 +84,11 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
     if (p && p->on_progress) p->on_progress(100, p->ctx);
 
     /* 7. Copy rootfs */
-    if (install_copy_rootfs(root_part, root_blocks, p) < 0)
+    if (install_copy_rootfs(root_part, root_blocks, block_size, p) < 0)
         return -1;
 
     /* 8. Copy ESP */
-    if (install_copy_esp(devname, p) < 0)
+    if (install_copy_esp(devname, block_size, p) < 0)
         return -1;
 
     /* 9. Sync */

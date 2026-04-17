@@ -483,6 +483,7 @@ static void run_install(void)
     int rc = install_run_all(
         g_st.disks[g_st.selected_disk].name,
         g_st.disks[g_st.selected_disk].block_count,
+        g_st.disks[g_st.selected_disk].block_size,
         g_st.root_hash,
         g_st.username[0] ? g_st.username     : NULL,
         g_st.username[0] ? g_st.user_hash    : NULL,

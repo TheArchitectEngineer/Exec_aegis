@@ -147,8 +147,8 @@ int gpt_scan(const char *devname)
 {
     /* All large buffers are static to avoid stack overflow.
      * gpt_scan is called once at boot from a single-threaded context. */
-    static uint8_t s_sector[512];           /* one sector (header read) */
-    static uint8_t s_entry_chunk[4096];     /* per-chunk read (8 sectors) */
+    static uint8_t s_sector[4096];          /* one sector (header read, max 4K native) */
+    static uint8_t s_entry_chunk[4096];     /* per-LBA read buffer */
     static uint8_t s_entries[128 * 128];    /* full partition array (16 KB!) */
 
     blkdev_t *dev = blkdev_get(devname);
@@ -183,17 +183,19 @@ int gpt_scan(const char *devname)
         return 0;
     }
 
-    /* ── Read partition entry array in 4 × 8-sector chunks ─────────────────
-     * NVMe driver rejects count * 512 > 4096 (max 8 sectors per call).
-     * 32 sectors / 8 = 4 chunks. Use hdr.partition_entry_lba (not 2) so
-     * the backup header's entry array is read correctly on fallback. */
-    for (int chunk = 0; chunk < 4; chunk++) {
-        uint64_t lba = hdr.partition_entry_lba + (uint64_t)(chunk * 8);
-        if (dev->read(dev, lba, 8, s_entry_chunk) < 0) {
+    /* ── Read partition entry array one native LBA at a time ────────────────
+     * 512-byte drives: entry_lbas = 32 (128*128 / 512).
+     * 4K-native drives: entry_lbas = 4  (128*128 / 4096).
+     * Use hdr.partition_entry_lba (not 2) so the backup header's entry
+     * array is read correctly on fallback. */
+    uint32_t bs = dev->block_size;
+    uint32_t entry_lbas = (128u * 128u + bs - 1u) / bs;
+    for (uint32_t ei = 0; ei < entry_lbas; ei++) {
+        if (dev->read(dev, hdr.partition_entry_lba + ei, 1, s_entry_chunk) < 0) {
             printk("[GPT] WARN: cannot read partition entries on %s\n", devname);
             return 0;
         }
-        __builtin_memcpy(s_entries + chunk * 4096, s_entry_chunk, 4096);
+        __builtin_memcpy(s_entries + ei * bs, s_entry_chunk, bs);
     }
 
     /* ── Validate partition array CRC ──────────────────────────────────────

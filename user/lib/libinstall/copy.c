@@ -28,14 +28,18 @@ int install_list_blkdevs(install_blkdev_t *out, int max)
 /* ── Block copy helper (file-local) ─────────────────────────────────── */
 
 static int copy_blocks_internal(const char *src_dev, const char *dst_dev,
-                                uint64_t count, install_progress_t *p)
+                                uint64_t count, uint32_t block_size,
+                                install_progress_t *p)
 {
     static unsigned char buf[4096];
+    /* Clamp chunk so chunk * block_size <= sizeof(buf) */
+    uint64_t max_chunk = sizeof(buf) / block_size;
+    if (max_chunk < 1) max_chunk = 1;
     uint64_t lba;
     int last_pct = -1;
-    for (lba = 0; lba < count; lba += 8) {
+    for (lba = 0; lba < count; lba += max_chunk) {
         uint64_t chunk = count - lba;
-        if (chunk > 8) chunk = 8;
+        if (chunk > max_chunk) chunk = max_chunk;
         if (li_blkdev_io(src_dev, lba, chunk, buf, 0) < 0) {
             report_err(p, "block read failed");
             return -1;
@@ -60,7 +64,8 @@ static int copy_blocks_internal(const char *src_dev, const char *dst_dev,
 
 /* ── Public: install_copy_esp ───────────────────────────────────────── */
 
-int install_copy_esp(const char *devname, install_progress_t *p)
+int install_copy_esp(const char *devname, uint32_t block_size,
+                     install_progress_t *p)
 {
     if (p && p->on_step)
         p->on_step("Installing EFI bootloader", p->ctx);
@@ -82,14 +87,15 @@ int install_copy_esp(const char *devname, install_progress_t *p)
     if (esp_blocks > ESP_SECTORS) esp_blocks = ESP_SECTORS;
 
     /* Copy ramdisk1 -> devname at the ESP offset.
-     * We cannot reuse copy_blocks_internal because the destination
-     * LBA is offset (ESP_START), not zero. */
+     * Cannot reuse copy_blocks_internal: destination LBA is offset. */
     static unsigned char buf[4096];
+    uint64_t max_chunk = sizeof(buf) / block_size;
+    if (max_chunk < 1) max_chunk = 1;
     uint64_t lba;
     int last_pct = -1;
-    for (lba = 0; lba < esp_blocks; lba += 8) {
+    for (lba = 0; lba < esp_blocks; lba += max_chunk) {
         uint64_t chunk = esp_blocks - lba;
-        if (chunk > 8) chunk = 8;
+        if (chunk > max_chunk) chunk = max_chunk;
         if (li_blkdev_io("ramdisk1", lba, chunk, buf, 0) < 0) {
             report_err(p, "ESP read failed");
             return -1;
@@ -113,7 +119,7 @@ int install_copy_esp(const char *devname, install_progress_t *p)
 /* ── Public: install_copy_rootfs ────────────────────────────────────── */
 
 int install_copy_rootfs(const char *dst_dev, uint64_t dst_blocks,
-                        install_progress_t *p)
+                        uint32_t block_size, install_progress_t *p)
 {
     if (p && p->on_step)
         p->on_step("Copying root filesystem", p->ctx);
@@ -136,5 +142,5 @@ int install_copy_rootfs(const char *dst_dev, uint64_t dst_blocks,
         report_err(p, "rootfs larger than target partition");
         return -1;
     }
-    return copy_blocks_internal("ramdisk0", dst_dev, src_blocks, p);
+    return copy_blocks_internal("ramdisk0", dst_dev, src_blocks, block_size, p);
 }

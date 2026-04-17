@@ -399,13 +399,13 @@ nvme_init(void)
  * blkdev read/write callbacks
  * ---------------------------------------------------------------------- */
 
-/* nvme_blkdev_read — read `count` 512-byte sectors from LBA into buf.
+/* nvme_blkdev_read — read `count` native LBAs from LBA into buf.
  * Uses a shared bounce buffer allocated in nvme_init().
- * Only supports transfers that fit in one 4KB page (count * 512 <= 4096). */
+ * Only supports transfers that fit in one 4KB page (count * block_size <= 4096). */
 static int
 nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
 {
-    uint32_t   bytes = count * 512u;   /* assume 512-byte sectors */
+    uint32_t   bytes = count * (uint32_t)dev->block_size;
     void      *tmp;
     nvme_sqe_t *sqe;
     int         rc;
@@ -450,14 +450,14 @@ nvme_blkdev_read(struct blkdev *dev, uint64_t lba, uint32_t count, void *buf)
     return rc;
 }
 
-/* nvme_blkdev_write — write `count` 512-byte sectors from buf to LBA.
+/* nvme_blkdev_write — write `count` native LBAs from buf to LBA.
  * Uses a shared bounce buffer allocated in nvme_init().
- * Only supports transfers that fit in one 4KB page (count * 512 <= 4096). */
+ * Only supports transfers that fit in one 4KB page (count * block_size <= 4096). */
 static int
 nvme_blkdev_write(struct blkdev *dev, uint64_t lba, uint32_t count,
                   const void *buf)
 {
-    uint32_t   bytes = count * 512u;
+    uint32_t   bytes = count * (uint32_t)dev->block_size;
     void      *tmp;
     nvme_sqe_t *sqe;
 

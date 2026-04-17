@@ -245,6 +245,7 @@ int main(void)
 
     if (install_run_all(devs[target].name,
                         devs[target].block_count,
+                        devs[target].block_size,
                         root_hash,
                         username[0] ? username : NULL,
                         username[0] ? user_hash : NULL,

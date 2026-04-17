@@ -60,7 +60,7 @@ static const unsigned char AEGIS_ROOT_GUID[16] = {
     0x00,0x01, 0x00,0x00,0x00,0x00,0x00,0x00
 };
 
-/* ESP layout */
+/* ESP layout (native LBAs; LBA 2048 aligns to >=1 MB for any block size) */
 #define ESP_START   2048ULL
 #define ESP_SECTORS 65536ULL
 #define ESP_END     (ESP_START + ESP_SECTORS - 1)
@@ -74,15 +74,34 @@ static void report_err(install_progress_t *p, const char *msg)
         p->on_error(msg, p->ctx);
 }
 
+/* ── Write one full block, zero-padding data shorter than block_size ── */
+
+static int write_block(const char *devname, unsigned long long lba,
+                       const unsigned char *data, unsigned int data_len,
+                       unsigned int block_size)
+{
+    static unsigned char s_blkbuf[4096];
+    memset(s_blkbuf, 0, block_size);
+    if (data_len > block_size) data_len = block_size;
+    memcpy(s_blkbuf, data, data_len);
+    return (int)li_blkdev_io(devname, lba, 1, s_blkbuf, 1);
+}
+
 /* ── Public: install_write_gpt ──────────────────────────────────────── */
 
 int install_write_gpt(const char *devname, uint64_t disk_blocks,
-                      install_progress_t *p)
+                      uint32_t block_size, install_progress_t *p)
 {
     static unsigned char sector[512];
     static unsigned char entries[128 * 128];
-    unsigned long long last_lba = disk_blocks - 1;
-    unsigned long long root_end = last_lba - 33;
+
+    /* LBAs needed for the 128-entry x 128-byte partition array */
+    unsigned long long entry_bytes  = 128ULL * 128;
+    unsigned long long entry_lbas   = (entry_bytes + block_size - 1) / block_size;
+    unsigned long long last_lba     = disk_blocks - 1;
+    unsigned long long first_usable = 2ULL + entry_lbas;
+    unsigned long long last_usable  = last_lba - entry_lbas - 1ULL;
+    unsigned long long root_end     = last_usable;
 
     if (p && p->on_step)
         p->on_step("Writing partition table", p->ctx);
@@ -92,12 +111,14 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
         return -1;
     }
 
+    /* ── Protective MBR (LBA 0) ──────────────────────────────────────── */
     write_protective_mbr(sector, disk_blocks);
-    if (li_blkdev_io(devname, 0, 1, sector, 1) < 0) {
+    if (write_block(devname, 0, sector, 512, block_size) < 0) {
         report_err(p, "write protective MBR failed");
         return -1;
     }
 
+    /* ── Build partition entries ─────────────────────────────────────── */
     memset(entries, 0, sizeof(entries));
 
     /* Entry 0: EFI System Partition */
@@ -122,7 +143,7 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
 
     unsigned int entry_crc = crc32_calc(entries, 128 * 128);
 
-    /* Primary GPT header (LBA 1) */
+    /* ── Primary GPT header (LBA 1) ─────────────────────────────────── */
     memset(sector, 0, 512);
     memcpy(sector, "EFI PART", 8);
     unsigned int rev = 0x00010000;
@@ -131,10 +152,10 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     memcpy(&sector[12], &hsz, 4);
     {
         unsigned long long v;
-        v = 1;                 memcpy(&sector[24], &v, 8); /* my_lba */
-        v = last_lba;          memcpy(&sector[32], &v, 8); /* alt_lba */
-        v = 34;                memcpy(&sector[40], &v, 8); /* first_usable */
-        v = last_lba - 33;     memcpy(&sector[48], &v, 8); /* last_usable */
+        v = 1;             memcpy(&sector[24], &v, 8); /* my_lba */
+        v = last_lba;      memcpy(&sector[32], &v, 8); /* alt_lba */
+        v = first_usable;  memcpy(&sector[40], &v, 8); /* first_usable */
+        v = last_usable;   memcpy(&sector[48], &v, 8); /* last_usable */
     }
     sector[56] = 0xAE; sector[57] = 0x61;
     sector[58] = 0x15; sector[59] = 0x00;
@@ -149,47 +170,61 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     memcpy(&sector[88], &entry_crc, 4);
     unsigned int hcrc = crc32_calc(sector, 92);
     memcpy(&sector[16], &hcrc, 4);
-    if (li_blkdev_io(devname, 1, 1, sector, 1) < 0) {
+    if (write_block(devname, 1, sector, 512, block_size) < 0) {
         report_err(p, "write primary GPT header failed");
         return -1;
     }
 
-    /* Write partition entries (LBAs 2-33) */
-    unsigned long long lba;
-    for (lba = 0; lba < 32; lba++) {
-        if (li_blkdev_io(devname, 2 + lba, 1,
-                         entries + lba * 512, 1) < 0) {
-            report_err(p, "write partition entries failed");
-            return -1;
+    /* ── Primary partition entries (LBAs 2 .. 2+entry_lbas-1) ────────── */
+    {
+        unsigned long long i;
+        for (i = 0; i < entry_lbas; i++) {
+            unsigned long long off = i * block_size;
+            unsigned int to_copy   = block_size;
+            if (off + to_copy > sizeof(entries))
+                to_copy = (unsigned int)(sizeof(entries) - (size_t)off);
+            if (write_block(devname, 2 + i,
+                            entries + off, to_copy, block_size) < 0) {
+                report_err(p, "write partition entries failed");
+                return -1;
+            }
         }
     }
 
-    /* Backup entries */
-    for (lba = 0; lba < 32; lba++) {
-        if (li_blkdev_io(devname, last_lba - 32 + lba, 1,
-                         entries + lba * 512, 1) < 0) {
-            report_err(p, "write backup entries failed");
-            return -1;
+    /* ── Backup partition entries (last_lba-entry_lbas .. last_lba-1) ── */
+    {
+        unsigned long long i;
+        for (i = 0; i < entry_lbas; i++) {
+            unsigned long long off = i * block_size;
+            unsigned int to_copy   = block_size;
+            if (off + to_copy > sizeof(entries))
+                to_copy = (unsigned int)(sizeof(entries) - (size_t)off);
+            unsigned long long dst_lba = last_lba - entry_lbas + i;
+            if (write_block(devname, dst_lba,
+                            entries + off, to_copy, block_size) < 0) {
+                report_err(p, "write backup entries failed");
+                return -1;
+            }
         }
     }
 
-    /* Backup GPT header (last LBA) */
+    /* ── Backup GPT header (last LBA) ────────────────────────────────── */
     memset(sector, 0, 512);
     memcpy(sector, "EFI PART", 8);
     memcpy(&sector[8], &rev, 4);
     memcpy(&sector[12], &hsz, 4);
     {
         unsigned long long v;
-        v = last_lba;          memcpy(&sector[24], &v, 8);
-        v = 1;                 memcpy(&sector[32], &v, 8);
-        v = 34;                memcpy(&sector[40], &v, 8);
-        v = last_lba - 33;     memcpy(&sector[48], &v, 8);
+        v = last_lba;                  memcpy(&sector[24], &v, 8);
+        v = 1;                         memcpy(&sector[32], &v, 8);
+        v = first_usable;              memcpy(&sector[40], &v, 8);
+        v = last_usable;               memcpy(&sector[48], &v, 8);
     }
     sector[56] = 0xAE; sector[57] = 0x61;
     sector[58] = 0x15; sector[59] = 0x00;
     {
-        unsigned long long v = last_lba - 32;
-        memcpy(&sector[72], &v, 8);
+        unsigned long long v = last_lba - entry_lbas;
+        memcpy(&sector[72], &v, 8); /* partition_entry_lba for backup */
     }
     memcpy(&sector[80], &nentries, 4);
     memcpy(&sector[84], &entry_sz, 4);
@@ -197,7 +232,7 @@ int install_write_gpt(const char *devname, uint64_t disk_blocks,
     memset(&sector[16], 0, 4);
     hcrc = crc32_calc(sector, 92);
     memcpy(&sector[16], &hcrc, 4);
-    if (li_blkdev_io(devname, last_lba, 1, sector, 1) < 0) {
+    if (write_block(devname, last_lba, sector, 512, block_size) < 0) {
         report_err(p, "write backup GPT header failed");
         return -1;
     }

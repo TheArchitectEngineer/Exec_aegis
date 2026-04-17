@@ -101,33 +101,35 @@ sys_blkdev_io(uint64_t arg1, uint64_t arg2, uint64_t arg3,
     if (lba + count > dev->block_count)
         return (uint64_t)-22;  /* EINVAL */
 
-    /* Transfer in 8-sector (4KB) chunks using a kernel bounce buffer.
-     * NVMe driver limits each transfer to count*512 <= 4096. */
+    /* Transfer one native LBA at a time using a kernel bounce buffer.
+     * Chunk clamped so chunk * block_size <= sizeof(s_bounce). */
     static uint8_t s_bounce[4096];
     static spinlock_t blkdev_io_lock = SPINLOCK_INIT;
     irqflags_t io_fl = spin_lock_irqsave(&blkdev_io_lock);
+    uint32_t bs = dev->block_size ? dev->block_size : 512u;
+    uint32_t max_chunk = (uint32_t)(sizeof(s_bounce) / bs);
+    if (max_chunk < 1u) max_chunk = 1u;
     uint64_t done = 0;
     uint64_t rc = 0;
     while (done < count) {
         uint32_t chunk = (uint32_t)(count - done);
-        if (chunk > 8) chunk = 8;
-        uint64_t user_off = done * 512;
+        if (chunk > max_chunk) chunk = max_chunk;
+        uint64_t user_off = done * (uint64_t)bs;
+        uint64_t nbytes   = (uint64_t)chunk * bs;
 
         if (arg5 == 0) {
             /* Read: dev → bounce → user */
             if (dev->read(dev, lba + done, chunk, s_bounce) < 0)
                 { rc = (uint64_t)-5; break; }  /* EIO */
-            if (!user_ptr_valid(arg4 + user_off, (uint64_t)chunk * 512))
+            if (!user_ptr_valid(arg4 + user_off, nbytes))
                 { rc = (uint64_t)-14; break; }
-            copy_to_user((void *)(uintptr_t)(arg4 + user_off),
-                         s_bounce, (uint64_t)chunk * 512);
+            copy_to_user((void *)(uintptr_t)(arg4 + user_off), s_bounce, nbytes);
         } else {
             /* Write: user → bounce → dev */
-            if (!user_ptr_valid(arg4 + user_off, (uint64_t)chunk * 512))
+            if (!user_ptr_valid(arg4 + user_off, nbytes))
                 { rc = (uint64_t)-14; break; }
             copy_from_user(s_bounce,
-                           (const void *)(uintptr_t)(arg4 + user_off),
-                           (uint64_t)chunk * 512);
+                           (const void *)(uintptr_t)(arg4 + user_off), nbytes);
             if (dev->write(dev, lba + done, chunk, s_bounce) < 0)
                 { rc = (uint64_t)-5; break; }  /* EIO */
         }
