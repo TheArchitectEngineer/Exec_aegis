@@ -48,6 +48,28 @@ user/bin/readlink/readlink.elf  /bin/readlink
 user/bin/polltest/polltest.elf  /bin/polltest
 user/bin/poll-test/poll-test.elf /bin/poll-test
 
+# Coreutils added in 1.0.3
+user/bin/head/head.elf          /bin/head
+user/bin/tail/tail.elf          /bin/tail
+user/bin/basename/basename.elf  /bin/basename
+user/bin/dirname/dirname.elf    /bin/dirname
+user/bin/tee/tee.elf            /bin/tee
+user/bin/env/env.elf            /bin/env
+user/bin/date/date.elf          /bin/date
+user/bin/hostname/hostname.elf  /bin/hostname
+user/bin/sync/sync.elf          /bin/sync
+user/bin/tr/tr.elf              /bin/tr
+user/bin/cut/cut.elf            /bin/cut
+user/bin/expand/expand.elf      /bin/expand
+user/bin/realpath/realpath.elf  /bin/realpath
+user/bin/stat/stat.elf          /bin/stat
+user/bin/yes/yes.elf            /bin/yes
+user/bin/test/test.elf          /bin/test
+user/bin/test/bracket.elf       /bin/[
+user/bin/find/find.elf          /bin/find
+user/bin/which/which.elf        /bin/which
+user/bin/uniq/uniq.elf          /bin/uniq
+
 # Network / services
 user/bin/httpd/httpd.elf        /bin/httpd
 user/bin/nettest/nettest.elf    /bin/nettest

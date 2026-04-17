@@ -186,7 +186,8 @@ SIMPLE_USER_PROGS = \
     ls cat echo pwd uname clear true false wc grep sort \
     mkdir touch rm cp mv whoami ln chmod chown readlink \
     shutdown reboot login stsh httpd nettest polltest poll-test \
-    sleep
+    sleep head tail basename dirname tee env date hostname sync \
+    tr cut expand realpath stat yes find which uniq
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
 # so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the
@@ -209,6 +210,11 @@ user/bin/dhcp/dhcp: user/bin/dhcp/main.c $(MUSL_BUILT)
 
 user/bin/chronos/chronos: user/bin/chronos/main.c $(MUSL_BUILT)
 	$(MAKE) -C user/bin/chronos
+
+# `test` produces TWO binaries — test.elf and bracket.elf (cp of test.elf).
+# Listed separately because SIMPLE_USER_RULE only handles one .elf per dir.
+user/bin/test/test.elf user/bin/test/bracket.elf: $(wildcard user/bin/test/*.c) user/bin/test/Makefile $(MUSL_BUILT)
+	$(MAKE) -C user/bin/test
 
 # Static binary (no musl)
 user/bin/shell/shell.elf:
