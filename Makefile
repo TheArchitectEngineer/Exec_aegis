@@ -371,6 +371,21 @@ $(BUILD)/aegis-test.iso: $(BUILD)/aegis.elf tools/grub-test.cfg $(ROOTFS) $(ESP_
 
 test-iso: $(BUILD)/aegis-test.iso
 
+# Installer-test ISO: same rootfs as aegis.iso, graphical boot, but
+# adds bastion_autologin=root to the kernel cmdline so the GUI
+# installer test harness can skip the input-driven login flake.
+INSTALLER_TEST_ISO_DIR = $(BUILD)/installer-test-isodir
+$(BUILD)/aegis-installer-test.iso: $(BUILD)/aegis.elf tools/grub-installer-test.cfg $(ROOTFS) $(ESP_IMG) $(GRUB_FONT)
+	@mkdir -p $(INSTALLER_TEST_ISO_DIR)/boot/grub
+	cp $(BUILD)/aegis.elf $(INSTALLER_TEST_ISO_DIR)/boot/aegis.elf
+	cp tools/grub-installer-test.cfg $(INSTALLER_TEST_ISO_DIR)/boot/grub/grub.cfg
+	@if [ -s $(GRUB_FONT) ]; then cp $(GRUB_FONT) $(INSTALLER_TEST_ISO_DIR)/boot/grub/font.pf2; fi
+	cp $(ROOTFS) $(INSTALLER_TEST_ISO_DIR)/boot/rootfs.img
+	cp $(ESP_IMG) $(INSTALLER_TEST_ISO_DIR)/boot/esp.img
+	grub-mkrescue -o $@ $(INSTALLER_TEST_ISO_DIR)
+
+installer-test-iso: $(BUILD)/aegis-installer-test.iso
+
 # ── Rootfs image (built by script, reads rootfs.manifest) ───────────────────
 # Collect all source files mentioned in the manifest so Make knows to rebuild.
 MANIFEST_SRCS := $(shell grep -v '^\#' rootfs.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')

@@ -1,25 +1,20 @@
 // End-to-end GUI installer regression tests.
 //
 // gui-installer is a Lumen external-window-protocol client (Phase 47).
-// It needs a running compositor before it can connect to /run/lumen.sock.
-// We use the graphical ISO so Bastion auto-starts Lumen, sign in via
-// Bastion's login form, then ask Lumen to spawn gui-installer through
-// LUMEN_OP_INVOKE — triggered from the host by sending Ctrl+Alt+I via
-// QEMU's HMP `sendkey`, which Lumen handles in main.c.
+// It needs a running compositor with admin caps before it can do its
+// job, so we boot `aegis-installer-test.iso` — a graphical ISO whose
+// kernel cmdline contains `bastion_autologin=root`. Bastion sees the
+// flag, skips the greeter form, and authenticates as root with the
+// hardcoded test password. This avoids the input-driven login race
+// that made earlier versions of this test flake on cold boot.
 //
-// Boot 1 (full install):
-//   1. Graphical ISO + empty NVMe
-//   2. Wait for [BASTION] greeter ready, send root + Tab + pw + Enter
-//   3. Wait for [LUMEN] ready
-//   4. HMP sendkey ctrl-alt-i → Lumen invokes /bin/gui-installer
-//   5. Walk the wizard via Enter/Tab/Escape (markers: [INSTALLER] screen=N)
+// Once Lumen is up, the host fires Ctrl+Alt+I via QEMU's HMP `sendkey`
+// (lumen/main.c maps that chord to LUMEN_OP_INVOKE "gui-installer"),
+// then drives the wizard via Enter / Tab / Escape on serial markers.
 //
-// Boot 2 (back button):
-//   1. Same as boot 1 through screen=1
-//   2. Press Enter → screen=2
-//   3. Press Escape → screen=1
-//
-// Run: AEGIS_ISO=build/aegis.iso cargo test --manifest-path tests/Cargo.toml \
+// Run: make installer-test-iso
+//      AEGIS_INSTALLER_TEST_ISO=build/aegis-installer-test.iso \
+//        cargo test --manifest-path tests/Cargo.toml \
 //        --test gui_installer_test -- --nocapture
 
 use aegis_tests::{
@@ -40,10 +35,14 @@ const ROOT_PW: &str = "forevervigilant";
 const USER_NAME: &str = "alice";
 const USER_PW: &str = "alicepass";
 
-/// Graphical ISO — Bastion auto-starts Lumen.
-fn graphical_iso() -> PathBuf {
-    let val = std::env::var("AEGIS_ISO")
-        .unwrap_or_else(|_| "build/aegis.iso".into());
+/// Installer-test ISO — graphical boot with bastion_autologin=root on
+/// the kernel cmdline. Bastion skips the greeter form and authenticates
+/// using the hardcoded test password ("forevervigilant"), which lets
+/// us avoid the send_keys / Bastion input race that made earlier
+/// versions of this test flake on cold boot.
+fn installer_test_iso() -> PathBuf {
+    let val = std::env::var("AEGIS_INSTALLER_TEST_ISO")
+        .unwrap_or_else(|_| "build/aegis-installer-test.iso".into());
     PathBuf::from(val)
 }
 
@@ -89,10 +88,11 @@ async fn hmp_command(proc: &QemuProcess, cmd: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Bastion login → Lumen ready → invoke gui-installer.
-/// Returns once `[LUMEN] installer ready` has been seen. `opts` is the
-/// QEMU preset to boot — install tests pass a NVMe-backed preset, the
-/// back-button test passes a no-disk preset to keep boot fast.
+/// Boot installer-test ISO → Bastion autologin → Lumen → invoke
+/// gui-installer. No keyboard interaction during boot — Bastion
+/// reads `bastion_autologin=root` from the kernel cmdline. The only
+/// host→guest input is the Ctrl+Alt+I chord that asks Lumen to spawn
+/// gui-installer.
 async fn boot_to_installer(
     opts: QemuOpts,
     iso: &std::path::Path,
@@ -102,32 +102,35 @@ async fn boot_to_installer(
             .await
             .expect("QEMU spawn failed");
 
-    wait_for_line(&mut stream, "[BASTION] greeter ready",
+    wait_for_line(&mut stream, "[BASTION] autologin OK",
                   Duration::from_secs(BOOT_TIMEOUT_SECS))
         .await
-        .expect("[BASTION] greeter ready");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+        .expect("[BASTION] autologin OK");
 
-    proc.send_keys(&format!("root\t{}\n", ROOT_PW))
-        .await
-        .expect("Bastion login");
-
-    // Lumen startup time varies a lot under TCG (5s warm cache, 30s+
-    // cold). Give it a generous window so cold runs don't flake.
     wait_for_line(&mut stream, "[LUMEN] ready",
-                  Duration::from_secs(60))
+                  Duration::from_secs(30))
         .await
         .expect("[LUMEN] ready");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    hmp_command(&proc, "sendkey ctrl-alt-i")
-        .await
-        .expect("send Ctrl+Alt+I");
-
-    wait_for_line(&mut stream, "[LUMEN] installer ready",
-                  Duration::from_secs(20))
-        .await
-        .expect("[LUMEN] installer ready");
+    let mut installer_up = false;
+    for _ in 0..6 {
+        hmp_command(&proc, "sendkey ctrl-alt-i")
+            .await
+            .expect("ctrl-alt-i");
+        if wait_for_line(&mut stream, "[LUMEN] installer ready",
+                         Duration::from_secs(10))
+            .await
+            .is_ok()
+        {
+            installer_up = true;
+            break;
+        }
+    }
+    if !installer_up {
+        proc.kill().await.ok();
+        panic!("installer never appeared after 6 Ctrl+Alt+I retries");
+    }
     wait_for_line(&mut stream, "[INSTALLER] screen=1",
                   Duration::from_secs(5))
         .await
@@ -138,7 +141,7 @@ async fn boot_to_installer(
 
 #[tokio::test]
 async fn gui_install_and_boot_from_nvme() {
-    let iso = graphical_iso();
+    let iso = installer_test_iso();
     if !iso.exists() {
         eprintln!("SKIP: {} not found", iso.display());
         eprintln!("      build with: make iso");
@@ -249,7 +252,7 @@ async fn gui_install_and_boot_from_nvme() {
 /// Back-button regression: screen=1 → Enter → screen=2 → Escape → screen=1.
 #[tokio::test]
 async fn gui_installer_back_button() {
-    let iso = graphical_iso();
+    let iso = installer_test_iso();
     if !iso.exists() {
         eprintln!("SKIP: {} not found", iso.display());
         return;

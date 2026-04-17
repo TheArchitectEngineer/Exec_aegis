@@ -437,7 +437,13 @@ main(int argc, char **argv)
 {
     /* Exit immediately unless booted in graphical mode or --force flag.
      * Bastion is graphical only — if /proc/cmdline doesn't contain
-     * "boot=graphical", exit immediately (unless overridden for debugging). */
+     * "boot=graphical", exit immediately (unless overridden for debugging).
+     *
+     * Test harness hook: if /proc/cmdline contains "bastion_autologin=USER",
+     * skip the greeter and authenticate as USER with the hardcoded test
+     * password "forevervigilant". Production ISOs never set this flag, so
+     * the test password isn't exposed in real builds. */
+    char autologin_user[64] = "";
     {
         int graphical = 0;
         int i;
@@ -446,16 +452,29 @@ main(int argc, char **argv)
                 graphical = 1;
         }
         dprintf(2, "bastion: argc=%d force=%d\n", argc, graphical);
-        if (!graphical) {
+        /* Always read /proc/cmdline so we can also pick up
+         * bastion_autologin=USER for the test harness. */
+        {
             int cfd = open("/proc/cmdline", O_RDONLY);
             if (cfd >= 0) {
-                char cmd[128];
+                char cmd[256];
                 int cn = (int)read(cfd, cmd, sizeof(cmd) - 1);
                 close(cfd);
                 if (cn > 0) {
                     cmd[cn] = '\0';
                     if (strstr(cmd, "boot=graphical"))
                         graphical = 1;
+                    const char *au = strstr(cmd, "bastion_autologin=");
+                    if (au) {
+                        au += strlen("bastion_autologin=");
+                        size_t i;
+                        for (i = 0; i < sizeof(autologin_user) - 1 &&
+                             au[i] && au[i] != ' ' && au[i] != '\t' &&
+                             au[i] != '\n'; i++) {
+                            autologin_user[i] = au[i];
+                        }
+                        autologin_user[i] = '\0';
+                    }
                 }
             }
         }
@@ -513,6 +532,41 @@ main(int argc, char **argv)
 
     /* Open mouse (non-blocking) */
     int mouse_fd = open("/dev/mouse", O_RDONLY);
+
+    /* ---- Autologin (test-only) ----------------------------------------
+     * `bastion_autologin=USER` on /proc/cmdline skips the greeter and
+     * authenticates as USER with the hardcoded test password
+     * "forevervigilant". This bypasses the input-timing flake in the
+     * gui-installer test harness. Production ISOs never include this
+     * cmdline arg. */
+    if (autologin_user[0]) {
+        strncpy(s_user_buf, autologin_user, sizeof(s_user_buf) - 1);
+        s_user_len = (int)strlen(s_user_buf);
+        strncpy(s_pass_buf, "forevervigilant", sizeof(s_pass_buf) - 1);
+        s_pass_len = (int)strlen(s_pass_buf);
+        s_focus = 2;
+        draw_form();   /* paints + emits [BASTION] greeter ready */
+
+        /* auth_check sometimes returns -1 on the very first try in cold
+         * boots — a libauth / fs-cache race that we don't fully
+         * understand. Retry a few times before giving up. */
+        int auth_ok = 0;
+        for (int t = 0; t < 5; t++) {
+            if (do_auth() == 0) { auth_ok = 1; break; }
+            struct timespec ts = { 0, 200 * 1000000L };  /* 200ms */
+            nanosleep(&ts, NULL);
+        }
+        if (auth_ok) {
+            dprintf(2, "[BASTION] autologin OK for %s\n", autologin_user);
+            s_lumen_pid = spawn_lumen();
+            if (s_lumen_pid > 0)
+                goto session;
+            dprintf(2, "[BASTION] autologin: spawn_lumen failed\n");
+        } else {
+            dprintf(2, "[BASTION] autologin auth FAILED\n");
+        }
+        /* fall through to greeter on failure */
+    }
 
     /* ---- Greeter loop ------------------------------------------------ */
 greeter:

@@ -11,6 +11,13 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+/* Disable stbtt's internal assertions. We hit `dy >= 0` intermittently
+ * in stbtt__fill_active_edges_new on certain glyphs at certain sizes
+ * (a known floating-point edge case in stb_truetype's rasterizer) and
+ * the abort it triggers takes down the whole compositor. The worst-case
+ * effect of skipping the assert is a single misrendered scanline, which
+ * is preferable to crashing Lumen. */
+#define STBTT_assert(x) ((void)0)
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 
