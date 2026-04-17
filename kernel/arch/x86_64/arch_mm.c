@@ -170,7 +170,11 @@ void arch_mm_init(void *mb_info)
 
         if (tag->type == MB2_TAG_FB) {
             const mb2_fb_tag_t *fb = (const mb2_fb_tag_t *)p;
-            /* Only accept 32-bpp linear (type==1) framebuffers. */
+            /* Only accept 32-bpp linear (type==1) framebuffers.
+             * Some firmwares (notably QEMU + std-vga + OVMF) advertise
+             * a 24-bpp GOP which we don't render to; those callers will
+             * see sys_fb_map() return ENODEV. Real UEFI hardware
+             * generally exposes 32-bpp modes. */
             if (fb->framebuffer_type == 1 && fb->framebuffer_bpp == 32) {
                 s_fb_info.addr   = fb->framebuffer_addr;
                 s_fb_info.pitch  = fb->framebuffer_pitch;
