@@ -1,4 +1,5 @@
 #include "stsh.h"
+#include <errno.h>  /* explicit, even though stsh.h pulls it in — strerror in exec_cmd */
 
 /* sys_setfg — tell kernel the given PID is the foreground process group
  * for signal routing. Uses the libc syscall(3) wrapper so the same
