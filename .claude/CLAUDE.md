@@ -290,6 +290,7 @@ A subsystem is ✅ only when `make test` passes with it included.
 | GUI installer + Lumen external window protocol (Phase 47) | ✅ | gui-installer is a real Lumen window via AF_UNIX protocol (memfd+SCM_RIGHTS); LUMEN_OP_CREATE_WINDOW/DAMAGE/DESTROY/CREATE_PANEL/INVOKE; mouse + Enter dispatch; CAP_KIND_FB no longer required |
 | Citadel dock split (Phase 47b) | ✅ | /bin/citadel-dock is its own process; talks to Lumen over the protocol; vigil graphical-mode service. First step of subsystem peeling |
 | 1.0.2 — Esc + arrow nav + chronos cap (Apr 17) | ✅ | PS/2 ESC scancode fix; gui-installer arrow nav; Lumen Ctrl+Alt+I + LUMEN_OP_INVOKE "gui-installer"; chronos NET_SOCKET cap; stbtt assertion no-op; bastion `bastion_autologin=USER` test hook; deflaked GUI installer test 0/15 → 15/15 |
+| 1.0.3 — coreutils + envp + sethostname + GRUB-on-installed (Apr 17/18) | ✅ | 20 new coreutils (sleep/head/tail/basename/dirname/tee/env/date/hostname/sync/tr/cut/expand/realpath/stat/yes/test/[/find/which/uniq); kernel envp propagation in sys_execve; sys_sethostname (170) + persistent hostname; installed-system grub.cfg fix (loadfont, gfxmode auto, ESP-relative paths); installer existing-Aegis-install warning UX; SIMPLE_USER_PROGS Makefile dep fix; stsh strerror diagnostic; coreutils_test scaffold; assert_cmd helper. 11/20 utils CI-asserted; 9 deferred to 1.0.4 (kernel ext2 cache ENOENT after ~11 sequential ext2 execs + one expand-specific exec mystery). |
 
 ### Known deviations
 
@@ -324,7 +325,9 @@ A subsystem is ✅ only when `make test` passes with it included.
 | 47 | **GUI installer** — graphical version of text-mode installer using Glyph | ✅ Done (v1.0.1) |
 | 47b | **Subsystem peeling** — split Lumen subsystems into separate binaries; dock done. Terminal next, then taskbar/file-manager. | Dock done; terminal queued |
 | 1.0.2 | **Esc fix + arrow nav + Ctrl+Alt+I + chronos cap + deflake** | ✅ Done (v1.0.2, Apr 17) |
+| 1.0.3 | **20 coreutils + envp/sethostname kernel patches + installed-GRUB fix + installer overwrite warning + SIMPLE_USER_PROGS dep fix + stsh strerror** | ✅ Done (v1.0.3, Apr 18) |
 | 48 | **Super key + extended keyboard** — PS/2 E0; Super modifier; multimedia scancodes | **Active** |
+| 1.0.4 (parked) | **kernel ext2 ENOENT after ~11 sequential ext2 execs (re-enables 9 deferred coreutils); /bin/expand single-binary exec mystery; pre-existing lumen test failures (Tasks 26/27/29/30)** | Pending |
 | 49 | **TCP polish** — send segmentation; per-connection TX buffer; flow control. Required for SSH. | Not started |
 | 50 | **TinySSH + sftp-server** — NaCl crypto, key-only auth; CAP_KIND_NET_LISTEN | Not started |
 | 51 | **Timers** — setitimer/alarm/timerfd; POSIX interval timers | Not started |
@@ -488,6 +491,18 @@ Capabilities use a two-tier kernel policy model. Policy files in `/etc/aegis/cap
 - **Test ISO** (`tools/grub-installer-test.cfg`, `make installer-test-iso`): `aegis-installer-test.iso` has same rootfs as `aegis.iso` but kernel cmdline contains `bastion_autologin=root`. Tests use this; production never ships it.
 - **Makefile rootfs deps**: `$(ROOTFS)` now depends on `find rootfs -type f` so editing `/etc` files actually triggers a rebuild. Before 1.0.2 you had to `rm -f build/rootfs.img` by hand.
 
+### v1.0.3 invariants — DO NOT REGRESS
+
+- **envp propagation in `sys_execve`** (`kernel/syscall/sys_exec.c`): the new envp copy block reuses the existing `env_bufs[32][256]`/`env_ptrs[33]`/`env_str_ptrs[32]` fields in `execve_argbuf_t` (originally added for sys_spawn in Phase 40). DO NOT add parallel `envp_*` fields — duplicates 8 KB of working storage and creates two paths in one struct. Stack layout: env strings pushed at HIGHER VAs than argv strings; pointer table is `argc, argv[…], NULL, envp[…], NULL, auxv[…]`. The `table_qwords = argc2 + envc + 3 + auxv_qwords` math at line 396 must include envc or alignment breaks.
+- **`sys_sethostname` (170)** (`kernel/syscall/sys_hostname.c`): gated by `cap_check(CAP_KIND_POWER, CAP_RIGHTS_READ)` returning `-1` (EPERM) on failure — matches `sys_reboot` precedent (the existing user of CAP_KIND_POWER) and `sys_fb_map`. Returning ENOCAP would leak a non-POSIX errno to userspace via musl's wrapper. Lock (`s_hostname_lock`) is a leaf — no other locks taken under it; cap_check and sched_current happen BEFORE acquisition. Buffer `s_hostname[65]` lives in `.data`, init "aegis", `len > HOSTNAME_MAX(64)` rejected before any write. `sys_uname` (`kernel/syscall/sys_identity.c`) MUST source nodename from `hostname_get()`, not hardcode it again.
+- **GRUB on installed system** (`tools/grub-installed.cfg`): three load-bearing fixes — (1) NO `if … then true … fi` (no `true` builtin in grub-mkimage's BOOTX64.EFI), use unconditional `loadfont` calls instead. `||`/`&&` also don't work. (2) `loadfont` and `background_image` MUST run BEFORE `search --set=root` reassigns `$root`, with absolute `/EFI/BOOT/…` paths (the ESP, where mcopy actually puts these files). (3) `set gfxmode=…,auto` — the trailing `auto` is required because OVMF + std-vga only offers 24-bpp GOP modes which the kernel rejects.
+- **Installer existing-install detection** (`user/lib/libinstall/copy.c`, `user/bin/gui-installer/main.c`): `install_disk_has_aegis(devname)` walks the kernel block-device list looking for `<devname>pN` children. `gpt_scan` only registers Aegis-typed partitions, so a partition-child = an existing Aegis install. Disk-select screen renders such disks in orange with `[existing Aegis install]`; confirm screen swaps the orange "all data will be erased" banner for the red two-line "this disk already contains an Aegis install" warning.
+- **`SIMPLE_USER_PROGS` Makefile rule** (`Makefile`): rule MUST list `$(wildcard user/bin/$(1)/*.c) $(wildcard user/bin/$(1)/*.h) user/bin/$(1)/Makefile` as prereqs, not just `$(MUSL_BUILT)`. Without this, editing `user/bin/<name>/main.c` does not invalidate the `.elf` and the rootfs.img silently packages a stale binary. Caught when stsh edits weren't taking effect during 1.0.3.
+- **stsh strerror diag** (`user/bin/stsh/exec.c`): `execve` failure now prints `<argv0>: <strerror(errno)>` instead of unconditional "not found". Requires `#include <errno.h>`. Don't revert — this is how we diagnose kernel-side exec failures (Task 29 was caught with it).
+- **Kernel ext2 ENOENT after ~11 sequential ext2-backed `execve`s — KNOWN BUG (Task 29).** Initrd-served binaries (cat/ls/echo/sh/login/vigil) are unaffected. New ext2-only coreutils (env/sync/stat/yes/test/[/find/which/uniq/expand) trip the bug after enough exec'd from one boot. Suspected: 16-slot LRU block cache evicting indirect blocks, cache-miss path returning ENOENT instead of refilling. Investigate `kernel/fs/ext2.c` (`ext2_open`/`ext2_read_block`/eviction handler). Defers 9 of the 20 1.0.3 coreutils from CI verification.
+- **Test scaffold** (`tests/tests/coreutils_test.rs`): boots `aegis-test.iso` (text mode), waits for `[STSH] ready` marker (emitted from `user/bin/stsh/main.c` AFTER all stsh init, BEFORE the REPL loop, NEVER in `-c` mode), then drives utils via `assert_cmd(proc, stream, cmd, &[expected], label)`. Helper sentinel matching uses `l.trim() == sentinel`, NOT `l.contains(sentinel)` — substring matched on stsh's local-echo of the typed command line. Atomic counter for back-to-back calls.
+- **Test ISO env var:** `AEGIS_TEST_ISO` (text-mode) for `coreutils_test`. `AEGIS_INSTALLER_TEST_ISO` (graphical autologin) for `gui_installer_test`. Don't conflate.
+
 ### Vortex test harness (local-only changes, not in vortex repo yet)
 
 These live in `~/Developer/vortex/src/core/qemu.rs` on the dev box:
@@ -495,8 +510,8 @@ These live in `~/Developer/vortex/src/core/qemu.rs` on the dev box:
 - Stale monitor socket cleanup before bind — `let _ = std::fs::remove_file(&path);` immediately before passing `unix:{path},server,nowait`.
 - `serial_capture: true` now sets `stderr(Stdio::null())` instead of `Stdio::piped()` — piped+unread stderr fills (~64K) and blocks QEMU mid-boot.
 - `VORTEX_SERIAL_TEE=/path/to/file` env var: appends every raw serial line to a file, useful when `wait_for_line` consumes the line you wanted to debug.
-- `send_keys` map extended with: `&` `_` `:` `;` `=` `!` `@` `#` `$` `%` `^` `*` `(` `)` `\x1b` (and the machine-format `,accel=` bug fix is now moot since accel field was removed).
-- These should be upstreamed to vortex eventually.
+- `send_keys` map extended with: `&` `_` `:` `;` `=` `!` `@` `#` `$` `%` `^` `*` `(` `)` `\x1b` (1.0.2) plus `|` `\` `'` `"` `>` `<` `?` `[` `]` `+` (1.0.3, around line 338, after the `)` → `shift-0` mapping). Without them `coreutils_test` can't drive shell pipes/redirections from the harness.
+- These should be upstreamed to vortex eventually (Task 27).
 
 ### CI workflow notes
 
